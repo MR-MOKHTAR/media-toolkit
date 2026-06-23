@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "downloader",
         "width": 800,
         "height": 600,
+        "minWidth": 600,
+        "minHeight": 500,
+        "resizable": true,
         "decorations": false,
         "maximized": true
       }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -17,6 +17,7 @@ import {
   RotateCcw,
   Minus,
   Square,
+  Copy,
   X,
   ChevronDown,
   Play,
@@ -41,6 +42,105 @@ interface AlertState {
   message: string;
 }
 
+interface DropdownOption {
+  value: string;
+  label: string;
+}
+
+// Custom dropdown — native <select>/<option> backgrounds are not reliably
+// styleable across webviews (especially WebKitGTK on Linux), so we render
+// our own fully theme-controlled menu instead.
+function StyledDropdown({
+  value,
+  options,
+  onChange,
+  disabled,
+  darkMode,
+}: {
+  value: string;
+  options: DropdownOption[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  darkMode: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        className={`w-full px-4 py-3 rounded-xl border-2 cursor-pointer font-bold flex items-center justify-between gap-2 transition-all ${
+          darkMode
+            ? "bg-slate-900 border-slate-700 text-white hover:border-slate-600"
+            : "bg-white border-blue-200 text-gray-900 hover:border-blue-300"
+        } focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50 disabled:cursor-not-allowed`}
+      >
+        <span className="truncate">{selected?.label}</span>
+        <ChevronDown
+          className={`w-5 h-5 shrink-0 opacity-50 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.ul
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.15 }}
+            className={`absolute z-50 mt-2 w-full rounded-xl border-2 overflow-hidden shadow-xl ${
+              darkMode
+                ? "bg-slate-900 border-slate-700"
+                : "bg-white border-blue-200"
+            }`}
+          >
+            {options.map((opt) => (
+              <li key={opt.value}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full text-start px-4 py-2.5 text-sm font-semibold transition-colors ${
+                    opt.value === value
+                      ? "bg-blue-500 text-white"
+                      : darkMode
+                        ? "text-slate-200 hover:bg-slate-800"
+                        : "text-gray-800 hover:bg-blue-50"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            ))}
+          </motion.ul>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function App() {
   const { t } = useTranslation();
   const [url, setUrl] = useState("");
@@ -60,13 +160,34 @@ function App() {
     name: string;
   } | null>(null);
   const [downloadType, setDownloadType] = useState<"audio" | "video">("audio");
-  const [audioQuality, setAudioQuality] = useState("128");
+  const [audioQuality, setAudioQuality] = useState("medium");
   const [videoQuality, setVideoQuality] = useState("720p");
+  const [isMaximized, setIsMaximized] = useState(true);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   // Window Controls
-  const minimize = () => getCurrentWindow().minimize();
-  const toggleMaximize = () => getCurrentWindow().toggleMaximize();
-  const closeWindow = () => getCurrentWindow().close();
+  const minimize = async () => {
+    try {
+      await getCurrentWindow().minimize();
+    } catch (error) {
+      console.error("Failed to minimize window:", error);
+    }
+  };
+  const toggleMaximize = async () => {
+    try {
+      await getCurrentWindow().toggleMaximize();
+      setIsMaximized(await getCurrentWindow().isMaximized());
+    } catch (error) {
+      console.error("Failed to toggle maximize:", error);
+    }
+  };
+  const closeWindow = async () => {
+    try {
+      await getCurrentWindow().close();
+    } catch (error) {
+      console.error("Failed to close window:", error);
+    }
+  };
 
   // Listen for real-time progress
   useEffect(() => {
@@ -121,7 +242,14 @@ function App() {
   // Block Developer Tools and Context Menu
   useEffect(() => {
     const handleContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
+      // Allow the native context menu (cut/copy/paste) inside text fields,
+      // block it everywhere else.
+      const target = e.target as HTMLElement;
+      const isEditable =
+        target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+      if (!isEditable) {
+        e.preventDefault();
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -183,6 +311,27 @@ function App() {
     }
   }, [darkMode]);
 
+  // Keep maximize/restore icon in sync with the actual window state
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    async function trackMaximize() {
+      const appWindow = getCurrentWindow();
+      setIsMaximized(await appWindow.isMaximized());
+      unlisten = await appWindow.onResized(async () => {
+        setIsMaximized(await appWindow.isMaximized());
+      });
+    }
+
+    trackMaximize().catch((error) =>
+      console.error("Failed to track window state:", error),
+    );
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   // Change language
   const changeLanguage = (newLang: string) => {
     setLanguage(newLang);
@@ -233,7 +382,7 @@ function App() {
       console.error("Error selecting folder:", error);
       setAlert({
         type: "error",
-        message: `Error selecting folder: ${String(error)}`,
+        message: `${t("error_selecting_folder")}: ${String(error)}`,
       });
     }
   }
@@ -245,7 +394,7 @@ function App() {
       console.error("Error opening path:", error);
       setAlert({
         type: "error",
-        message: `Error opening folder: ${String(error)}`,
+        message: `${t("error_opening_folder")}: ${String(error)}`,
       });
     }
   }
@@ -263,7 +412,7 @@ function App() {
     if (!savePath.trim()) {
       setAlert({
         type: "error",
-        message: "Please select a save location",
+        message: t("select_location"),
       });
       return;
     }
@@ -285,6 +434,7 @@ function App() {
     }
 
     setIsDownloading(true);
+    setIsCancelling(false);
     setDownloadStats(null);
     setDownloadSuccessInfo(null);
 
@@ -311,10 +461,15 @@ function App() {
         });
         setAlert({
           type: "success",
-          message: `${t("success")} - Downloaded`,
+          message: t("success"),
         });
         setUrl("");
         setFilename("");
+      } else if (result.message === "Download cancelled") {
+        setAlert({
+          type: "info",
+          message: t("download_cancelled"),
+        });
       } else {
         setAlert({
           type: "error",
@@ -326,7 +481,7 @@ function App() {
       if (errorMessage.includes("No such file")) {
         setAlert({
           type: "error",
-          message: "Invalid save location",
+          message: t("invalid_location"),
         });
       } else {
         setAlert({
@@ -336,8 +491,25 @@ function App() {
       }
     } finally {
       setIsDownloading(false);
+      setIsCancelling(false);
     }
   }
+
+  const audioQualityOptions: DropdownOption[] = [
+    { value: "highest", label: t("quality_highest") },
+    { value: "high", label: t("quality_high") },
+    { value: "medium", label: t("quality_medium") },
+    { value: "low", label: t("quality_low") },
+  ];
+
+  const videoQualityOptions: DropdownOption[] = [
+    { value: "4k", label: t("quality_4k") },
+    { value: "1440p", label: t("quality_1440p") },
+    { value: "1080p", label: t("quality_1080p") },
+    { value: "720p", label: t("quality_720p") },
+    { value: "480p", label: t("quality_480p") },
+    { value: "best", label: t("quality_best") },
+  ];
 
   const handleRetry = () => {
     if (isOnline) {
@@ -349,6 +521,15 @@ function App() {
       });
     }
   };
+
+  async function handleCancel() {
+    setIsCancelling(true);
+    try {
+      await invoke("cancel_download");
+    } catch (error) {
+      console.error("Error cancelling download:", error);
+    }
+  }
 
   return (
     <div
@@ -362,7 +543,6 @@ function App() {
       <motion.header
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        data-tauri-drag-region
         className={`${
           darkMode
             ? "bg-slate-900 border-slate-800 text-white"
@@ -370,16 +550,19 @@ function App() {
         } border-b z-50 select-none sticky top-0 h-10 flex items-center justify-between px-4 transition-colors duration-300`}
         dir="ltr"
       >
-        {/* Left: App Title and Icon */}
+        {/* Left: App Title and Icon (drag handle) */}
         <div
           data-tauri-drag-region
-          className="flex items-center gap-3 pointer-events-none h-full"
+          className="flex items-center gap-3 h-full"
         >
-          <Music className="w-5 h-5 text-blue-500" />
-          <h1 className="text-sm font-bold truncate max-w-[300px]">
+          <Music className="w-5 h-5 text-blue-500 pointer-events-none" />
+          <h1 className="text-sm font-bold truncate max-w-[300px] pointer-events-none">
             {filename || downloadSuccessInfo?.name || t("app_title")}
           </h1>
         </div>
+
+        {/* Center: flexible drag region */}
+        <div data-tauri-drag-region className="flex-1 h-full" />
 
         {/* Right Section: Toggles + Window Controls */}
         <div className="flex items-center h-full">
@@ -425,6 +608,7 @@ function App() {
           <div className="flex items-center gap-1 h-full">
             <button
               onClick={minimize}
+              title={t("minimize")}
               className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
                 darkMode
                   ? "hover:bg-slate-800 text-slate-400"
@@ -435,16 +619,22 @@ function App() {
             </button>
             <button
               onClick={toggleMaximize}
+              title={isMaximized ? t("restore") : t("maximize")}
               className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
                 darkMode
                   ? "hover:bg-slate-800 text-slate-400"
                   : "hover:bg-gray-200 text-gray-600"
               }`}
             >
-              <Square className="w-3.5 h-3.5" />
+              {isMaximized ? (
+                <Copy className="w-3.5 h-3.5 -scale-x-100" />
+              ) : (
+                <Square className="w-3.5 h-3.5" />
+              )}
             </button>
             <button
               onClick={closeWindow}
+              title={t("close")}
               className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
                 darkMode
                   ? "hover:bg-red-500 hover:text-white text-slate-400"
@@ -519,6 +709,11 @@ function App() {
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isDownloading && ytdlpReady) {
+                  handleDownload();
+                }
+              }}
               placeholder={t("url_placeholder")}
               disabled={isDownloading}
               className={`flex-1 px-4 py-2.5 rounded-xl border-2 cursor-text transition-all ${
@@ -543,6 +738,11 @@ function App() {
               type="text"
               value={filename}
               onChange={(e) => setFilename(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isDownloading && ytdlpReady) {
+                  handleDownload();
+                }
+              }}
               placeholder={t("filename_placeholder")}
               disabled={isDownloading}
               className={`flex-1 px-4 py-2.5 rounded-xl border-2 cursor-text transition-all ${
@@ -616,128 +816,23 @@ function App() {
               <label className="block text-sm font-bold mb-3 opacity-80 uppercase tracking-wider">
                 {t("quality_label")}
               </label>
-              <div className="relative group">
-                {downloadType === "audio" ? (
-                  <select
-                    value={audioQuality}
-                    onChange={(e) => setAudioQuality(e.target.value)}
-                    disabled={isDownloading}
-                    className={`w-full px-4 py-3 rounded-xl border-2 cursor-pointer font-bold appearance-none transition-all ${
-                      darkMode
-                        ? "bg-slate-900 border-slate-700 text-white focus:border-blue-500 hover:border-slate-600"
-                        : "bg-white border-blue-200 text-gray-900 focus:border-blue-500 hover:border-blue-300"
-                    } focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50`}
-                    style={{ colorScheme: darkMode ? "dark" : "light" }}
-                  >
-                    <option
-                      value="0"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_highest")}
-                    </option>
-                    <option
-                      value="64"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_high")}
-                    </option>
-                    <option
-                      value="128"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_medium")}
-                    </option>
-                    <option
-                      value="192"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_low")}
-                    </option>
-                  </select>
-                ) : (
-                  <select
-                    value={videoQuality}
-                    onChange={(e) => setVideoQuality(e.target.value)}
-                    disabled={isDownloading}
-                    className={`w-full px-4 py-3 rounded-xl border-2 cursor-pointer font-bold appearance-none transition-all ${
-                      darkMode
-                        ? "bg-slate-900 border-slate-700 text-white focus:border-blue-500 hover:border-slate-600"
-                        : "bg-white border-blue-200 text-gray-900 focus:border-blue-500 hover:border-blue-300"
-                    } focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50`}
-                    style={{ colorScheme: darkMode ? "dark" : "light" }}
-                  >
-                    <option
-                      value="4k"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_4k")}
-                    </option>
-                    <option
-                      value="1440p"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_1440p")}
-                    </option>
-                    <option
-                      value="1080p"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_1080p")}
-                    </option>
-                    <option
-                      value="720p"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_720p")}
-                    </option>
-                    <option
-                      value="480p"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_480p")}
-                    </option>
-                    <option
-                      value="best"
-                      style={{
-                        backgroundColor: darkMode ? "#0f172a" : "white",
-                        color: darkMode ? "white" : "black",
-                      }}
-                    >
-                      {t("quality_best")}
-                    </option>
-                  </select>
-                )}
-                <div className="absolute inset-y-0 right-0 flex items-center px-4 pointer-events-none opacity-40 group-hover:opacity-70 transition-opacity">
-                  <ChevronDown className="w-5 h-5" />
-                </div>
-              </div>
+              {downloadType === "audio" ? (
+                <StyledDropdown
+                  value={audioQuality}
+                  options={audioQualityOptions}
+                  onChange={setAudioQuality}
+                  disabled={isDownloading}
+                  darkMode={darkMode}
+                />
+              ) : (
+                <StyledDropdown
+                  value={videoQuality}
+                  options={videoQualityOptions}
+                  onChange={setVideoQuality}
+                  disabled={isDownloading}
+                  darkMode={darkMode}
+                />
+              )}
             </div>
           </motion.div>
 
@@ -868,15 +963,16 @@ function App() {
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={() => setIsDownloading(false)}
-                className={`px-6 py-3 rounded-lg font-bold cursor-pointer transition-all flex items-center gap-2 ${
+                onClick={handleCancel}
+                disabled={isCancelling}
+                className={`px-6 py-3 rounded-lg font-bold cursor-pointer transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
                   darkMode
                     ? "bg-red-900/30 hover:bg-red-900/50 text-red-300"
                     : "bg-red-200 hover:bg-red-300 text-red-700"
                 }`}
               >
                 <X className="w-5 h-5" />
-                {t("cancel_button")}
+                {isCancelling ? t("cancelling") : t("cancel_button")}
               </motion.button>
             )}
           </div>
@@ -926,7 +1022,7 @@ function App() {
                   className="whitespace-nowrap px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 transition-all shadow-sm active:scale-95 bg-linear-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white cursor-pointer"
                 >
                   <Folder className="w-5 h-5" />
-                  {t("open_folder") || "Open Folder"}
+                  {t("open_folder")}
                 </button>
               </motion.div>
             )}
@@ -990,16 +1086,15 @@ function App() {
             <div className="flex-1">
               <p className="font-semibold">{t(`${alert.type}`)}</p>
               <p className="text-sm opacity-90 mt-1">{alert.message}</p>
-              {(alert.type === "error" || alert.type === "warning") &&
-                !isOnline && (
-                  <button
-                    onClick={handleRetry}
-                    className="mt-2 text-sm font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    {t("retry")}
-                  </button>
-                )}
+              {alert.type === "error" && (
+                <button
+                  onClick={handleRetry}
+                  className="mt-2 text-sm font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  {t("retry")}
+                </button>
+              )}
             </div>
             <motion.button
               whileHover={{ scale: 1.1 }}
@@ -1013,17 +1108,6 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* Footer */}
-      <motion.footer
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5 }}
-        className={`${
-          darkMode ? "border-slate-800" : "border-blue-200"
-        } border-t ${darkMode ? "bg-slate-900" : "bg-white"} text-center py-2 text-sm opacity-60`}
-      >
-        <p dir="ltr">© 2026 YouTube Audio Downloader. Made with ❤️</p>
-      </motion.footer>
     </div>
   );
 }

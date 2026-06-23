@@ -4,6 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::Mutex;
+
+/// Holds the currently running yt-dlp child process so it can be cancelled.
+#[derive(Default)]
+struct DownloadState {
+    child: Mutex<Option<tokio::process::Child>>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DownloadResult {
@@ -126,6 +133,7 @@ async fn open_path(path: String) -> Result<(), String> {
 #[tauri::command]
 async fn download_media(
     app_handle: AppHandle,
+    state: tauri::State<'_, DownloadState>,
     url: String,
     output_path: String,
     filename: String,
@@ -153,10 +161,10 @@ async fn download_media(
                 "--audio-quality".to_string(),
                 match quality.as_str() {
                     "highest" => "0",
-                    "high" => "64",
-                    "medium" => "128",
-                    "low" => "192",
-                    _ => "128",
+                    "high" => "192K",
+                    "medium" => "128K",
+                    "low" => "96K",
+                    _ => "128K",
                 }
                 .to_string(),
                 "-o".to_string(),
@@ -220,7 +228,13 @@ async fn download_media(
         .spawn()
         .map_err(|e| format!("Failed to spawn yt-dlp: {}", e))?;
 
-    if let Some(stdout) = child.stdout.take() {
+    // Take stdout for progress parsing before handing the child to shared state.
+    let stdout = child.stdout.take();
+
+    // Store the running child so `cancel_download` can stop it.
+    *state.child.lock().await = Some(child);
+
+    if let Some(stdout) = stdout {
         let mut reader = BufReader::new(stdout).lines();
         // Setup regex to extract progress
         let re = Regex::new(r"\[download\]\s+([\d\.]+)%\s+of\s+([~\s\d\.]+([a-zA-Z]+)?)\s+at\s+([~\s\d\.]+([a-zA-Z]+/s)?)\s+ETA\s+([\d:]+)").unwrap();
@@ -246,6 +260,18 @@ async fn download_media(
         }
     }
 
+    // Reclaim the child. If it was taken by `cancel_download`, the download was cancelled.
+    let mut child = match state.child.lock().await.take() {
+        Some(child) => child,
+        None => {
+            return Ok(DownloadResult {
+                success: false,
+                message: "Download cancelled".to_string(),
+                file_path: None,
+            });
+        }
+    };
+
     let status = child
         .wait()
         .await
@@ -269,24 +295,17 @@ async fn download_media(
     }
 }
 
-/// Download audio from YouTube URL (deprecated, use download_media instead)
+/// Cancel the currently running download by killing the yt-dlp process.
 #[tauri::command]
-async fn download_audio(
-    app_handle: AppHandle,
-    url: String,
-    output_path: String,
-    filename: String,
-) -> Result<DownloadResult, String> {
-    download_media(
-        app_handle,
-        url,
-        output_path,
-        filename,
-        "audio".to_string(),
-        "128".to_string(),
-    )
-    .await
+async fn cancel_download(state: tauri::State<'_, DownloadState>) -> Result<(), String> {
+    let child = state.child.lock().await.take();
+    if let Some(mut child) = child {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+    Ok(())
 }
+
 
 /// Check if yt-dlp is installed (bundled or in system PATH)
 #[tauri::command]
@@ -318,9 +337,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .manage(DownloadState::default())
         .invoke_handler(tauri::generate_handler![
             download_media,
-            download_audio,
+            cancel_download,
             check_ytdlp_installed,
             get_default_download_path,
             open_path
