@@ -18,12 +18,6 @@ pub struct DownloadResult {
     pub file_path: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DownloadProgress {
-    pub status: String,
-    pub error: Option<String>,
-}
-
 #[derive(Clone, Serialize)]
 pub struct ProgressPayload {
     pub percent: f64,
@@ -437,7 +431,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .manage(DownloadState::default())
         .invoke_handler(tauri::generate_handler![
             download_media,
