@@ -83,10 +83,10 @@ The bundled FFmpeg is the **GPL** configuration, because that is the build that
 includes libx264 and libx265 — without them, compress, convert, and resize have
 nothing to encode with.
 
-**Distributing this app together with that FFmpeg makes the combined
-distribution GPL-3.0-or-later.** The project has no `LICENSE` file yet; whatever
-one is added has to be GPL-compatible, or the bundled FFmpeg has to be swapped
-for an LGPL build first (and that build has no H.264/H.265 encoder).
+Distributing this app together with that FFmpeg makes the combined distribution
+GPL-3.0-or-later, so **this project is licensed GPL-3.0-or-later** — see
+[`LICENSE`](LICENSE). Relicensing would mean first swapping the bundled FFmpeg
+for an LGPL build, which has no H.264/H.265 encoder.
 
 See [`src-tauri/resources/THIRD-PARTY.md`](src-tauri/resources/THIRD-PARTY.md)
 for the source offer and the exact builds shipped. The URL, SHA-256, and size of
