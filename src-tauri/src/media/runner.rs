@@ -54,6 +54,9 @@ pub async fn run(
 ) -> AppResult<()> {
     let mut emitters = Emitters::new(app.clone());
     emitters.status(&id, kind, JobStatus::Queued);
+    // Emitted before the permit so a job waiting behind the semaphore reads as
+    // "waiting" rather than as a frozen 0%.
+    emitters.progress_now(JobProgress::new(&id, kind, Stage::Queued));
 
     // Held until the job ends. This is what makes four concurrent compressions
     // queue instead of pegging every core.
@@ -129,6 +132,11 @@ async fn run_passes(
             match line {
                 Line::Stdout(line) => {
                     if let Some(update) = block.feed(&line) {
+                        // The terminal block lands short of the real duration,
+                        // so it is dropped; the completion path emits the 100.
+                        if update.ended {
+                            continue;
+                        }
                         let fraction = update.fraction(pass.duration_secs);
                         emitters.progress(JobProgress {
                             // Spread each pass across its slice of the whole,

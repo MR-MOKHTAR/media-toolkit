@@ -3,4 +3,4 @@ pub mod ops;
 pub mod probe;
 pub mod runner;
 
-pub use probe::{probe, MediaInfo};
+pub use probe::probe;

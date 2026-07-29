@@ -68,11 +68,6 @@ pub fn is_available(app: &AppHandle, tool: Tool) -> bool {
     resolve(app, tool).is_ok()
 }
 
-/// Drops the cache so a freshly downloaded tool is picked up without a restart.
-pub fn forget_cached() {
-    cache().lock().unwrap().clear();
-}
-
 fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
     let file = tool.file_name();
 
