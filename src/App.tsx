@@ -1,7 +1,6 @@
-import { useTranslation } from "react-i18next";
-
 import { NavigationProvider, useNavigation } from "./app/navigation";
 import { AppTitleBar } from "./components/layout/AppTitleBar";
+import { BreadcrumbBar } from "./components/layout/BreadcrumbBar";
 import { OfflineBanner } from "./components/feedback/OfflineBanner";
 import { Toast } from "./components/feedback/Toast";
 import { DownloadScreen } from "./features/downloads/DownloadScreen";
@@ -21,7 +20,6 @@ import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
 function Shell() {
-  const { t } = useTranslation();
   const { route } = useNavigation();
   const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
@@ -29,28 +27,16 @@ function Shell() {
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
   const isRtl = language === "fa" || language === "ar";
 
-  const titles: Record<string, string> = {
-    home: t("app_name"),
-    download: t("tool_download"),
-    jobs: t("nav_jobs"),
-    settings: t("settings"),
-    compress: t("tool_compress"),
-    trim: t("tool_trim"),
-    convert: t("tool_convert"),
-    resize: t("tool_resize"),
-    gif: t("tool_gif"),
-  };
-
   return (
     <div className="flex h-full flex-col overflow-hidden bg-canvas">
       <AppTitleBar
-        title={titles[route.name] ?? t("app_name")}
         isMaximized={isMaximized}
-        isRtl={isRtl}
         onMinimize={minimize}
         onToggleMaximize={toggleMaximize}
         onClose={close}
       />
+
+      <BreadcrumbBar isRtl={isRtl} />
 
       <OfflineBanner isOnline={isOnline} />
 

@@ -29,8 +29,12 @@ export type Route =
 
 interface NavigationValue {
   route: Route;
+  /** The whole trail, oldest first. The breadcrumb bar renders it directly. */
+  stack: Route[];
   go: (route: Route) => void;
   back: () => void;
+  /** Jump to a crumb, dropping everything after it. */
+  goToIndex: (index: number) => void;
   canGoBack: boolean;
 }
 
@@ -54,6 +58,12 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     setStack((current) => (current.length > 1 ? current.slice(0, -1) : current));
   }, []);
 
+  const goToIndex = useCallback((index: number) => {
+    setStack((current) =>
+      index >= 0 && index < current.length - 1 ? current.slice(0, index + 1) : current,
+    );
+  }, []);
+
   // Escape and Alt+Left go back, which is what people try first in a window
   // with no browser chrome. Ignored while typing, or Escape would throw away
   // a half-filled form.
@@ -73,8 +83,8 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   }, [back]);
 
   const value = useMemo(
-    () => ({ route, go, back, canGoBack: stack.length > 1 }),
-    [route, go, back, stack.length],
+    () => ({ route, stack, go, back, goToIndex, canGoBack: stack.length > 1 }),
+    [route, stack, go, back, goToIndex],
   );
 
   return (

@@ -14,7 +14,12 @@ import { useTranslation } from "react-i18next";
 
 import { ProgressBar } from "../../../components/ui/ProgressBar";
 import { cn } from "../../../lib/cn";
-import { formatBytes, formatEta, formatRelativeTime } from "../../../lib/format";
+import {
+  formatBytes,
+  formatEta,
+  formatPercent,
+  formatRelativeTime,
+} from "../../../lib/format";
 import type { AppError, Job } from "../types";
 
 interface JobCardProps {
@@ -95,7 +100,18 @@ function JobCardComponent({
 
         {active && (
           <div className="mt-1.5 flex flex-col gap-1">
-            <ProgressBar percent={job.percent} label={job.title} />
+            <div className="flex items-center gap-2">
+              <ProgressBar percent={job.percent} label={job.title} className="flex-1" />
+              {/* Nothing at all when the percentage is unknown, rather than a
+                  reassuring 0%. A null percent means ffmpeg could not read a
+                  duration to divide by; the indeterminate bar is the honest
+                  answer and a number would contradict it. */}
+              {job.percent !== null && (
+                <span className="w-10 shrink-0 text-end text-xs text-fg-muted tnum">
+                  {formatPercent(job.percent, language)}
+                </span>
+              )}
+            </div>
             {(job.speed || job.etaSecs !== undefined) && (
               // Speed and ETA only exist while something is running, which is
               // exactly why they do not deserve permanent columns.

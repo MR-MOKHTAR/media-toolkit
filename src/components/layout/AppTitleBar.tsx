@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Minus, Settings, Square, X } from "lucide-react";
+import { Minus, Settings, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
@@ -6,54 +6,44 @@ import { cn } from "../../lib/cn";
 import { IconButton } from "../ui/Button";
 
 interface AppTitleBarProps {
-  title: string;
   isMaximized: boolean;
-  isRtl: boolean;
   onMinimize: () => void;
   onToggleMaximize: () => void;
   onClose: () => void;
 }
 
 /**
- * Back, title, drag area, settings, window controls. Nothing else.
+ * Identity, drag area, settings, window controls. Nothing else.
  *
- * What used to be here: a gradient "New Download" call to action, a theme
+ * The title is the app name and never changes: which screen you are on, and
+ * how you get back, is the breadcrumb bar's job. Before that bar existed this
+ * header carried the only back button in the app, which told you nothing about
+ * where you were or how deep you had gone.
+ *
+ * Further back it also held a gradient "New Download" call to action, a theme
  * toggle and a raw <select> for the language, all crammed into 40px next to
  * the window buttons. Theme and language are set once per install and belong
- * in Settings, and the primary action is now a card on the home screen.
+ * in Settings.
  */
 export function AppTitleBar({
-  title,
   isMaximized,
-  isRtl,
   onMinimize,
   onToggleMaximize,
   onClose,
 }: AppTitleBarProps) {
   const { t } = useTranslation();
-  const { go, back, canGoBack, route } = useNavigation();
-  // lucide does not mirror directional icons, so the arrow has to be chosen.
-  const BackIcon = isRtl ? ArrowRight : ArrowLeft;
+  const { go, route } = useNavigation();
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-1 border-b border-line bg-surface px-2">
-      <IconButton
-        label={t("back")}
-        onClick={back}
-        disabled={!canGoBack}
-        className={cn("no-drag", !canGoBack && "invisible")}
-      >
-        <BackIcon size={17} />
-      </IconButton>
-
       {/* The drag region has to be its own element. Marking the header would
           swallow clicks on the buttons inside it. */}
       <div
         data-tauri-drag-region
-        className="drag-region flex h-full flex-1 items-center px-1 text-sm font-medium text-fg-soft"
+        className="drag-region flex h-full flex-1 items-center px-2 text-sm font-medium text-fg-soft"
       >
         <span data-tauri-drag-region className="truncate">
-          {title}
+          {t("app_name")}
         </span>
       </div>
 

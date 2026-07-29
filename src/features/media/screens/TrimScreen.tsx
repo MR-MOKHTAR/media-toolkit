@@ -37,7 +37,7 @@ export function TrimScreen({ initialFile, notify }: Props) {
   );
 
   return (
-    <ToolShell title={t("tool_trim")} subtitle={t("tool_trim_hint")}>
+    <ToolShell title={t("tool_trim")} subtitle={t("tool_trim_hint")} historyKind="trim">
       <FileDropZone
         path={file.path}
         info={file.info}

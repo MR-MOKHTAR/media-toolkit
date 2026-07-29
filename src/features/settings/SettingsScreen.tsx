@@ -35,8 +35,8 @@ export function SettingsScreen({
   }, []);
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-6">
-      <h1 className="text-xl font-semibold text-fg">{t("settings")}</h1>
+    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-6 px-6 py-6">
+      <h1 className="text-center text-xl font-semibold text-fg">{t("settings")}</h1>
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-fg-soft">{t("appearance")}</h2>

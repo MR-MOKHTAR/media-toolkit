@@ -15,34 +15,44 @@ export function HomeScreen({ language }: { language: string }) {
   const running = jobs.filter(isActiveJob).length;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-8">
-      <div className="flex flex-col gap-1">
+    // min-h-full + justify-center, not h-full: with a min-height the box grows
+    // to fit its content, so once the content is taller than the viewport the
+    // free space is zero and justify-center has nothing to distribute. It
+    // degrades to top-aligned instead of clipping the first row out of reach.
+    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-6 px-6 py-8 lg:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl">
+      <div className="flex flex-col items-center gap-1 text-center">
         <h1 className="text-2xl font-semibold text-fg">{t("home_title")}</h1>
         <p className="text-sm text-fg-muted">{t("home_subtitle")}</p>
       </div>
 
-      {/* auto-fit rather than a fixed column count, so the grid reflows to one
-          column at the 600px minimum window width without a media query. */}
-      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+      {/* Explicit columns rather than auto-fit. There are six tools, so the
+          natural shape is 3x2; auto-fit gives four columns on a wide monitor
+          and leaves two orphans on the second row. The unprefixed case has to
+          be the single column, because the window's 600px minimum is below
+          Tailwind's `sm` breakpoint. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {TOOLS.map(({ route, key, icon: Icon }) => (
           <button
             key={key}
             type="button"
             onClick={() => go(route)}
             className={cn(
-              "group flex flex-col items-start gap-3 rounded-xl border border-line bg-surface p-4 text-start",
+              // justify-center matters: the grid stretches every card in a row
+              // to the tallest one, so without it a tool with a shorter hint
+              // hangs its content off the top edge.
+              "group flex flex-col items-center justify-center gap-3 rounded-xl border border-line bg-surface p-5 text-center",
               "transition-colors duration-[--duration-fast]",
               "hover:border-accent-line hover:bg-accent-soft",
             )}
           >
             <span
               className={cn(
-                "flex size-10 items-center justify-center rounded-md bg-surface-soft text-fg-soft",
+                "flex size-12 items-center justify-center rounded-md bg-surface-soft text-fg-soft",
                 "transition-colors duration-[--duration-fast]",
                 "group-hover:bg-accent group-hover:text-on-accent",
               )}
             >
-              <Icon size={20} />
+              <Icon size={24} />
             </span>
             <span className="flex flex-col gap-0.5">
               <span className="text-lg font-medium text-fg">{t(`tool_${key}`)}</span>

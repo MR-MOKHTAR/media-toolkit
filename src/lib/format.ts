@@ -1,9 +1,10 @@
 /**
  * Formatting, with three deliberately different rules for numbers.
  *
- * 1. Counts and dates are localized. Persian renders ۳, Arabic renders ٣ --
- *    genuinely different codepoints, which is why this goes through Intl
- *    rather than a hand-written digit map.
+ * 1. Counts, percentages and dates are localized. Persian renders ۳ where
+ *    plain `ar` renders 3 -- CLDR defaults `ar` to Latin digits and only
+ *    region tags like ar-EG select Arabic-Indic. That per-locale nuance is
+ *    exactly why this goes through Intl rather than a hand-written digit map.
  * 2. Sizes and speeds localize the number but keep the unit in Latin. MB and
  *    KB are what Persian and Arabic speakers actually read; translating them
  *    hurts comprehension.
@@ -31,6 +32,22 @@ function numberFormatter(language: string, digits: number) {
 
 export function formatCount(value: number, language: string): string {
   return numberFormatter(language, 0).format(value);
+}
+
+/** Rule 1: a percentage is a count, so it localizes -- ۴۲٪ in Persian, ٤٢٪ in
+ *  Arabic, including the percent sign's own position. Intl wants a fraction,
+ *  not 0-100. */
+export function formatPercent(value: number, language: string): string {
+  const key = `${language}:pct`;
+  let formatter = numberFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(language, {
+      style: "percent",
+      maximumFractionDigits: 0,
+    });
+    numberFormatters.set(key, formatter);
+  }
+  return formatter.format(Math.min(100, Math.max(0, value)) / 100);
 }
 
 /** Rule 2: localized number, Latin unit. */

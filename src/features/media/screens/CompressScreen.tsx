@@ -69,7 +69,7 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
   const ready = Boolean(file.path && file.info?.video && job.outputDir && !job.busy);
 
   return (
-    <ToolShell title={t("tool_compress")} subtitle={t("tool_compress_hint")}>
+    <ToolShell title={t("tool_compress")} subtitle={t("tool_compress_hint")} historyKind="compress">
       <FileDropZone
         path={file.path}
         info={file.info}

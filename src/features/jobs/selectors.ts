@@ -1,5 +1,5 @@
 import type { JobsState } from "./jobsReducer";
-import { isActiveJob, type Job } from "./types";
+import { isActiveJob, type Job, type JobKind } from "./types";
 
 export type JobFilter = "all" | "active" | "done";
 
@@ -12,6 +12,18 @@ export interface JobCounts {
 /** Newest first, matching `order`. */
 export function listJobs(state: JobsState): Job[] {
   return state.order.map((id) => state.byId[id]).filter(Boolean);
+}
+
+/** The recent jobs one tool has run, for the history block on its own screen.
+ *  Already newest-first, so a job started a moment ago lands at the top. */
+export function jobsOfKind(jobs: Job[], kind: JobKind, limit: number): Job[] {
+  const result: Job[] = [];
+  for (const job of jobs) {
+    if (job.kind !== kind) continue;
+    result.push(job);
+    if (result.length === limit) break;
+  }
+  return result;
 }
 
 export function countJobs(jobs: Job[]): JobCounts {

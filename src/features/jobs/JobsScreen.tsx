@@ -25,26 +25,29 @@ export function JobsScreen({ language }: { language: string }) {
   const cancelling = useMemo(() => new Set(state.cancelling), [state.cancelling]);
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-4 px-6 py-6">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-fg">{t("nav_jobs")}</h1>
+    <div className="mx-auto flex h-full w-full max-w-2xl flex-col gap-4 px-6 py-6 lg:max-w-4xl xl:max-w-5xl">
+      <h1 className="text-center text-xl font-semibold text-fg">{t("nav_jobs")}</h1>
+
+      {/* Clear sits with the filters rather than beside the title. A button on
+          one side of a heading makes a centred heading read as off-centre. */}
+      <div className="flex items-center gap-3">
+        <Segmented
+          className="flex-1"
+          label={t("nav_jobs")}
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "all", label: t("filter_all"), hint: String(counts.all) },
+            { value: "active", label: t("filter_active"), hint: String(counts.active) },
+            { value: "done", label: t("filter_done"), hint: String(counts.done) },
+          ]}
+        />
         {counts.done > 0 && (
-          <Button variant="ghost" size="sm" onClick={clearFinished}>
+          <Button variant="ghost" size="sm" className="shrink-0" onClick={clearFinished}>
             {t("clear_finished")}
           </Button>
         )}
       </div>
-
-      <Segmented
-        label={t("nav_jobs")}
-        value={filter}
-        onChange={setFilter}
-        options={[
-          { value: "all", label: t("filter_all"), hint: String(counts.all) },
-          { value: "active", label: t("filter_active"), hint: String(counts.active) },
-          { value: "done", label: t("filter_done"), hint: String(counts.done) },
-        ]}
-      />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {visible.length === 0 ? (

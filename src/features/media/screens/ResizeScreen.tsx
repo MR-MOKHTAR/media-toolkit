@@ -44,7 +44,7 @@ export function ResizeScreen({ initialFile, notify }: Props) {
   );
 
   return (
-    <ToolShell title={t("tool_resize")} subtitle={t("tool_resize_hint")}>
+    <ToolShell title={t("tool_resize")} subtitle={t("tool_resize_hint")} historyKind="resize">
       <FileDropZone
         path={file.path}
         info={file.info}

@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "../../../components/ui/Button";
 import { cn } from "../../../lib/cn";
 import { fileNameOf, formatBytes, formatDuration } from "../../../lib/format";
+import { JobHistory } from "../../jobs/components/JobHistory";
+import type { JobKind } from "../../jobs/types";
 import type { MediaInfo } from "../useMediaFile";
 
 /**
@@ -19,19 +21,30 @@ import type { MediaInfo } from "../useMediaFile";
 export function ToolShell({
   title,
   subtitle,
+  historyKind,
   children,
 }: {
   title: string;
   subtitle: string;
+  /** Shows this tool's own recent jobs under the form. Omitted renders nothing. */
+  historyKind?: JobKind;
   children: ReactNode;
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-5 px-6 py-6">
-      <div className="flex flex-col gap-1">
+    // Deliberately not widened past 2xl on large screens. A form gets worse
+    // past about 700px, not better: the label drifts away from the control it
+    // labels. Only the card grids on Home and Jobs earn extra width.
+    //
+    // min-h-full + justify-center centres a short form vertically and falls
+    // back to top-aligned once the content outgrows the viewport, because a
+    // min-height leaves no free space to distribute at that point.
+    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-5 px-6 py-6">
+      <div className="flex flex-col items-center gap-1 text-center">
         <h1 className="text-xl font-semibold text-fg">{title}</h1>
         <p className="text-sm text-fg-muted">{subtitle}</p>
       </div>
       {children}
+      {historyKind && <JobHistory kind={historyKind} />}
     </div>
   );
 }

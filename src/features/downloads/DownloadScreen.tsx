@@ -79,7 +79,7 @@ export function DownloadScreen({ isOnline, notify }: Props) {
   };
 
   return (
-    <ToolShell title={t("tool_download")} subtitle={t("tool_download_hint")}>
+    <ToolShell title={t("tool_download")} subtitle={t("tool_download_hint")} historyKind="download">
       <div className="relative">
         <Link2
           size={17}
