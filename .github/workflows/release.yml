@@ -49,6 +49,11 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      # Cheap, and it runs before the 15-minute Tauri build so a locale gap
+      # fails in seconds rather than at the end of a release run.
+      - name: Check translations
+        run: bun run check:i18n
+
       - name: Build and Create Release
         uses: tauri-apps/tauri-action@v0
         env:

@@ -1,200 +1,94 @@
-# YouTube Audio Downloader
+# Media Toolkit
 
-A modern, beautiful desktop application for downloading audio from YouTube videos in MP3 format.
+A small desktop app for the two things people actually need to do with a video:
+get it, and change it. Download from the web, then compress, trim, convert,
+resize, or turn a clip into a GIF.
 
-## Features
+Built for people who do not want to think about codecs. Every tool is one file
+picker, two or three choices, and a button. There is no bitrate field anywhere.
 
-✨ **Modern UI with Dark Mode**
+`yt-dlp` and `FFmpeg` ship inside the installer, so nothing else has to be
+installed and everything except downloading works offline.
 
-- Beautiful, responsive interface with smooth animations
-- Toggle between light and dark modes
-- Framer Motion powered smooth transitions
+## Tools
 
-🌍 **Multi-Language Support**
+| | |
+|---|---|
+| **Download** | Paste a link. Works with the ~1000 sites yt-dlp supports, not just YouTube. Shows the title, channel, duration, and thumbnail before you commit. Video or audio, with a quality picker. |
+| **Compress** | Small / Balanced / High quality, with an estimated output size shown before you start. Target-size chips (10 / 25 / 50 MB) sit behind *Advanced*, for when something has to fit an upload limit. |
+| **Trim** | Drag two handles over a timeline. Cuts losslessly by default, which is instant; *Exact cut* re-encodes when you need the exact frame you asked for. |
+| **Convert** | MP4, MKV, MOV, WebM, MP3, M4A, WAV. Picking an audio format *is* how you extract audio — there is no separate mode for it. When the streams can be copied the app says so and finishes in about a second. |
+| **Resize** | 1080p / 720p / 480p, with options at or above the source resolution disabled. |
+| **GIF** | A range plus two presets. Two-pass palette generation, so the result does not look like 1998. |
 
-- English (en)
-- Thai (ไทย)
-- Easy language switching in the app
+Jobs run concurrently and each reports its own progress. FFmpeg work is capped
+by a semaphore, so four compressions cannot make the app itself unresponsive.
 
-🎵 **YouTube Audio Download**
+## Languages
 
-- Convert YouTube videos to MP3 audio format
-- Accepts live streams and regular videos
-- Custom filename support
-- Powered by yt-dlp
+English, Persian, and Arabic, with full RTL. Inter and Vazirmatn are bundled as
+variable fonts — no network request at runtime, and mixed strings like
+`دانلود clip_final.mp4` render correctly per character from a single stack.
 
-📁 **Smart File Management**
+Timecodes, sizes, and file paths stay in ASCII digits and LTR even in RTL
+layouts, because Persian digits in an `mm:ss` field are unreadable.
 
-- Choose custom save directory
-- Default download location (~/Downloads)
-- Auto-generated filenames
+## Development
 
-🌐 **Network Error Handling**
-
-- Offline detection with visual indicator
-- Automatic retry functionality
-- Connection monitoring
-- Graceful error messages in chosen language
-
-🎨 **Beautiful UI Elements**
-
-- Icons from lucide-react
-- Smooth animations and transitions
-- Modern gradient designs
-- Responsive layout
-
-## Requirements
-
-- **yt-dlp**: Must be installed on your system
-
-  ```bash
-  # Ubuntu/Debian
-  sudo apt install yt-dlp
-
-  # macOS
-  brew install yt-dlp
-
-  # Arch Linux
-  sudo pacman -S yt-dlp
-
-  # Or via pip
-  pip install yt-dlp
-  ```
-
-- **Node.js**: 18.x or higher
-- **Rust**: 1.60+ (for building Tauri)
-
-## Installation
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd downloader
-
-# Install dependencies
-npm install
-
-# Build for development
-npm run tauri dev
-
-# Build for production
-npm run tauri build
+```sh
+bun install
+bun run tauri dev
 ```
 
-## Usage
+The first build downloads yt-dlp and FFmpeg (~200 MB) into `src-tauri/binaries/`.
+After that they are cached; `build.rs` re-fetches only when the pinned URL in
+`src-tauri/tools.lock.json` changes.
 
-1. **Launch the Application**
-   - Run: `npm run tauri dev` or launch the built executable
-
-2. **Download Audio**
-   - Paste a YouTube URL in the URL field
-   - (Optional) Enter a custom filename
-   - Click "Browse" to select a save location (or use default)
-   - Click "Download" to start
-
-3. **Change Settings**
-   - Toggle dark mode with the moon/sun icon
-   - Switch language using the dropdown
-   - Monitor internet connection status
-
-4. **Error Handling**
-   - The app shows connection status
-   - Failed downloads can be retried when connection is restored
-   - All errors display in your selected language
-
-## Project Structure
-
-```
-downloader/
-├── src/
-│   ├── App.tsx           # Main React component
-│   ├── App.css           # App styles
-│   ├── main.tsx          # Entry point
-│   ├── main.css          # Global styles
-│   ├── config.ts         # Configuration
-│   └── i18n/             # Internationalization
-│       ├── index.ts      # i18n setup
-│       └── locales/      # Language files
-│           ├── en.json
-│           └── th.json
-├── src-tauri/
-│   ├── src/
-│   │   ├── main.rs
-│   │   └── lib.rs        # Rust backend with download logic
-│   └── Cargo.toml        # Rust dependencies
-├── package.json
-├── vite.config.ts
-└── tsconfig.json
+```sh
+bun run build          # typecheck + bundle the frontend
+bun run check:i18n     # locale parity, placeholders, unused keys
+cargo test             # from src-tauri/
+bun run tauri build    # installers
 ```
 
-## Technologies Used
+Environment variables for the build:
 
-- **Frontend**: React 19 + TypeScript
-- **UI Framework**: Tailwind CSS with custom animations
-- **Animations**: Framer Motion
-- **Icons**: Lucide React
-- **Internationalization**: i18next + react-i18next
-- **Desktop**: Tauri 2
-- **Backend**: Rust with tokio
-- **Download Engine**: yt-dlp
+- `DOWNLOADER_SKIP_TOOL_FETCH=1` — never touch the network (airgapped dev)
+- `DOWNLOADER_FORCE_TOOL_FETCH=1` — re-download the tools, ignoring the cache
 
-## Commands
+## Layout
 
-```bash
-# Development
-npm run dev         # Run Vite dev server
-npm run tauri dev   # Run Tauri dev with hot reload
-
-# Building
-npm run build       # Build frontend
-npm run tauri build # Build complete application
-
-# Preview
-npm run preview     # Preview production build
+```
+src/
+  app/            routing — a state machine, not a router (9 screens, no URLs)
+  lib/            ipc.ts is the single Tauri boundary
+  components/     ui primitives, layout, feedback
+  features/
+    home/         the launcher
+    downloads/    download screen
+    media/        shared tool shell + the five tool screens
+    jobs/         job queue, reducer, persistence
+    settings/
+  i18n/locales/   en, fa, ar
+src-tauri/src/
+  binaries.rs     tool resolution: app data dir -> bundled resources -> PATH
+  jobs.rs         job registry, cancellation, CPU/network semaphores
+  process.rs      spawn + concurrent stdout/stderr drain
+  media/          probe, ffmpeg runner, and the five operations
 ```
 
-## Configuration
+## Licensing
 
-Edit `src/config.ts` to customize:
+The bundled FFmpeg is the **GPL** configuration, because that is the build that
+includes libx264 and libx265 — without them, compress, convert, and resize have
+nothing to encode with.
 
-- Default language
-- Dark mode default state
-- Retry settings
-- App metadata
+**Distributing this app together with that FFmpeg makes the combined
+distribution GPL-3.0-or-later.** The project has no `LICENSE` file yet; whatever
+one is added has to be GPL-compatible, or the bundled FFmpeg has to be swapped
+for an LGPL build first (and that build has no H.264/H.265 encoder).
 
-## Troubleshooting
-
-### "yt-dlp is not installed"
-
-- Install yt-dlp from your package manager or pip
-- Verify installation: `yt-dlp --version`
-
-### Download fails
-
-- Check internet connection (status shown in app)
-- Verify the YouTube URL is correct
-- Ensure save directory has write permissions
-- Check yt-dlp is up to date: `yt-dlp -U`
-
-### Language not showing
-
-- Clear browser cache in dev tools
-- Restart the application
-- Check `src/i18n/locales/` for translation files
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-MIT License - feel free to use this project however you like!
-
-## Support
-
-For issues, questions, or suggestions, please open an issue on GitHub.
-
----
-
-Made with ❤️ using Tauri, React, and Rust
-# youtube-audio-downloader
+See [`src-tauri/resources/THIRD-PARTY.md`](src-tauri/resources/THIRD-PARTY.md)
+for the source offer and the exact builds shipped. The URL, SHA-256, and size of
+every bundled binary is recorded in `src-tauri/binaries/.tools.json` at build
+time.
