@@ -30,6 +30,22 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cold Tauri builds are 8-15 min per platform; this is the actual cost
+      # centre, not the binary downloads.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # src-tauri/binaries is deliberately NOT cached. build.rs only re-fetches
+      # when the pinned URL changes, so a warm cache would freeze yt-dlp at
+      # whatever version was cached -- and yt-dlp breaks against YouTube every
+      # few weeks. Re-downloading ~200 MB costs under a minute on a runner and
+      # guarantees every release ships a current yt-dlp and ffmpeg.
+
       - name: Install frontend dependencies
         run: bun install
 

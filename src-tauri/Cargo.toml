@@ -16,10 +16,20 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-reqwest = { version = "0.11", features = ["json"] }
-zip = "0.6"
-tokio = { version = "1", features = ["full"] }
+# Blocking client: build scripts are synchronous, so this drops the tokio
+# build-dependency entirely. rustls avoids needing OpenSSL headers on CI.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+zip = { version = "5", default-features = false, features = ["deflate"] }
+tar = "0.4"
+# `static` vendors and links liblzma from source, so no distro package is
+# needed on any runner. The Linux and macOS ffmpeg builds ship as .tar.xz.
+liblzma = { version = "0.4", features = ["static"] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
