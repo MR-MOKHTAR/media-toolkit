@@ -97,11 +97,20 @@ pub async fn open_path(path: String) -> AppResult<()> {
 }
 
 /// Opens the containing folder with the file selected.
+///
+/// When the file itself is gone -- renamed, moved, or deleted since the job
+/// finished -- this opens the folder it was written to rather than failing.
+/// "Show me where this went" is still answerable, and refusing outright reads
+/// as a dead button.
 #[tauri::command]
 pub async fn reveal_in_folder(path: String) -> AppResult<()> {
     let target = PathBuf::from(&path);
     if !target.exists() {
-        return Err(AppError::invalid("path", "does not exist"));
+        let parent = target
+            .parent()
+            .filter(|parent| parent.is_dir())
+            .ok_or_else(|| AppError::invalid("path", "neither the file nor its folder exists"))?;
+        return run_detached(opener_command(parent));
     }
 
     #[cfg(target_os = "macos")]

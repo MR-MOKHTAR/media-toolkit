@@ -16,7 +16,9 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
 
+import type { ToastType } from "../../types/feedback";
 import * as ipc from "../../lib/ipc";
 import {
   emptyJobsState,
@@ -52,7 +54,17 @@ export interface JobMeta {
 
 const JobsContext = createContext<JobsContextValue | null>(null);
 
-export function JobsProvider({ children }: { children: ReactNode }) {
+export function JobsProvider({
+  notify,
+  children,
+}: {
+  /** Job actions fired from a card have no screen to report into, so failures
+   *  used to vanish: `void reveal(path)` swallowed the rejection and a dead
+   *  button was indistinguishable from a missing one. */
+  notify: (type: ToastType, message: string) => void;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
   // Lazy initialiser: reading localStorage on every render would be wasteful,
   // and the migration inside it must run exactly once.
   const [state, dispatch] = useReducer(jobsReducer, emptyJobsState, loadJobs);
@@ -138,6 +150,30 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     await ipc.cancelJob(id);
   }, []);
 
+  // Reporting rather than rethrowing: the caller is a button on a card with
+  // nowhere to put an error, and a rejected promise nobody awaits is silence.
+  const reveal = useCallback(
+    async (path: string) => {
+      try {
+        await ipc.revealInFolder(path);
+      } catch {
+        notify("error", t("open_folder_failed"));
+      }
+    },
+    [notify, t],
+  );
+
+  const open = useCallback(
+    async (path: string) => {
+      try {
+        await ipc.openPath(path);
+      } catch {
+        notify("error", t("open_file_failed"));
+      }
+    },
+    [notify, t],
+  );
+
   const value = useMemo<JobsContextValue>(
     () => ({
       state,
@@ -148,10 +184,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       remove: (id) => dispatch({ type: "remove", id }),
       select: (id) => dispatch({ type: "select", id }),
       clearFinished: () => dispatch({ type: "clearFinished" }),
-      reveal: ipc.revealInFolder,
-      open: ipc.openPath,
+      reveal,
+      open,
     }),
-    [state, startDownload, addExternalJob, cancel],
+    [state, startDownload, addExternalJob, cancel, reveal, open],
   );
 
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;

@@ -139,7 +139,10 @@ function JobCardComponent({
             onClick={() => onReveal(job.outputPath!)}
             aria-label={t("open_folder")}
             title={t("open_folder")}
-            className="flex size-8 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+            // Tinted rather than muted grey: it sits next to a delete button,
+            // and the one that opens your file should not look like the one
+            // that throws it away.
+            className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
           >
             <FolderOpen size={16} />
           </button>

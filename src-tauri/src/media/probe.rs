@@ -32,6 +32,19 @@ impl MediaInfo {
     pub fn has_video(&self) -> bool {
         self.video.is_some()
     }
+
+    pub fn has_audio(&self) -> bool {
+        self.audio.is_some()
+    }
+
+    /// Source audio bitrate in kbps, when the container reports one. Used to
+    /// stop a "compress" from re-encoding upwards.
+    pub fn audio_kbps(&self) -> Option<u32> {
+        self.audio
+            .as_ref()
+            .and_then(|a| a.bit_rate)
+            .map(|bps| (bps / 1000).max(1) as u32)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

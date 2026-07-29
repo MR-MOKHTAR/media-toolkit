@@ -66,7 +66,12 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
     };
   }, [file.path, file.info]);
 
-  const ready = Boolean(file.path && file.info?.video && job.outputDir && !job.busy);
+  // Audio-only input is fine here. The file picker has always offered audio
+  // extensions, so requiring a video stream meant the app handed the user an
+  // MP3 it then refused to work on.
+  const isAudioOnly = Boolean(file.info && !file.info.video && file.info.audio);
+  const isMedia = Boolean(file.info?.video || file.info?.audio);
+  const ready = Boolean(file.path && isMedia && job.outputDir && !job.busy);
 
   return (
     <ToolShell title={t("tool_compress")} subtitle={t("tool_compress_hint")} historyKind="compress">
@@ -78,11 +83,11 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
         onBrowse={() => void file.browse()}
       />
 
-      {file.path && !file.loading && !file.info?.video && (
-        <p className="text-sm text-danger">{t("needs_video")}</p>
+      {file.path && !file.loading && !isMedia && (
+        <p className="text-sm text-danger">{t("needs_media")}</p>
       )}
 
-      {file.info?.video && (
+      {isMedia && file.info && (
         <>
           <Segmented
             label={t("compress_quality")}
@@ -99,6 +104,9 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
           <p className="-mt-2 text-xs text-fg-muted">
             {t("compress_was", { size: formatBytes(file.info.sizeBytes, language) })}
           </p>
+          {isAudioOnly && (
+            <p className="-mt-1 text-xs text-fg-muted">{t("compress_audio_note")}</p>
+          )}
         </>
       )}
 
@@ -113,9 +121,10 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
               input: file.path,
               outputName: `${defaultOutputName(file.path)}-compressed`,
               preset,
-              maxHeight: preset === "small" ? 720 : null,
+              // A height cap is meaningless without a video stream.
+              maxHeight: !isAudioOnly && preset === "small" ? 720 : null,
             },
-            `${defaultOutputName(file.path)}-compressed.mp4`,
+            `${defaultOutputName(file.path)}-compressed.${isAudioOnly ? "m4a" : "mp4"}`,
             t(`compress_${preset}`),
           )
         }

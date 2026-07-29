@@ -19,11 +19,10 @@ import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
-function Shell() {
+function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
   const { route } = useNavigation();
   const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
-  const { toast, notify, dismiss } = useToast();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
   const isRtl = language === "fa" || language === "ar";
 
@@ -81,11 +80,17 @@ function Shell() {
 }
 
 export default function App() {
+  // The toast lives above JobsProvider so job actions can report into it.
+  // Reveal and open are fired from buttons on a job card, which has no screen
+  // to hand an error to; when it was created inside Shell the provider sat
+  // above it and every failure was swallowed.
+  const toast = useToast();
+
   return (
-    <JobsProvider>
+    <JobsProvider notify={toast.notify}>
       <NavigationProvider>
         <DragDropProvider>
-          <Shell />
+          <Shell {...toast} />
         </DragDropProvider>
       </NavigationProvider>
     </JobsProvider>

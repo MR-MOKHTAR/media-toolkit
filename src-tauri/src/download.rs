@@ -14,6 +14,15 @@ use crate::process::{self, Line, StderrTail};
 /// Marks our own progress lines so they are unambiguous in the stdout stream.
 const MARKER: &str = "__DLPROGRESS__";
 
+/// Fragments fetched in parallel per download.
+///
+/// A constant rather than something derived from `available_parallelism`:
+/// fetching fragments is network-bound, not CPU-bound, so the core count says
+/// nothing useful about the right number. Eight against the four-download
+/// network lane is at most 32 sockets, which a modern home connection handles
+/// and which the user opted into by starting four downloads.
+const CONCURRENT_FRAGMENTS: u8 = 8;
+
 const PROGRESS_TEMPLATE: &str = concat!(
     "download:__DLPROGRESS__",
     "%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
@@ -126,6 +135,25 @@ pub async fn run(
         "after_move:__DLPATH__%(filepath)s".into(),
         "-o".into(),
         template.to_string_lossy().into_owned(),
+        // The single biggest speed lever. YouTube and Instagram serve DASH and
+        // HLS, and yt-dlp fetches fragments one at a time by default, so a
+        // download that could saturate the line instead trickles.
+        "--concurrent-fragments".into(),
+        CONCURRENT_FRAGMENTS.to_string(),
+        // YouTube throttles each connection after the first few megabytes.
+        // Requesting in chunks makes it hand out a fresh allowance per chunk.
+        "--http-chunk-size".into(),
+        "10M".into(),
+        // When a stream still ends up throttled below this, re-extract rather
+        // than sit at 40 KB/s for an hour.
+        "--throttled-rate".into(),
+        "100K".into(),
+        "--retries".into(),
+        "10".into(),
+        "--fragment-retries".into(),
+        "10".into(),
+        "--file-access-retries".into(),
+        "3".into(),
     ];
 
     if is_audio {

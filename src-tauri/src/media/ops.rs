@@ -135,11 +135,42 @@ fn scale_to_height(height: u32) -> String {
 
 // -------------------------------------------------------------- compress
 
+/// Target audio bitrate for a preset, guaranteed to shrink the file.
+///
+/// Re-encoding a 128k MP3 at the High preset's 192k produces a file half again
+/// as large, which is the exact opposite of what a tool called "compress"
+/// promises. Clamping to the source bitrate is not enough either: measured on a
+/// 30s 96k MP3, re-encoding at the same 96k came out 1.6% *bigger*, because the
+/// bitrate is only the audio payload and M4A adds its own container overhead.
+///
+/// So the ceiling is three quarters of the source. That also happens to be
+/// roughly where AAC matches MP3 perceptually -- AAC is the more efficient
+/// codec -- so the guarantee costs very little quality.
+fn audio_target_kbps(preset: CompressPreset, info: &MediaInfo) -> u32 {
+    let wanted = preset.audio_kbps();
+    match info.audio_kbps() {
+        // 32k is about where AAC stops being listenable, so never go under it
+        // even if the source is lower -- at that point the file is tiny anyway.
+        Some(source) => wanted.min((source * 3 / 4).max(32)),
+        // No reported bitrate: trust the preset. Lossless sources (WAV, FLAC)
+        // land here and always shrink anyway.
+        None => wanted,
+    }
+}
+
 pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> {
     let input = paths::require_file(&request.input)?;
+
+    // Audio-only input is a legitimate thing to compress, and the file picker
+    // has always offered audio extensions. Requiring a video stream here meant
+    // the app handed the user an MP3 it then refused.
     if !info.has_video() {
-        return Err(AppError::invalid("file", "this tool needs a video"));
+        if !info.has_audio() {
+            return Err(AppError::invalid("file", "no audio or video stream"));
+        }
+        return compress_audio(request, info, &input);
     }
+
     let output = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
     let duration = Some(info.duration_secs);
 
@@ -182,6 +213,66 @@ pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> 
 
     Ok(Plan {
         passes: vec![Pass { args, duration_secs: duration, label: "compress" }],
+        output,
+        temp_files: Vec::new(),
+    })
+}
+
+/// Audio-only compression: re-encode to AAC at a lower bitrate.
+///
+/// Single pass regardless of `target_size_mb`. Two-pass exists to let x264
+/// distribute a bitrate budget across frames, which means nothing without a
+/// video stream; for audio, a target size is just a bitrate, so it is solved
+/// arithmetically instead.
+fn compress_audio(
+    request: &CompressRequest,
+    info: &MediaInfo,
+    input: &Path,
+) -> AppResult<Plan> {
+    let output = output_for(&request.output_dir, &request.output_name, input, "m4a")?;
+
+    let kbps = match request.target_size_mb {
+        Some(target_mb) if info.duration_secs > 0.0 => {
+            let budget_kbits = target_mb * 8.0 * 1024.0 * 0.97;
+            // 32k is about where AAC stops being listenable.
+            ((budget_kbits / info.duration_secs).round() as u32).max(32)
+        }
+        _ => {
+            let target = audio_target_kbps(request.preset, info);
+            // A source already at or below the floor has nothing left to give:
+            // measured, a 32k MP3 re-encoded at 32k AAC came out 5% larger on
+            // container overhead. Saying so beats handing back a bigger file
+            // from a button labelled "compress".
+            if info.audio_kbps().is_some_and(|source| target >= source) {
+                return Err(AppError::invalid("file", "already at its smallest"));
+            }
+            target
+        }
+    };
+
+    let args = vec![
+        arg("-i"),
+        path_arg(input),
+        // Drops cover art as well as video. Without it a podcast's embedded
+        // artwork gets re-encoded as a one-frame video stream.
+        arg("-vn"),
+        arg("-c:a"),
+        arg("aac"),
+        arg("-b:a"),
+        arg(&format!("{kbps}k")),
+        arg("-ac"),
+        arg("2"),
+        arg("-movflags"),
+        arg("+faststart"),
+        path_arg(&output),
+    ];
+
+    Ok(Plan {
+        passes: vec![Pass {
+            args,
+            duration_secs: Some(info.duration_secs),
+            label: "compress",
+        }],
         output,
         temp_files: Vec::new(),
     })
@@ -491,12 +582,20 @@ pub fn gif(request: &GifRequest, info: &MediaInfo) -> AppResult<Plan> {
 /// Deliberately approximate: it exists so "Small" versus "Balanced" is a
 /// decision someone can make without running both.
 pub fn estimate_compressed_bytes(info: &MediaInfo, preset: CompressPreset, max_height: Option<u32>) -> u64 {
-    let Some(video) = &info.video else {
-        return info.size_bytes;
-    };
     if info.duration_secs <= 0.0 {
         return info.size_bytes;
     }
+
+    // Audio-only: the output is exactly the target bitrate for the duration,
+    // so this is arithmetic rather than an estimate. Returning size_bytes here
+    // used to make all three presets read as "no change".
+    let Some(video) = &info.video else {
+        if !info.has_audio() {
+            return info.size_bytes;
+        }
+        let kbps = audio_target_kbps(preset, info) as f64;
+        return ((kbps * 1000.0 * info.duration_secs) / 8.0) as u64;
+    };
 
     let height = max_height
         .filter(|cap| video.height > *cap)
@@ -695,13 +794,125 @@ mod tests {
         assert!(balanced < high, "{balanced} !< {high}");
     }
 
+    // ---------------------------------------------------------- audio-only
+
+    fn audio_sample(duration: f64, source_kbps: Option<u64>) -> MediaInfo {
+        let mut info = sample(0, 0, duration);
+        info.path = "/tmp/in.mp3".into();
+        info.container = "mp3".into();
+        info.video = None;
+        info.audio = Some(AudioStream {
+            codec: "mp3".into(),
+            channels: 2,
+            sample_rate: Some(44_100),
+            bit_rate: source_kbps.map(|k| k * 1000),
+        });
+        info
+    }
+
+    fn audio_request(preset: CompressPreset, target_size_mb: Option<f64>) -> CompressRequest {
+        CompressRequest {
+            input: String::new(), // filled in per test with a real temp file
+            output_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            output_name: Some(format!("mt-audio-test-{}", std::process::id())),
+            preset,
+            target_size_mb,
+            max_height: None,
+        }
+    }
+
+    /// compress() calls require_file, so the input has to exist on disk.
+    fn with_temp_input<T>(name: &str, body: impl FnOnce(&str) -> T) -> T {
+        let path = std::env::temp_dir().join(format!("{name}-{}.mp3", std::process::id()));
+        std::fs::write(&path, b"not really an mp3").unwrap();
+        let result = body(&path.to_string_lossy());
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
     #[test]
-    fn estimating_an_audio_file_falls_back_to_its_size() {
-        let mut audio_only = sample(0, 0, 200.0);
-        audio_only.video = None;
-        assert_eq!(
-            estimate_compressed_bytes(&audio_only, CompressPreset::Balanced, None),
-            audio_only.size_bytes
-        );
+    fn compressing_audio_drops_video_and_writes_m4a() {
+        // The file picker has always accepted audio extensions, so refusing an
+        // MP3 here was the app contradicting itself.
+        with_temp_input("mt-audio-plan", |input| {
+            let mut request = audio_request(CompressPreset::Balanced, None);
+            request.input = input.to_string();
+            let plan = compress(&request, &audio_sample(200.0, Some(320))).unwrap();
+
+            let args = joined(&plan, 0);
+            assert!(args.contains("-vn"), "{args}");
+            assert!(args.contains("-c:a aac"), "{args}");
+            assert!(!args.contains("libx264"), "{args}");
+            assert_eq!(plan.passes.len(), 1, "audio never needs two passes");
+            assert_eq!(plan.output.extension().unwrap(), "m4a");
+        });
+    }
+
+    #[test]
+    fn audio_bitrate_always_lands_below_the_source() {
+        // A 128k source at the High preset's 192k would come out half again as
+        // large. Clamping to 128 is still not enough -- measured, re-encoding a
+        // 96k MP3 at 96k AAC grew 1.6% on container overhead alone -- so the
+        // ceiling is three quarters of the source.
+        let source = audio_sample(200.0, Some(128));
+        assert_eq!(audio_target_kbps(CompressPreset::High, &source), 96);
+        assert_eq!(audio_target_kbps(CompressPreset::Balanced, &source), 96);
+        assert_eq!(audio_target_kbps(CompressPreset::Small, &source), 96);
+
+        // A high-bitrate source leaves the presets room to be themselves.
+        let big = audio_sample(200.0, Some(320));
+        assert_eq!(audio_target_kbps(CompressPreset::High, &big), 192);
+        assert_eq!(audio_target_kbps(CompressPreset::Small, &big), 96);
+
+        // Never below listenable, even from an already-tiny source. That the
+        // floor equals the source is exactly the case compress() refuses.
+        let tiny = audio_sample(200.0, Some(32));
+        assert_eq!(audio_target_kbps(CompressPreset::Small, &tiny), 32);
+
+        // No reported bitrate (WAV, FLAC): trust the preset, it always shrinks.
+        let lossless = audio_sample(200.0, None);
+        assert_eq!(audio_target_kbps(CompressPreset::High, &lossless), 192);
+    }
+
+    #[test]
+    fn audio_estimates_shrink_and_beat_the_source_size() {
+        let info = audio_sample(200.0, Some(320));
+        let small = estimate_compressed_bytes(&info, CompressPreset::Small, None);
+        let balanced = estimate_compressed_bytes(&info, CompressPreset::Balanced, None);
+        let high = estimate_compressed_bytes(&info, CompressPreset::High, None);
+
+        assert!(small < balanced, "{small} !< {balanced}");
+        assert!(balanced < high, "{balanced} !< {high}");
+        // Used to return size_bytes unchanged, which made all three presets
+        // read as "no change" and the estimate useless.
+        assert!(high < info.size_bytes, "{high} !< {}", info.size_bytes);
+    }
+
+    #[test]
+    fn audio_already_at_the_floor_is_refused_rather_than_inflated() {
+        with_temp_input("mt-audio-floor", |input| {
+            let mut request = audio_request(CompressPreset::Small, None);
+            request.input = input.to_string();
+            // 32k source: the 75% ceiling floors at 32k, so re-encoding would
+            // only add container overhead. Measured 5% larger.
+            let err = compress(&request, &audio_sample(30.0, Some(32)));
+            assert!(err.is_err(), "a 32k source has nothing left to compress");
+
+            // But a target size is an explicit instruction, so it still runs.
+            let mut sized = audio_request(CompressPreset::Small, Some(0.05));
+            sized.input = input.to_string();
+            assert!(compress(&sized, &audio_sample(30.0, Some(32))).is_ok());
+        });
+    }
+
+    #[test]
+    fn a_file_with_neither_stream_is_rejected() {
+        with_temp_input("mt-empty-plan", |input| {
+            let mut info = audio_sample(200.0, Some(128));
+            info.audio = None;
+            let mut request = audio_request(CompressPreset::Balanced, None);
+            request.input = input.to_string();
+            assert!(compress(&request, &info).is_err());
+        });
     }
 }

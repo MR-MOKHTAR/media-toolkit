@@ -64,8 +64,20 @@ pub fn resolve(app: &AppHandle, tool: Tool) -> AppResult<Resolved> {
     found.ok_or_else(|| AppError::tool_missing(tool.name()))
 }
 
+/// Runs the tool, rather than checking that its file exists.
+///
+/// Existence is not availability. The shared ffmpeg build we bundle needs its
+/// libraries on the search path, and when that broke, `resolve` still said yes
+/// while every single job failed with a dynamic-loader error. Spawning
+/// `-version` through `command()` exercises the same environment a real job
+/// gets, so a linkage problem shows up once, as "unavailable", instead of
+/// separately inside every operation.
 pub fn is_available(app: &AppHandle, tool: Tool) -> bool {
-    resolve(app, tool).is_ok()
+    let Ok(mut cmd) = command(app, tool) else {
+        return false;
+    };
+    cmd.arg("-version");
+    cmd.output().map(|out| out.status.success()).unwrap_or(false)
 }
 
 fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
@@ -119,8 +131,15 @@ pub fn command(app: &AppHandle, tool: Tool) -> AppResult<Command> {
     //
     // Only Linux needs it. Windows finds DLLs in the executable's own
     // directory, and the macOS builds we bundle are standalone.
+    //
+    // yt-dlp is in this list even though it needs no libraries itself: it
+    // spawns our bundled ffmpeg (see --ffmpeg-location) to merge separate
+    // video and audio streams and to transcode audio downloads to MP3. That
+    // child inherits this environment, and without it every merge and every
+    // audio download fails at the last step -- which is the normal YouTube
+    // path, not an edge case.
     #[cfg(target_os = "linux")]
-    if matches!(tool, Tool::Ffmpeg | Tool::Ffprobe) {
+    if matches!(tool, Tool::Ffmpeg | Tool::Ffprobe | Tool::YtDlp) {
         if let Some(dir) = &resolved.dir {
             let lib = dir.join("lib");
             if lib.is_dir() {
