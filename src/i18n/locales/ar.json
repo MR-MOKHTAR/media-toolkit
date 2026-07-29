@@ -71,7 +71,6 @@
   "audio_default": "الصوت الافتراضي",
   "audio_default_description": "يستخدم الصوت إعداد الاستخراج الافتراضي في yt-dlp، لذلك لا حاجة لاختيار الجودة.",
   "optional": "(اختياري)",
-  "one_download_at_a_time": "يتم تشغيل تنزيل واحد في كل مرة",
   "start_download": "بدء التنزيل",
   "download_added": "تمت إضافة التنزيل إلى القائمة.",
   "removed_from_history": "تمت إزالة العنصر المحدد من السجل."

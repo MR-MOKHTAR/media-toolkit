@@ -71,7 +71,6 @@
   "audio_default": "Default audio",
   "audio_default_description": "Audio uses yt-dlp's default extraction setting, so no quality selection is needed.",
   "optional": "(optional)",
-  "one_download_at_a_time": "One download runs at a time",
   "start_download": "Start Download",
   "download_added": "Download added to the list.",
   "removed_from_history": "The selected item was removed from history."

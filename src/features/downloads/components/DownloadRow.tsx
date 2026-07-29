@@ -23,7 +23,7 @@ interface DownloadRowProps {
   isCancelling: boolean;
   formatDate: (timestamp: number) => string;
   onReveal: (item: DownloadItem) => void;
-  onCancel: () => void;
+  onCancel: (id: string) => void;
   onRemove: (id: string) => void;
 }
 
@@ -93,9 +93,9 @@ function DownloadRowComponent({
             title={t("cancel_button")}
             onClick={(event) => {
               event.stopPropagation();
-              onCancel();
+              onCancel(item.id);
             }}
-            onKeyDown={(event) => runKeyboardAction(event, onCancel)}
+            onKeyDown={(event) => runKeyboardAction(event, () => onCancel(item.id))}
           >
             <X size={15} />
           </span>

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  AlertTriangle,
   Check,
   ChevronDown,
   Download,
@@ -205,7 +204,7 @@ export function NewDownloadModal({
             </div>
 
             <div className="modal-footer">
-              <span><AlertTriangle size={14} />{t("one_download_at_a_time")}</span>
+              <span />
               <div>
                 <button className="secondary-button" onClick={onClose}>{t("cancel_button")}</button>
                 <button

@@ -370,6 +370,69 @@ fn extract(archive: &Path, spec: &TargetSpec, dest: &Path) -> Res<()> {
     if found == 0 {
         return Err(format!("`{member}` matched nothing in the archive").into());
     }
+    if subtree {
+        collapse_symlinks(dest)?;
+    }
+    Ok(())
+}
+
+/// Replaces each `libfoo.so.N` symlink with the real file it points at, and
+/// drops every other link and the now-orphaned versioned original.
+///
+/// Tauri dereferences symlinks when it copies resources into a bundle, so
+/// shipping the archive's layout verbatim writes three full copies of every
+/// library: `libavcodec.so`, `libavcodec.so.62` and `libavcodec.so.62.28.102`
+/// are one 96 MB file and two links, and all three land in the installer as
+/// 96 MB files. That took the .deb to 257 MB.
+///
+/// `libavcodec.so.62` is the SONAME the loader actually asks for, so that is
+/// the name the real file gets. The bare `.so` is a link-time convenience the
+/// app never needs, and the fully versioned name is only reachable through it.
+fn collapse_symlinks(dir: &Path) -> Res<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut links = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            let target = fs::read_link(entry.path())?;
+            links.push((entry.path(), target));
+        }
+    }
+
+    for (link, target) in &links {
+        let Some(name) = link.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Only the SONAME form: exactly one numeric component after `.so`.
+        let is_soname = name
+            .split_once(".so.")
+            .is_some_and(|(_, rest)| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()));
+
+        // Links point at a sibling, so the target is relative to `dir`.
+        let resolved = dir.join(target.file_name().unwrap_or(target.as_os_str()));
+        fs::remove_file(link)?;
+        if is_soname && resolved.is_file() {
+            fs::rename(&resolved, link)?;
+        }
+    }
+
+    // Anything still carrying a full version number is unreachable now.
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let orphan = name
+            .split_once(".so.")
+            .is_some_and(|(_, rest)| rest.contains('.'));
+        if orphan && entry.file_type()?.is_file() {
+            fs::remove_file(entry.path())?;
+        }
+    }
+
     Ok(())
 }
 

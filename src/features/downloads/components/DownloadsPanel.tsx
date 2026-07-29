@@ -12,15 +12,15 @@ interface DownloadsPanelProps {
   filter: DownloadFilter;
   search: string;
   language: AppLanguage;
-  activeId: string | null;
+  activeIds: Set<string>;
   selectedId: string | null;
-  isCancelling: boolean;
+  cancellingIds: Set<string>;
   isDownloading: boolean;
   isOnline: boolean;
   onSearchChange: (value: string) => void;
   onOpenNewDownload: () => void;
   onReveal: (item: DownloadItem) => void;
-  onCancel: () => void;
+  onCancel: (id: string) => void;
   onRemove: (id: string) => void;
 }
 
@@ -30,9 +30,9 @@ export function DownloadsPanel({
   filter,
   search,
   language,
-  activeId,
+  activeIds,
   selectedId,
-  isCancelling,
+  cancellingIds,
   isDownloading,
   isOnline,
   onSearchChange,
@@ -89,9 +89,9 @@ export function DownloadsPanel({
               <DownloadRow
                 key={item.id}
                 item={item}
-                active={item.id === activeId}
+                active={activeIds.has(item.id)}
                 selected={selectedId === item.id}
-                isCancelling={isCancelling}
+                isCancelling={cancellingIds.has(item.id)}
                 formatDate={formatDate}
                 onReveal={onReveal}
                 onCancel={onCancel}

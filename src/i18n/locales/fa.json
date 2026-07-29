@@ -71,7 +71,6 @@
   "audio_default": "صدای پیش‌فرض",
   "audio_default_description": "فایل صوتی با تنظیم پیش‌فرض yt-dlp استخراج می‌شود و نیازی به انتخاب کیفیت ندارد.",
   "optional": "(اختیاری)",
-  "one_download_at_a_time": "هر بار یک دانلود اجرا می‌شود",
   "start_download": "شروع دانلود",
   "download_added": "دانلود به لیست اضافه شد.",
   "removed_from_history": "مورد انتخاب‌شده از تاریخچه حذف شد."

@@ -8,49 +8,44 @@ import {
   type NewDownloadValues,
 } from "./features/downloads/components/NewDownloadModal";
 import { DownloadsPanel } from "./features/downloads/components/DownloadsPanel";
+import {
+  activeJobIds,
+  jobsToDownloadItems,
+} from "./features/downloads/legacyAdapter";
 import { filterDownloads, getDownloadCounts } from "./features/downloads/selectors";
 import type { DownloadFilter } from "./features/downloads/types";
-import { useDownloadManager } from "./features/downloads/useDownloadManager";
+import { useDownloadForm } from "./features/downloads/useDownloadForm";
+import { JobsProvider, useJobs } from "./features/jobs/useJobs";
 import { useAppPreferences } from "./hooks/useAppPreferences";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
-function App() {
+function Manager() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [filter, setFilter] = useState<DownloadFilter>("all");
   const [search, setSearch] = useState("");
 
-  const {
-    darkMode,
-    toggleDarkMode,
-    language,
-    setLanguage,
-  } = useAppPreferences();
+  const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { toast, notify, dismiss } = useToast();
-  const {
-    isMaximized,
-    minimize,
-    toggleMaximize,
-    close,
-  } = useWindowControls();
-  const {
-    downloads,
-    activeId,
-    selectedId,
-    isCancelling,
-    isDownloading,
-    savePath,
-    ytdlpReady,
-    selectFolder,
-    revealDownload,
-    startDownload,
-    cancelDownload,
-    removeDownload,
-  } = useDownloadManager({ isOnline, notify });
+  const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
 
+  const { jobs, state, cancel, remove, reveal } = useJobs();
+  const { savePath, toolsReady, selectFolder, start } = useDownloadForm({
+    isOnline,
+    notify,
+  });
+
+  // The old table speaks DownloadItem. The adapter and this whole screen go
+  // away in phase 5, when job cards replace the seven-column grid.
+  const downloads = useMemo(() => jobsToDownloadItems(jobs), [jobs]);
+  const activeIds = useMemo(() => activeJobIds(jobs), [jobs]);
+  const cancellingIds = useMemo(
+    () => new Set(state.cancelling),
+    [state.cancelling],
+  );
   const counts = useMemo(() => getDownloadCounts(downloads), [downloads]);
   const visibleDownloads = useMemo(
     () => filterDownloads(downloads, filter, search, language),
@@ -62,10 +57,27 @@ function App() {
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((current) => !current);
   }, []);
-  const handleStartDownload = useCallback((
-    values: NewDownloadValues,
-    onSuccess: () => void,
-  ) => startDownload({ ...values, savePath }, onSuccess), [savePath, startDownload]);
+
+  const handleStart = useCallback(
+    (values: NewDownloadValues, onSuccess: () => void) =>
+      start(
+        {
+          url: values.url,
+          filename: values.filename,
+          mediaType: values.downloadType,
+          quality: values.quality,
+        },
+        onSuccess,
+      ),
+    [start],
+  );
+
+  const handleReveal = useCallback(
+    (item: { filePath?: string }) => {
+      if (item.filePath) void reveal(item.filePath);
+    },
+    [reveal],
+  );
 
   return (
     <div className="app-shell">
@@ -74,7 +86,7 @@ function App() {
         onLanguageChange={setLanguage}
         darkMode={darkMode}
         onToggleTheme={toggleDarkMode}
-        isDownloading={isDownloading}
+        isDownloading={false}
         isMaximized={isMaximized}
         onNewDownload={openNewDownload}
         onMinimize={minimize}
@@ -99,27 +111,27 @@ function App() {
           filter={filter}
           search={search}
           language={language}
-          activeId={activeId}
-          selectedId={selectedId}
-          isCancelling={isCancelling}
-          isDownloading={isDownloading}
+          activeIds={activeIds}
+          selectedId={state.selectedId}
+          cancellingIds={cancellingIds}
+          isDownloading={activeIds.size > 0}
           isOnline={isOnline}
           onSearchChange={setSearch}
           onOpenNewDownload={openNewDownload}
-          onReveal={revealDownload}
-          onCancel={cancelDownload}
-          onRemove={removeDownload}
+          onReveal={handleReveal}
+          onCancel={(id) => void cancel(id)}
+          onRemove={remove}
         />
       </div>
 
       <NewDownloadModal
         isOpen={isModalOpen}
         savePath={savePath}
-        isDownloading={isDownloading}
-        ytdlpReady={ytdlpReady}
+        isDownloading={false}
+        ytdlpReady={toolsReady}
         isOnline={isOnline}
         onSelectFolder={selectFolder}
-        onStart={handleStartDownload}
+        onStart={handleStart}
         onClose={closeNewDownload}
       />
 
@@ -128,4 +140,10 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <JobsProvider>
+      <Manager />
+    </JobsProvider>
+  );
+}
