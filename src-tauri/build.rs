@@ -66,10 +66,17 @@ struct TargetSpec {
     url: String,
     /// `raw` (the download is the binary), `zip`, or `tar.xz`.
     archive: String,
-    /// Path inside the archive; matched on a component boundary so the
+    /// Path inside the archive, matched on a component boundary so the
     /// top-level directory BtbN wraps its builds in needs no strip count.
+    /// A trailing `/` means "this whole subtree", and `install_as` then names
+    /// a destination directory rather than a file.
     member: Option<String>,
     install_as: String,
+    /// Substrings that disqualify an entry during a subtree extraction. Used
+    /// to leave out ffplay (~18 MB, and the app never plays media itself) and
+    /// the pkgconfig metadata.
+    #[serde(default)]
+    exclude: Vec<String>,
     /// When set, a mismatch fails the fetch. Left null for sources that
     /// re-publish the same URL (BtbN's `n8.1-latest`, yt-dlp's `latest`),
     /// where a hard pin would break every build within the week.
@@ -207,18 +214,27 @@ fn fetch_group(
 
     let mut installed = Vec::new();
     for (tool, spec) in members {
-        let staged = stage.join(format!("{}.part", spec.install_as));
+        let staged = stage.join(format!("{tool}.part"));
+        let _ = fs::remove_dir_all(&staged);
+        let _ = fs::remove_file(&staged);
+
         extract(&archive_path, spec, &staged)
             .map_err(|e| format!("{tool}: extracting {:?}: {e}", spec.member))?;
 
-        let size = fs::metadata(&staged)?.len();
+        let size = tree_size(&staged)?;
         if size == 0 {
-            return Err(format!("{tool}: extracted an empty file").into());
+            return Err(format!("{tool}: extracted nothing").into());
         }
-        if spec.executable {
+        if spec.executable && staged.is_file() {
             make_executable(&staged)?;
         }
-        install_atomically(&staged, &binaries_dir.join(&spec.install_as))?;
+
+        // `.` means "drop these next to the binaries" -- the Windows DLLs, which
+        // the loader finds in the executable's own directory. It must merge, not
+        // replace, or it would wipe binaries/ wholesale.
+        let merge = spec.install_as == ".";
+        let dest = if merge { binaries_dir.to_path_buf() } else { binaries_dir.join(&spec.install_as) };
+        install_atomically(&staged, &dest, merge)?;
 
         println!("cargo:warning=  installed {} ({} MiB)", spec.install_as, size / 1_048_576);
         installed.push((
@@ -236,9 +252,31 @@ fn fetch_group(
     Ok(installed)
 }
 
-/// Streams `url` to `dest`, returning its hex sha256 and byte count. Streaming
-/// rather than buffering matters: the Windows ffmpeg archive is 161 MB.
+/// Streams `url` to `dest`, returning its hex sha256 and byte count.
+///
+/// Retried, because these are 40-160 MB transfers and one dropped connection
+/// would otherwise cost the build its entire ffmpeg.
 fn download(url: &str, dest: &Path) -> Res<(String, u64)> {
+    const ATTEMPTS: u32 = 3;
+    let mut last = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match download_once(url, dest) {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                last = error.to_string();
+                if attempt < ATTEMPTS {
+                    warn(format!("  attempt {attempt}/{ATTEMPTS} failed ({last}), retrying"));
+                    std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
+                }
+            }
+        }
+    }
+    Err(format!("gave up after {ATTEMPTS} attempts: {last}").into())
+}
+
+/// Streaming rather than buffering matters: the Windows archive is 76 MB
+/// compressed and expands well past that.
+fn download_once(url: &str, dest: &Path) -> Res<(String, u64)> {
     let mut response = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .user_agent("downloader-build-script")
@@ -267,68 +305,177 @@ fn download(url: &str, dest: &Path) -> Res<(String, u64)> {
 }
 
 fn extract(archive: &Path, spec: &TargetSpec, dest: &Path) -> Res<()> {
+    if spec.archive == "raw" {
+        fs::copy(archive, dest)?;
+        return Ok(());
+    }
+
+    let member = spec.member.as_deref().ok_or("archive source needs a `member`")?;
+    let subtree = member.ends_with('/');
+    let mut found = 0usize;
+
     match spec.archive.as_str() {
-        "raw" => {
-            fs::copy(archive, dest)?;
-            Ok(())
-        }
         "zip" => {
-            let member = spec.member.as_deref().ok_or("zip source needs a `member`")?;
             let mut zip = zip::ZipArchive::new(File::open(archive)?)?;
             for i in 0..zip.len() {
                 let mut entry = zip.by_index(i)?;
-                if entry.is_file() && path_matches(entry.name(), member) {
-                    let mut out = BufWriter::new(File::create(dest)?);
-                    io::copy(&mut entry, &mut out)?;
-                    out.flush()?;
-                    return Ok(());
+                if !entry.is_file() {
+                    continue;
+                }
+                let name = entry.name().to_string();
+                let Some(out_path) = target_for(&name, member, subtree, dest, &spec.exclude) else {
+                    continue;
+                };
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut out = BufWriter::new(File::create(&out_path)?);
+                io::copy(&mut entry, &mut out)?;
+                out.flush()?;
+                found += 1;
+                if !subtree {
+                    break;
                 }
             }
-            Err(format!("`{member}` not found in archive").into())
         }
         "tar.xz" => {
-            let member = spec.member.as_deref().ok_or("tar.xz source needs a `member`")?;
             let reader = liblzma::read::XzDecoder::new(BufReader::new(File::open(archive)?));
             let mut tar = tar::Archive::new(reader);
             for entry in tar.entries()? {
                 let mut entry = entry?;
-                if !entry.header().entry_type().is_file() {
+                let kind = entry.header().entry_type();
+                // Symlinks matter: the shared ffmpeg build ships the real
+                // library as libavcodec.so.62.28.102 and the SONAME the loader
+                // actually looks for, libavcodec.so.62, as a link to it.
+                if !kind.is_file() && !kind.is_symlink() {
                     continue;
                 }
-                let path = entry.path()?.to_string_lossy().into_owned();
-                if path_matches(&path, member) {
-                    let mut out = BufWriter::new(File::create(dest)?);
-                    io::copy(&mut entry, &mut out)?;
-                    out.flush()?;
-                    return Ok(());
+                let name = entry.path()?.to_string_lossy().into_owned();
+                let Some(out_path) = target_for(&name, member, subtree, dest, &spec.exclude) else {
+                    continue;
+                };
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                entry.unpack(&out_path)?;
+                found += 1;
+                if !subtree {
+                    break;
                 }
             }
-            Err(format!("`{member}` not found in archive").into())
         }
-        other => Err(format!("unknown archive kind `{other}`").into()),
+        other => return Err(format!("unknown archive kind `{other}`").into()),
     }
+
+    if found == 0 {
+        return Err(format!("`{member}` matched nothing in the archive").into());
+    }
+    Ok(())
 }
 
-/// True when `entry` is `member`, or ends with `member` on a path boundary.
+/// Where an archive entry should land, or `None` if it is not wanted.
 ///
 /// BtbN wraps its builds in a versioned top-level directory
 /// (`ffmpeg-n8.1-latest-linux64-gpl-8.1/bin/ffmpeg`) while the macOS zips are
-/// flat (`ffmpeg`). Matching on a boundary handles both without the lock file
-/// having to encode a strip count per source.
-fn path_matches(entry: &str, member: &str) -> bool {
+/// flat (`ffmpeg`). Matching on a component boundary handles both without the
+/// lock file having to encode a strip count per source.
+fn target_for(
+    entry: &str,
+    member: &str,
+    subtree: bool,
+    dest: &Path,
+    exclude: &[String],
+) -> Option<PathBuf> {
     let entry = entry.replace('\\', "/");
     let entry = entry.trim_start_matches("./");
-    entry == member || entry.ends_with(&format!("/{member}"))
+    if exclude.iter().any(|pattern| entry.contains(pattern.as_str())) {
+        return None;
+    }
+
+    if !subtree {
+        let hit = entry == member || entry.ends_with(&format!("/{member}"));
+        return hit.then(|| dest.to_path_buf());
+    }
+
+    let rest = if let Some(rest) = entry.strip_prefix(member) {
+        rest
+    } else {
+        let boundary = format!("/{member}");
+        let at = entry.find(&boundary)?;
+        &entry[at + boundary.len()..]
+    };
+    if rest.is_empty() || rest.contains("..") {
+        return None;
+    }
+    Some(dest.join(rest))
 }
 
-fn install_atomically(staged: &Path, dest: &Path) -> Res<()> {
+fn tree_size(path: &Path) -> Res<u64> {
+    let meta = fs::symlink_metadata(path)?;
+    if !meta.is_dir() {
+        return Ok(meta.len());
+    }
+    let mut total = 0;
+    for entry in fs::read_dir(path)? {
+        total += tree_size(&entry?.path())?;
+    }
+    Ok(total)
+}
+
+fn install_atomically(staged: &Path, dest: &Path, merge: bool) -> Res<()> {
+    if merge {
+        // Move the staged children in one at a time. Never touch `dest` itself:
+        // it is the shared binaries directory.
+        fs::create_dir_all(dest)?;
+        for entry in fs::read_dir(staged)? {
+            let entry = entry?;
+            let target = dest.join(entry.file_name());
+            let _ = fs::remove_file(&target);
+            let _ = fs::remove_dir_all(&target);
+            if fs::rename(entry.path(), &target).is_err() {
+                if entry.metadata()?.is_dir() {
+                    copy_tree(&entry.path(), &target)?;
+                } else {
+                    fs::copy(entry.path(), &target)?;
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(staged);
+        return Ok(());
+    }
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
     // Rename is atomic, so an interrupted build never leaves a half-written
-    // binary in place. Falls back to copy when OUT_DIR is on another mount.
+    // binary in place.
+    let _ = fs::remove_dir_all(dest);
     if fs::rename(staged, dest).is_ok() {
         return Ok(());
     }
-    fs::copy(staged, dest)?;
-    fs::remove_file(staged)?;
+    // OUT_DIR can sit on a different mount, where rename fails with EXDEV.
+    if staged.is_dir() {
+        copy_tree(staged, dest)?;
+        fs::remove_dir_all(staged)?;
+    } else {
+        fs::copy(staged, dest)?;
+        fs::remove_file(staged)?;
+    }
+    Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Res<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
     Ok(())
 }
 

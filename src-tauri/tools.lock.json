@@ -59,21 +59,21 @@
       "license": "GPL-3.0-or-later",
       "targets": {
         "windows-x86_64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
           "archive": "zip",
           "member": "bin/ffmpeg.exe",
           "install_as": "ffmpeg.exe",
           "sha256": null
         },
         "linux-x86_64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
           "member": "bin/ffmpeg",
           "install_as": "ffmpeg",
           "sha256": null
         },
         "linux-aarch64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
           "member": "bin/ffmpeg",
           "install_as": "ffmpeg",
@@ -100,7 +100,7 @@
       "license": "GPL-3.0-or-later",
       "targets": {
         "windows-x86_64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
           "archive": "zip",
           "member": "LICENSE.txt",
           "install_as": "LICENSE-ffmpeg.txt",
@@ -108,7 +108,7 @@
           "sha256": null
         },
         "linux-x86_64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
           "member": "LICENSE.txt",
           "install_as": "LICENSE-ffmpeg.txt",
@@ -116,10 +116,49 @@
           "sha256": null
         },
         "linux-aarch64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
           "member": "LICENSE.txt",
           "install_as": "LICENSE-ffmpeg.txt",
+          "executable": false,
+          "sha256": null
+        }
+      }
+    },
+    "ffmpeg-libs": {
+      "$comment": "The shared build's libraries. ffmpeg and ffprobe each embed the full codec set in a static build (144 MB apiece), so sharing one copy takes the installer from ~120 MB to ~50 MB. On Linux they land in binaries/lib and the spawn sets LD_LIBRARY_PATH; on Windows the DLLs sit next to the .exe, which is where the loader already looks. macOS keeps standalone binaries, so it has no entry here.",
+      "license": "GPL-3.0-or-later",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/",
+          "install_as": ".",
+          "exclude": [
+            ".exe"
+          ],
+          "executable": false,
+          "sha256": null
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "lib/",
+          "install_as": "lib",
+          "exclude": [
+            "pkgconfig"
+          ],
+          "executable": false,
+          "sha256": null
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "lib/",
+          "install_as": "lib",
+          "exclude": [
+            "pkgconfig"
+          ],
           "executable": false,
           "sha256": null
         }
@@ -129,21 +168,21 @@
       "license": "GPL-3.0-or-later",
       "targets": {
         "windows-x86_64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
           "archive": "zip",
           "member": "bin/ffprobe.exe",
           "install_as": "ffprobe.exe",
           "sha256": null
         },
         "linux-x86_64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
           "member": "bin/ffprobe",
           "install_as": "ffprobe",
           "sha256": null
         },
         "linux-aarch64": {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
           "member": "bin/ffprobe",
           "install_as": "ffprobe",
