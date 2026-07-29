@@ -97,7 +97,7 @@ export function useDownloadForm({ isOnline, notify }: Options) {
         detail: values.mediaType === "audio" ? "MP3" : values.quality,
       }).catch((error) => notify("error", describe(error)));
 
-      notify("info", t("download_added"));
+      notify("info", t("job_started"));
       onSuccess();
       return true;
     },

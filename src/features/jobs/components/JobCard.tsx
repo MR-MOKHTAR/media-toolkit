@@ -1,0 +1,225 @@
+import { memo } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  FileAudio2,
+  FileVideo2,
+  FolderOpen,
+  Loader2,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { ProgressBar } from "../../../components/ui/ProgressBar";
+import { cn } from "../../../lib/cn";
+import { formatBytes, formatEta, formatRelativeTime } from "../../../lib/format";
+import type { AppError, Job } from "../types";
+
+interface JobCardProps {
+  job: Job;
+  language: string;
+  cancelling: boolean;
+  onCancel: (id: string) => void;
+  onRemove: (id: string) => void;
+  onReveal: (path: string) => void;
+}
+
+const AUDIO_DETAILS = new Set(["MP3", "M4A", "WAV"]);
+
+/**
+ * One job, as a card.
+ *
+ * Replaces a seven-column grid with `min-width: 785px` -- inside a window
+ * whose default width is 800px, so it scrolled horizontally at the app's own
+ * launch size. Size, speed and ETA were three separate columns showing "—"
+ * most of the time; here they live on the metadata line and only appear while
+ * they have values.
+ *
+ * The old row was a <button> containing role="button" spans, which is invalid
+ * nesting, announces as one confused control, and needed stopPropagation on
+ * every action. Here the container is a plain div, the primary action is a
+ * stretched button behind the content, and the actions are real siblings
+ * above it.
+ */
+function JobCardComponent({
+  job,
+  language,
+  cancelling,
+  onCancel,
+  onRemove,
+  onReveal,
+}: JobCardProps) {
+  const { t } = useTranslation();
+  const active = job.state === "running" || job.state === "queued";
+  const audio = job.detail ? AUDIO_DETAILS.has(job.detail) : false;
+  const Icon = audio ? FileAudio2 : FileVideo2;
+  const revealable = job.state === "completed" && job.outputPath;
+
+  return (
+    <li className="relative flex items-start gap-3 rounded-lg border border-line bg-surface p-3">
+      {revealable && (
+        <button
+          type="button"
+          onClick={() => onReveal(job.outputPath!)}
+          className="absolute inset-0 rounded-lg transition-colors duration-[--duration-fast] hover:bg-surface-hover"
+          aria-label={t("reveal_hint")}
+        />
+      )}
+
+      <span
+        className={cn(
+          "pointer-events-none relative flex size-9 shrink-0 items-center justify-center rounded-md",
+          "bg-surface-soft text-fg-soft",
+        )}
+      >
+        <Icon size={18} />
+      </span>
+
+      <div className="pointer-events-none relative min-w-0 flex-1 flex-col gap-1">
+        <p className="truncate text-base text-fg" title={job.title}>
+          {job.title}
+        </p>
+
+        <p className="flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
+          <StatusChip job={job} cancelling={cancelling} />
+          {job.detail && <span>{job.detail}</span>}
+          {job.state === "completed" && job.bytes !== undefined && (
+            <span className="tnum" dir="ltr">
+              {formatBytes(job.bytes, language)}
+            </span>
+          )}
+          <span>{formatRelativeTime(job.endedAt ?? job.createdAt, language)}</span>
+        </p>
+
+        {active && (
+          <div className="mt-1.5 flex flex-col gap-1">
+            <ProgressBar percent={job.percent} label={job.title} />
+            {(job.speed || job.etaSecs !== undefined) && (
+              // Speed and ETA only exist while something is running, which is
+              // exactly why they do not deserve permanent columns.
+              <p className="flex gap-2 text-xs text-fg-muted tnum" dir="ltr">
+                {job.speed && <span>{job.speed}</span>}
+                {job.etaSecs !== undefined && (
+                  <span>{formatEta(job.etaSecs, language)}</span>
+                )}
+              </p>
+            )}
+          </div>
+        )}
+
+        {job.state === "failed" && job.error && (
+          <p className="mt-1 line-clamp-2 text-xs text-danger" title={describeError(job.error)}>
+            {describeError(job.error)}
+          </p>
+        )}
+      </div>
+
+      <div className="relative flex shrink-0 items-center gap-1">
+        {revealable && (
+          <button
+            type="button"
+            onClick={() => onReveal(job.outputPath!)}
+            aria-label={t("open_folder")}
+            title={t("open_folder")}
+            className="flex size-8 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+          >
+            <FolderOpen size={16} />
+          </button>
+        )}
+        {active ? (
+          <button
+            type="button"
+            onClick={() => onCancel(job.id)}
+            disabled={cancelling}
+            aria-label={t("cancel_button")}
+            title={t("cancel_button")}
+            className="flex size-8 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+          >
+            <X size={16} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onRemove(job.id)}
+            aria-label={t("remove")}
+            title={t("remove")}
+            className="flex size-8 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-danger/10 hover:text-danger"
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function StatusChip({ job, cancelling }: { job: Job; cancelling: boolean }) {
+  const { t } = useTranslation();
+
+  if (cancelling) return <Chip icon={<Loader2 size={12} className="animate-spin" />} text={t("cancelling")} />;
+
+  switch (job.state) {
+    case "queued":
+      return <Chip icon={<Clock3 size={12} />} text={t("status_queued")} />;
+    case "running":
+      return (
+        <Chip
+          icon={<Loader2 size={12} className="animate-spin" />}
+          text={t(`stage_${job.stage}`)}
+          tone="accent"
+        />
+      );
+    case "completed":
+      return <Chip icon={<CheckCircle2 size={12} />} text={t("status_completed")} tone="success" />;
+    case "failed":
+      return <Chip icon={<AlertTriangle size={12} />} text={t("status_failed")} tone="danger" />;
+    case "cancelled":
+      return <Chip icon={<X size={12} />} text={t("status_cancelled")} />;
+  }
+}
+
+function Chip({
+  icon,
+  text,
+  tone = "muted",
+}: {
+  icon: React.ReactNode;
+  text: string;
+  tone?: "muted" | "accent" | "success" | "danger";
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1",
+        tone === "accent" && "text-accent",
+        tone === "success" && "text-success",
+        tone === "danger" && "text-danger",
+      )}
+    >
+      {icon}
+      {text}
+    </span>
+  );
+}
+
+/** The stderr tail is the whole point of capturing it: the last line is
+ *  usually the actual reason, like "Video unavailable". */
+function describeError(error: AppError): string {
+  switch (error.kind) {
+    case "tool":
+      return error.tail.split("\n").filter(Boolean).pop() ?? `${error.tool} failed`;
+    case "toolMissing":
+      return `${error.tool} is not available`;
+    case "invalidInput":
+      return error.reason;
+    case "io":
+    case "spawn":
+      return error.message;
+    default:
+      return "";
+  }
+}
+
+export const JobCard = memo(JobCardComponent);

@@ -32,6 +32,9 @@ interface JobsContextValue {
   state: JobsState;
   jobs: Job[];
   startDownload: (request: DownloadRequest, meta: JobMeta) => Promise<string>;
+  /** For jobs whose command was invoked elsewhere -- the media tools each
+   *  call their own command and hand the resulting id back here. */
+  addExternalJob: (job: JobMeta & { id: string; kind: JobKind }) => void;
   cancel: (id: string) => Promise<void>;
   remove: (id: string) => void;
   select: (id: string | null) => void;
@@ -110,6 +113,26 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const addExternalJob = useCallback(
+    (job: JobMeta & { id: string; kind: JobKind }) => {
+      dispatch({
+        type: "added",
+        job: {
+          id: job.id,
+          kind: job.kind,
+          title: job.title,
+          source: job.source,
+          state: "queued",
+          stage: "queued",
+          percent: null,
+          detail: job.detail,
+          createdAt: Date.now(),
+        },
+      });
+    },
+    [],
+  );
+
   const cancel = useCallback(async (id: string) => {
     dispatch({ type: "cancelRequested", id });
     await ipc.cancelJob(id);
@@ -120,6 +143,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       state,
       jobs: selectJobs(state),
       startDownload,
+      addExternalJob,
       cancel,
       remove: (id) => dispatch({ type: "remove", id }),
       select: (id) => dispatch({ type: "select", id }),
@@ -127,7 +151,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       reveal: ipc.revealInFolder,
       open: ipc.openPath,
     }),
-    [state, startDownload, cancel],
+    [state, startDownload, addExternalJob, cancel],
   );
 
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;

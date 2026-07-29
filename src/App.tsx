@@ -1,94 +1,52 @@
-import { useCallback, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+
+import { NavigationProvider, useNavigation } from "./app/navigation";
 import { AppTitleBar } from "./components/layout/AppTitleBar";
-import { DownloadSidebar } from "./components/layout/DownloadSidebar";
 import { OfflineBanner } from "./components/feedback/OfflineBanner";
 import { Toast } from "./components/feedback/Toast";
-import {
-  NewDownloadModal,
-  type NewDownloadValues,
-} from "./features/downloads/components/NewDownloadModal";
-import { DownloadsPanel } from "./features/downloads/components/DownloadsPanel";
-import {
-  activeJobIds,
-  jobsToDownloadItems,
-} from "./features/downloads/legacyAdapter";
-import { filterDownloads, getDownloadCounts } from "./features/downloads/selectors";
-import type { DownloadFilter } from "./features/downloads/types";
-import { useDownloadForm } from "./features/downloads/useDownloadForm";
-import { JobsProvider, useJobs } from "./features/jobs/useJobs";
+import { DownloadScreen } from "./features/downloads/DownloadScreen";
+import { HomeScreen } from "./features/home/HomeScreen";
+import { JobsScreen } from "./features/jobs/JobsScreen";
+import { JobsProvider } from "./features/jobs/useJobs";
+import { CompressScreen } from "./features/media/screens/CompressScreen";
+import { ConvertScreen } from "./features/media/screens/ConvertScreen";
+import { GifScreen } from "./features/media/screens/GifScreen";
+import { ResizeScreen } from "./features/media/screens/ResizeScreen";
+import { TrimScreen } from "./features/media/screens/TrimScreen";
+import { DragDropProvider } from "./features/media/useDragDrop";
+import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { useAppPreferences } from "./hooks/useAppPreferences";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
-function Manager() {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [filter, setFilter] = useState<DownloadFilter>("all");
-  const [search, setSearch] = useState("");
-
+function Shell() {
+  const { t } = useTranslation();
+  const { route } = useNavigation();
   const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { toast, notify, dismiss } = useToast();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
+  const isRtl = language === "fa" || language === "ar";
 
-  const { jobs, state, cancel, remove, reveal } = useJobs();
-  const { savePath, toolsReady, selectFolder, start } = useDownloadForm({
-    isOnline,
-    notify,
-  });
-
-  // The old table speaks DownloadItem. The adapter and this whole screen go
-  // away in phase 5, when job cards replace the seven-column grid.
-  const downloads = useMemo(() => jobsToDownloadItems(jobs), [jobs]);
-  const activeIds = useMemo(() => activeJobIds(jobs), [jobs]);
-  const cancellingIds = useMemo(
-    () => new Set(state.cancelling),
-    [state.cancelling],
-  );
-  const counts = useMemo(() => getDownloadCounts(downloads), [downloads]);
-  const visibleDownloads = useMemo(
-    () => filterDownloads(downloads, filter, search, language),
-    [downloads, filter, language, search],
-  );
-
-  const openNewDownload = useCallback(() => setIsModalOpen(true), []);
-  const closeNewDownload = useCallback(() => setIsModalOpen(false), []);
-  const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed((current) => !current);
-  }, []);
-
-  const handleStart = useCallback(
-    (values: NewDownloadValues, onSuccess: () => void) =>
-      start(
-        {
-          url: values.url,
-          filename: values.filename,
-          mediaType: values.downloadType,
-          quality: values.quality,
-        },
-        onSuccess,
-      ),
-    [start],
-  );
-
-  const handleReveal = useCallback(
-    (item: { filePath?: string }) => {
-      if (item.filePath) void reveal(item.filePath);
-    },
-    [reveal],
-  );
+  const titles: Record<string, string> = {
+    home: t("app_name"),
+    download: t("tool_download"),
+    jobs: t("nav_jobs"),
+    settings: t("settings"),
+    compress: t("tool_compress"),
+    trim: t("tool_trim"),
+    convert: t("tool_convert"),
+    resize: t("tool_resize"),
+    gif: t("tool_gif"),
+  };
 
   return (
-    <div className="app-shell">
+    <div className="flex h-full flex-col overflow-hidden bg-canvas">
       <AppTitleBar
-        language={language}
-        onLanguageChange={setLanguage}
-        darkMode={darkMode}
-        onToggleTheme={toggleDarkMode}
-        isDownloading={false}
+        title={titles[route.name] ?? t("app_name")}
         isMaximized={isMaximized}
-        onNewDownload={openNewDownload}
+        isRtl={isRtl}
         onMinimize={minimize}
         onToggleMaximize={toggleMaximize}
         onClose={close}
@@ -96,46 +54,42 @@ function Manager() {
 
       <OfflineBanner isOnline={isOnline} />
 
-      <div className="manager-layout">
-        <DownloadSidebar
-          collapsed={sidebarCollapsed}
-          onToggleCollapsed={toggleSidebar}
-          filter={filter}
-          onFilterChange={setFilter}
-          counts={counts}
-          savePath={savePath}
-        />
-        <DownloadsPanel
-          downloads={downloads}
-          visibleDownloads={visibleDownloads}
-          filter={filter}
-          search={search}
-          language={language}
-          activeIds={activeIds}
-          selectedId={state.selectedId}
-          cancellingIds={cancellingIds}
-          isDownloading={activeIds.size > 0}
-          isOnline={isOnline}
-          onSearchChange={setSearch}
-          onOpenNewDownload={openNewDownload}
-          onReveal={handleReveal}
-          onCancel={(id) => void cancel(id)}
-          onRemove={remove}
-        />
-      </div>
+      {/* The only scroll container in the app. Screens size themselves inside
+          it, so a document-level horizontal scrollbar cannot happen -- the old
+          table had min-width: 785px inside an 800px window and scrolled at its
+          own default size. */}
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        {route.name === "home" && <HomeScreen language={language} />}
+        {route.name === "download" && (
+          <DownloadScreen isOnline={isOnline} notify={notify} />
+        )}
+        {route.name === "jobs" && <JobsScreen language={language} />}
+        {route.name === "settings" && (
+          <SettingsScreen
+            darkMode={darkMode}
+            onToggleTheme={toggleDarkMode}
+            language={language}
+            onLanguageChange={setLanguage}
+          />
+        )}
+        {route.name === "compress" && (
+          <CompressScreen initialFile={route.file} language={language} notify={notify} />
+        )}
+        {route.name === "trim" && (
+          <TrimScreen initialFile={route.file} notify={notify} />
+        )}
+        {route.name === "convert" && (
+          <ConvertScreen initialFile={route.file} notify={notify} />
+        )}
+        {route.name === "resize" && (
+          <ResizeScreen initialFile={route.file} notify={notify} />
+        )}
+        {route.name === "gif" && (
+          <GifScreen initialFile={route.file} language={language} notify={notify} />
+        )}
+      </main>
 
-      <NewDownloadModal
-        isOpen={isModalOpen}
-        savePath={savePath}
-        isDownloading={false}
-        ytdlpReady={toolsReady}
-        isOnline={isOnline}
-        onSelectFolder={selectFolder}
-        onStart={handleStart}
-        onClose={closeNewDownload}
-      />
-
-      <Toast toast={toast} language={language} onClose={dismiss} />
+      <Toast toast={toast} isRtl={isRtl} onClose={dismiss} />
     </div>
   );
 }
@@ -143,7 +97,11 @@ function Manager() {
 export default function App() {
   return (
     <JobsProvider>
-      <Manager />
+      <NavigationProvider>
+        <DragDropProvider>
+          <Shell />
+        </DragDropProvider>
+      </NavigationProvider>
     </JobsProvider>
   );
 }

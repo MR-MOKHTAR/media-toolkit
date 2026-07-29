@@ -1,40 +1,66 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, CircleX, Download, X } from "lucide-react";
-import { useTranslation } from "react-i18next";
-import type { AppLanguage } from "../../hooks/useAppPreferences";
-import type { ToastState } from "../../types/feedback";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 
-interface ToastProps {
+import { cn } from "../../lib/cn";
+import type { ToastState, ToastType } from "../../types/feedback";
+
+const ICONS = {
+  success: CheckCircle2,
+  error: XCircle,
+  warning: AlertTriangle,
+  info: Info,
+} as const;
+
+const TONES: Record<ToastType, string> = {
+  success: "text-success",
+  error: "text-danger",
+  warning: "text-warning",
+  info: "text-accent",
+};
+
+export function Toast({
+  toast,
+  isRtl,
+  onClose,
+}: {
   toast: ToastState | null;
-  language: AppLanguage;
+  isRtl: boolean;
   onClose: () => void;
-}
-
-export function Toast({ toast, language, onClose }: ToastProps) {
-  const { t } = useTranslation();
-
+}) {
   return (
-    <AnimatePresence mode="wait">
+    <AnimatePresence>
       {toast && (
         <motion.div
-          key={toast.id}
-          className={`toast ${toast.type}`}
-          initial={{ opacity: 0, x: language === "en" ? 24 : -24, scale: 0.96 }}
-          animate={{ opacity: 1, x: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 8, scale: 0.97 }}
+          // Enters from the edge it is anchored to, so it follows the writing
+          // direction instead of being branched per language.
+          initial={{ opacity: 0, x: isRtl ? -20 : 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: isRtl ? -20 : 20 }}
+          transition={{ duration: 0.18 }}
+          className={cn(
+            "fixed bottom-4 z-50 flex max-w-sm items-start gap-2.5 rounded-lg",
+            "border border-line bg-surface p-3 shadow-(--shadow-panel)",
+          )}
+          style={{ insetInlineEnd: "1rem" }}
+          role="status"
         >
-          <span className="toast-icon">
-            {toast.type === "success" ? <CheckCircle2 size={21} /> :
-              toast.type === "error" ? <CircleX size={21} /> :
-                toast.type === "warning" ? <AlertTriangle size={21} /> : <Download size={21} />}
-          </span>
-          <div className="toast-content"><strong>{t(toast.type)}</strong><p>{toast.message}</p></div>
-          <button onClick={onClose} aria-label={t("close")}><X size={17} /></button>
-          <span className="toast-timer" />
+          <ToastIcon type={toast.type} />
+          <p className="flex-1 text-sm text-fg">{toast.message}</p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 text-fg-muted transition-colors hover:text-fg"
+            aria-label="close"
+          >
+            <X size={15} />
+          </button>
         </motion.div>
       )}
     </AnimatePresence>
   );
 }
 
-export default Toast;
+function ToastIcon({ type }: { type: ToastType }) {
+  const Icon = ICONS[type];
+  return <Icon size={17} className={cn("mt-0.5 shrink-0", TONES[type])} />;
+}
