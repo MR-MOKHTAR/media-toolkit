@@ -3,6 +3,7 @@ mod commands;
 mod download;
 mod error;
 mod jobs;
+mod media;
 mod paths;
 mod process;
 
@@ -25,6 +26,14 @@ pub fn run() {
             commands::list_jobs,
             commands::open_path,
             commands::reveal_in_folder,
+            media::commands::probe_media,
+            media::commands::estimate_compressed_size,
+            media::commands::can_copy_streams,
+            media::commands::start_compress,
+            media::commands::start_trim,
+            media::commands::start_convert,
+            media::commands::start_resize,
+            media::commands::start_gif,
         ])
         .on_window_event(|window, event| {
             // Without this, killing the window leaves yt-dlp and ffmpeg running
