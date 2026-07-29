@@ -1,4 +1,3 @@
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -129,6 +128,105 @@ async fn open_path(path: String) -> Result<(), String> {
     }
 }
 
+/// Reveal a downloaded file in the native file manager and select it.
+#[tauri::command]
+async fn reveal_in_folder(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+
+    if !target.exists() {
+        return Err(format!("File does not exist: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("open")
+            .arg("-R")
+            .arg(&target)
+            .output()
+            .map_err(|error| format!("Failed to open Finder: {}", error))?;
+
+        return if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        };
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("explorer")
+            .arg("/select,")
+            .arg(&target)
+            .output()
+            .map_err(|error| format!("Failed to open Explorer: {}", error))?;
+
+        return if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        };
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let canonical = target
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve file path: {}", error))?;
+        let uri = file_uri(&canonical);
+
+        // Most modern Linux file managers implement FileManager1.ShowItems,
+        // which opens the parent folder with the requested file selected.
+        if let Ok(output) = Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+            ])
+            .arg(format!("array:string:{}", uri))
+            .arg("string:")
+            .output()
+        {
+            if output.status.success() {
+                return Ok(());
+            }
+        }
+
+        // Fallback for minimal desktop environments without FileManager1.
+        let parent = canonical
+            .parent()
+            .ok_or_else(|| "Downloaded file has no parent folder".to_string())?;
+        let output = Command::new("xdg-open")
+            .arg(parent)
+            .output()
+            .map_err(|error| format!("Failed to open file manager: {}", error))?;
+
+        return if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        };
+    }
+
+    #[allow(unreachable_code)]
+    Err("Unsupported operating system".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for byte in path.to_string_lossy().as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
+                uri.push(*byte as char)
+            }
+            value => uri.push_str(&format!("%{:02X}", value)),
+        }
+    }
+    uri
+}
+
 /// Download audio or video from YouTube URL
 #[tauri::command]
 async fn download_media(
@@ -155,18 +253,12 @@ async fn download_media(
             let file = format!("{}/{}.mp3", output_path, filename);
             let args = vec![
                 "--newline".to_string(),
+                "--no-colors".to_string(),
+                "--progress-template".to_string(),
+                "download:__YTDLP_PROGRESS__%(progress._percent_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s".to_string(),
                 "-x".to_string(),
                 "--audio-format".to_string(),
                 "mp3".to_string(),
-                "--audio-quality".to_string(),
-                match quality.as_str() {
-                    "highest" => "0",
-                    "high" => "192K",
-                    "medium" => "128K",
-                    "low" => "96K",
-                    _ => "128K",
-                }
-                .to_string(),
                 "-o".to_string(),
                 file.clone(),
             ];
@@ -185,6 +277,9 @@ async fn download_media(
             };
             let args = vec![
                 "--newline".to_string(),
+                "--no-colors".to_string(),
+                "--progress-template".to_string(),
+                "download:__YTDLP_PROGRESS__%(progress._percent_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s".to_string(),
                 "-f".to_string(),
                 format_spec.to_string(),
                 "--merge-output-format".to_string(),
@@ -236,25 +331,32 @@ async fn download_media(
 
     if let Some(stdout) = stdout {
         let mut reader = BufReader::new(stdout).lines();
-        // Setup regex to extract progress
-        let re = Regex::new(r"\[download\]\s+([\d\.]+)%\s+of\s+([~\s\d\.]+([a-zA-Z]+)?)\s+at\s+([~\s\d\.]+([a-zA-Z]+/s)?)\s+ETA\s+([\d:]+)").unwrap();
 
         while let Ok(Some(line)) = reader.next_line().await {
-            if let Some(caps) = re.captures(&line) {
-                if let Ok(percent) = caps[1].parse::<f64>() {
-                    let size = caps[2].trim().to_string();
-                    let speed = caps[4].trim().to_string();
-                    let eta = caps[6].trim().to_string();
+            if let Some(progress) = line.strip_prefix("__YTDLP_PROGRESS__") {
+                let fields: Vec<&str> = progress.splitn(4, '|').collect();
+                if fields.len() == 4 {
+                    let percent_text = fields[0].trim().trim_end_matches('%').trim();
+                    if let Ok(percent) = percent_text.parse::<f64>() {
+                        let display_value = |value: &str| {
+                            let value = value.trim();
+                            if value.is_empty() || value == "N/A" || value == "NA" {
+                                "—".to_string()
+                            } else {
+                                value.to_string()
+                            }
+                        };
 
-                    let _ = app_handle.emit(
-                        "download-progress",
-                        ProgressPayload {
-                            percent,
-                            size,
-                            speed,
-                            eta,
-                        },
-                    );
+                        let _ = app_handle.emit(
+                            "download-progress",
+                            ProgressPayload {
+                                percent,
+                                size: display_value(fields[1]),
+                                speed: display_value(fields[2]),
+                                eta: display_value(fields[3]),
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -306,7 +408,6 @@ async fn cancel_download(state: tauri::State<'_, DownloadState>) -> Result<(), S
     Ok(())
 }
 
-
 /// Check if yt-dlp is installed (bundled or in system PATH)
 #[tauri::command]
 fn check_ytdlp_installed(app_handle: AppHandle) -> bool {
@@ -343,7 +444,8 @@ pub fn run() {
             cancel_download,
             check_ytdlp_installed,
             get_default_download_path,
-            open_path
+            open_path,
+            reveal_in_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
