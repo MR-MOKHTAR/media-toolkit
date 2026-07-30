@@ -7,6 +7,7 @@
   "cancel_button": "Cancel",
   "cancelling": "Cancelling...",
   "change": "Change",
+  "check_for_updates": "Update",
   "clear_finished": "Clear finished",
   "close": "Close",
   "compress_audio_note": "Audio only — the result is saved as M4A.",
@@ -99,5 +100,8 @@
   "url_placeholder": "Paste YouTube URL here...",
   "video_quality": "Video quality",
   "warning": "Warning",
-  "ytdlp_not_found": "yt-dlp is not installed. Please install it first."
+  "ytdlp_already_current": "yt-dlp is already current ({{version}}).",
+  "ytdlp_not_found": "yt-dlp is not installed. Please install it first.",
+  "ytdlp_update_note": "Sites change how they serve video, and yt-dlp keeps up. Update it if a download stops working.",
+  "ytdlp_updated": "yt-dlp updated to {{version}}."
 }

@@ -7,6 +7,7 @@
   "cancel_button": "لغو",
   "cancelling": "در حال لغو...",
   "change": "تغییر",
+  "check_for_updates": "بروزرسانی",
   "clear_finished": "پاک کردن تمام‌شده‌ها",
   "close": "بستن",
   "compress_audio_note": "فقط صدا — خروجی با فرمت M4A ذخیره می‌شود.",
@@ -99,5 +100,8 @@
   "url_placeholder": "آدرس یوتیوب را اینجا چسبانید...",
   "video_quality": "کیفیت ویدیو",
   "warning": "هشدار",
-  "ytdlp_not_found": "yt-dlp نصب نشده است. لطفا ابتدا آن را نصب کنید."
+  "ytdlp_already_current": "yt-dlp از قبل بروز است ({{version}}).",
+  "ytdlp_not_found": "yt-dlp نصب نشده است. لطفا ابتدا آن را نصب کنید.",
+  "ytdlp_update_note": "سایت‌ها شیوه‌ی ارائه‌ی ویدیو را عوض می‌کنند و yt-dlp خودش را می‌رساند. اگر دانلودی از کار افتاد، بروزرسانی کنید.",
+  "ytdlp_updated": "yt-dlp به {{version}} بروز شد."
 }

@@ -22,15 +22,25 @@ pub struct ToolStatus {
     pub ytdlp: bool,
     pub ffmpeg: bool,
     pub ffprobe: bool,
+    /// Shown in Settings next to the update button, so "is it current?" is a
+    /// question the user can answer without leaving the app.
+    pub ytdlp_version: Option<String>,
 }
 
 #[tauri::command]
 pub fn tool_status(app: AppHandle) -> ToolStatus {
     ToolStatus {
+        ytdlp_version: binaries::version(&app, Tool::YtDlp),
         ytdlp: binaries::is_available(&app, Tool::YtDlp),
         ffmpeg: binaries::is_available(&app, Tool::Ffmpeg),
         ffprobe: binaries::is_available(&app, Tool::Ffprobe),
     }
+}
+
+/// Downloads a current yt-dlp into the app data dir, ahead of the bundled copy.
+#[tauri::command]
+pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateResult> {
+    crate::updater::update_ytdlp(&app).await
 }
 
 #[tauri::command]

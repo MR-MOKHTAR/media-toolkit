@@ -55,6 +55,7 @@ function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
             onToggleTheme={toggleDarkMode}
             language={language}
             onLanguageChange={setLanguage}
+            notify={notify}
           />
         )}
         {route.name === "compress" && (

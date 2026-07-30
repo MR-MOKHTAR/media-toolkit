@@ -6,6 +6,7 @@ mod jobs;
 mod media;
 mod paths;
 mod process;
+mod updater;
 
 use jobs::Jobs;
 use tauri::Manager;
@@ -18,6 +19,7 @@ pub fn run() {
         .manage(Jobs::default())
         .invoke_handler(tauri::generate_handler![
             commands::tool_status,
+            commands::update_ytdlp,
             commands::get_default_download_path,
             commands::probe_url,
             commands::start_download,

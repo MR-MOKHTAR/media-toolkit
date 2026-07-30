@@ -38,3 +38,8 @@ tauri-plugin-dialog = "2.7.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+# The in-app yt-dlp updater. rustls rather than native-tls so no OpenSSL
+# headers are needed on any build machine.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+] }

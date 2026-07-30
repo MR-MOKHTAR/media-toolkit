@@ -15,6 +15,7 @@ import type {
   JobProgress,
   JobStatusEvent,
   ToolStatus,
+  UpdateResult,
   UrlInfo,
 } from "../features/jobs/types";
 
@@ -31,6 +32,11 @@ export function toAppError(error: unknown): AppError {
 }
 
 export const getToolStatus = () => invoke<ToolStatus>("tool_status");
+
+/** Downloads a current yt-dlp into the app data dir, which is searched ahead
+ *  of the bundled copy. The only way an existing install stays working when
+ *  YouTube changes something. */
+export const updateYtdlp = () => invoke<UpdateResult>("update_ytdlp");
 
 export const getDefaultDownloadPath = () =>
   invoke<string>("get_default_download_path");

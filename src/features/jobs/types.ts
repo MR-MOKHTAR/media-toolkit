@@ -99,6 +99,15 @@ export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
+  /** What yt-dlp reports, or null if it will not run. */
+  ytdlpVersion: string | null;
+}
+
+export interface UpdateResult {
+  previous: string | null;
+  current: string;
+  /** False when the download turned out to be the version already installed. */
+  changed: boolean;
 }
 
 export const isActiveJob = (job: Job) =>

@@ -36,6 +36,19 @@ impl Tool {
             self.name().to_string()
         }
     }
+
+    /// The flag that makes the tool print its version and exit zero.
+    ///
+    /// These genuinely differ and getting it wrong is silent: ffmpeg wants the
+    /// single-dash `-version`, while yt-dlp's parser reads that as the short
+    /// flags `-v -e -r sion` and exits 2 with `invalid rate limit "sion"`. Used
+    /// for the health check, so a wrong flag reports a working tool as missing.
+    fn version_arg(self) -> &'static str {
+        match self {
+            Self::YtDlp => "--version",
+            Self::Ffmpeg | Self::Ffprobe => "-version",
+        }
+    }
 }
 
 /// Where a tool was found, plus the directory it was found in. The directory
@@ -76,8 +89,49 @@ pub fn is_available(app: &AppHandle, tool: Tool) -> bool {
     let Ok(mut cmd) = command(app, tool) else {
         return false;
     };
-    cmd.arg("-version");
+    cmd.arg(tool.version_arg());
     cmd.output().map(|out| out.status.success()).unwrap_or(false)
+}
+
+/// The tool's own reported version, or None if it will not run.
+pub fn version(app: &AppHandle, tool: Tool) -> Option<String> {
+    let mut cmd = command(app, tool).ok()?;
+    cmd.arg(tool.version_arg());
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // ffmpeg prints a whole banner; yt-dlp prints just the version. Either way
+    // the first line is the useful one.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+}
+
+/// Forgets where a tool lives, so the next resolve looks again.
+///
+/// The updater writes a newer yt-dlp into the app data dir, which sits ahead of
+/// the bundled copy in the search order. Without this the cached path keeps
+/// pointing at the old binary for the rest of the session and the update looks
+/// like it did nothing.
+pub fn invalidate(tool: Tool) {
+    cache().lock().unwrap().remove(tool.name());
+}
+
+/// Where the updater installs to: ahead of the bundled copy, and writable.
+///
+/// On Windows the install lives under Program Files, so replacing the bundled
+/// binary needs admin rights and `yt-dlp --update` cannot work at all.
+pub fn writable_bin_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::io(Path::new("app data dir"), e))?
+        .join("bin");
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::io(&dir, e))?;
+    Ok(dir)
 }
 
 fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
@@ -105,7 +159,7 @@ fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
     // Last resort: a system install. Handy in dev, where the app runs straight
     // out of target/ and the resource dir does not exist yet.
     let mut probe = Command::new(&file);
-    probe.arg("-version");
+    probe.arg(tool.version_arg());
     hide_console(&mut probe);
     let works = probe
         .output()
@@ -192,4 +246,54 @@ pub fn hide_console(cmd: &mut Command) {
     }
     #[cfg(not(windows))]
     let _ = cmd;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs each bundled tool with the flag `is_available` uses.
+    ///
+    /// This is a spawn rather than an assertion about strings, because the bug
+    /// it guards was exactly a string that looked right: `-version` works for
+    /// ffmpeg, but yt-dlp's parser reads it as `-v -e -r sion` and exits 2, so
+    /// the health check declared a perfectly good yt-dlp missing. Only a real
+    /// exec catches that.
+    ///
+    /// Skips any tool that is not provisioned, so a checkout without
+    /// `binaries/` still passes.
+    #[test]
+    fn every_tool_reports_its_version() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+
+        for tool in [Tool::YtDlp, Tool::Ffmpeg, Tool::Ffprobe] {
+            let path = dir.join(tool.file_name());
+            if !path.is_file() {
+                eprintln!("skipping {}: not provisioned", tool.name());
+                continue;
+            }
+
+            let mut cmd = Command::new(&path);
+            cmd.arg(tool.version_arg());
+            // The shared ffmpeg build cannot find its libraries on its own; see
+            // the RPATH note in `command`.
+            let lib = dir.join("lib");
+            if lib.is_dir() {
+                cmd.env("LD_LIBRARY_PATH", &lib);
+            }
+
+            let output = cmd
+                .output()
+                .unwrap_or_else(|e| panic!("{} failed to spawn: {e}", tool.name()));
+
+            assert!(
+                output.status.success(),
+                "{} {} exited {:?}\nstderr: {}",
+                tool.name(),
+                tool.version_arg(),
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim(),
+            );
+        }
+    }
 }

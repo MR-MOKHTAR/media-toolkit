@@ -7,6 +7,7 @@
   "cancel_button": "الغاء",
   "cancelling": "جاري الإلغاء...",
   "change": "تغيير",
+  "check_for_updates": "تحديث",
   "clear_finished": "مسح المنتهية",
   "close": "إغلاق",
   "compress_audio_note": "صوت فقط — يُحفظ الناتج بصيغة M4A.",
@@ -99,5 +100,8 @@
   "url_placeholder": "الصق عنوان YouTube هنا...",
   "video_quality": "جودة الفيديو",
   "warning": "تحذير",
-  "ytdlp_not_found": "لم يتم تثبيت yt-dlp. يرجى تثبيته أولاً."
+  "ytdlp_already_current": "yt-dlp محدَّث بالفعل ({{version}}).",
+  "ytdlp_not_found": "لم يتم تثبيت yt-dlp. يرجى تثبيته أولاً.",
+  "ytdlp_update_note": "تغيّر المواقع طريقة تقديم الفيديو، و‏yt-dlp يلاحقها. حدّثه إذا توقف تنزيل عن العمل.",
+  "ytdlp_updated": "تم تحديث yt-dlp إلى {{version}}."
 }

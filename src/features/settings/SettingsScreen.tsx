@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Moon, Sun, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, Moon, RefreshCw, Sun, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { Button } from "../../components/ui/Button";
 import { Segmented } from "../../components/ui/Segmented";
 import { cn } from "../../lib/cn";
 import * as ipc from "../../lib/ipc";
 import type { AppLanguage } from "../../hooks/useAppPreferences";
+import type { ToastType } from "../../types/feedback";
+import { describe } from "../media/useMediaJob";
 import type { ToolStatus } from "../jobs/types";
 
 interface Props {
@@ -13,6 +16,7 @@ interface Props {
   onToggleTheme: () => void;
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
+  notify: (type: ToastType, message: string) => void;
 }
 
 /**
@@ -26,13 +30,37 @@ export function SettingsScreen({
   onToggleTheme,
   language,
   onLanguageChange,
+  notify,
 }: Props) {
   const { t } = useTranslation();
   const [tools, setTools] = useState<ToolStatus | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     void ipc.getToolStatus().then(setTools).catch(() => undefined);
   }, []);
+
+  // yt-dlp breaks against YouTube every few weeks. New installs get a current
+  // build, but someone who installed months ago is stuck with what shipped, so
+  // this is the only thing standing between them and a downloader that has
+  // quietly stopped working.
+  const updateYtdlp = async () => {
+    setUpdating(true);
+    try {
+      const result = await ipc.updateYtdlp();
+      notify(
+        "success",
+        result.changed
+          ? t("ytdlp_updated", { version: result.current })
+          : t("ytdlp_already_current", { version: result.current }),
+      );
+      setTools(await ipc.getToolStatus());
+    } catch (error) {
+      notify("error", describe(ipc.toAppError(error), t));
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-6 px-6 py-6">
@@ -74,12 +102,32 @@ export function SettingsScreen({
             const ok = tools?.[tool] ?? false;
             return (
               <div key={tool} className="flex items-center gap-2 px-3 py-2.5">
-                <span className="flex-1 text-base text-fg" dir="ltr">
+                <span className="min-w-0 flex-1 truncate text-base text-fg" dir="ltr">
                   {tool === "ytdlp" ? "yt-dlp" : tool}
+                  {tool === "ytdlp" && tools?.ytdlpVersion && (
+                    <span className="ms-2 text-xs text-fg-muted tnum">
+                      {tools.ytdlpVersion}
+                    </span>
+                  )}
                 </span>
+                {tool === "ytdlp" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={updating}
+                    onClick={() => void updateYtdlp()}
+                  >
+                    {updating ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={14} />
+                    )}
+                    {t("check_for_updates")}
+                  </Button>
+                )}
                 <span
                   className={cn(
-                    "flex items-center gap-1.5 text-sm",
+                    "flex shrink-0 items-center gap-1.5 text-sm",
                     ok ? "text-success" : "text-danger",
                   )}
                 >
@@ -91,6 +139,7 @@ export function SettingsScreen({
           })}
         </div>
         <p className="text-xs text-fg-muted">{t("tools_bundled_note")}</p>
+        <p className="text-xs text-fg-muted">{t("ytdlp_update_note")}</p>
       </section>
     </div>
   );
