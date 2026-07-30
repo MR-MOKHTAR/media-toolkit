@@ -65,7 +65,16 @@ pub enum Stage {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "state", rename_all = "camelCase")]
+// `rename_all` on an enum renames the *variants* only. Fields inside a variant
+// keep their Rust names unless `rename_all_fields` says otherwise, so
+// `output_path` went across the bridge as snake_case while the frontend read
+// `payload.outputPath` and got undefined -- which is the whole condition for
+// rendering the "open folder" button, so it never appeared on any finished job.
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum JobStatus {
     Queued,
     Running,
@@ -320,4 +329,85 @@ pub fn new_id() -> String {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     format!("{millis:x}-{n:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(status: JobStatus) -> serde_json::Value {
+        serde_json::to_value(JobStatusEvent {
+            id: "1-0".into(),
+            kind: JobKind::Trim,
+            status,
+        })
+        .expect("status event serializes")
+    }
+
+    /// Asserts the JSON keys the frontend actually reads.
+    ///
+    /// This looks at serde's output rather than at the attribute, because the
+    /// bug it guards was an attribute that read correctly: `rename_all` on an
+    /// enum renames variants, not their fields, so `output_path` crossed the
+    /// bridge in snake_case and `job.outputPath` was always undefined. Nothing
+    /// failed, nothing logged -- the "open folder" button simply never rendered.
+    /// Only the serialized form catches that.
+    #[test]
+    fn completed_carries_a_camel_case_output_path() {
+        let json = event(JobStatus::Completed {
+            output_path: "/home/me/clip.m4a".into(),
+        });
+
+        assert_eq!(json["outputPath"], "/home/me/clip.m4a");
+        assert!(
+            json.get("output_path").is_none(),
+            "snake_case key leaked through: {json}"
+        );
+    }
+
+    /// The rest of the union, so a renamed variant or a new field cannot drift
+    /// away from `JobStatusEvent` in src/features/jobs/types.ts unnoticed.
+    #[test]
+    fn every_status_matches_the_typescript_union() {
+        let cases = [
+            (JobStatus::Queued, "queued", vec![]),
+            (JobStatus::Running, "running", vec![]),
+            (
+                JobStatus::Completed {
+                    output_path: "/tmp/out.mp4".into(),
+                },
+                "completed",
+                vec!["outputPath"],
+            ),
+            (
+                JobStatus::Failed {
+                    error: AppError::Cancelled,
+                },
+                "failed",
+                vec!["error"],
+            ),
+            (JobStatus::Cancelled, "cancelled", vec![]),
+        ];
+
+        for (status, state, extra) in cases {
+            let json = event(status);
+            assert_eq!(json["state"], state);
+            assert_eq!(json["id"], "1-0");
+            assert_eq!(json["kind"], "trim");
+
+            let mut expected: Vec<&str> = vec!["id", "kind", "state"];
+            expected.extend(extra);
+            expected.sort_unstable();
+
+            let mut actual: Vec<&str> = json
+                .as_object()
+                .expect("event is a JSON object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            actual.sort_unstable();
+
+            assert_eq!(actual, expected, "unexpected keys for {state}");
+        }
+    }
 }

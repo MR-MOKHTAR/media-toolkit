@@ -77,33 +77,31 @@ pub fn resolve(app: &AppHandle, tool: Tool) -> AppResult<Resolved> {
     found.ok_or_else(|| AppError::tool_missing(tool.name()))
 }
 
-/// Runs the tool, rather than checking that its file exists.
+/// Runs the tool and returns the version it reports, or `None` if it will not
+/// run at all. Availability is exactly `probe(..).is_some()`.
 ///
 /// Existence is not availability. The shared ffmpeg build we bundle needs its
 /// libraries on the search path, and when that broke, `resolve` still said yes
-/// while every single job failed with a dynamic-loader error. Spawning
-/// `-version` through `command()` exercises the same environment a real job
-/// gets, so a linkage problem shows up once, as "unavailable", instead of
-/// separately inside every operation.
-pub fn is_available(app: &AppHandle, tool: Tool) -> bool {
-    let Ok(mut cmd) = command(app, tool) else {
-        return false;
-    };
-    cmd.arg(tool.version_arg());
-    cmd.output().map(|out| out.status.success()).unwrap_or(false)
-}
-
-/// The tool's own reported version, or None if it will not run.
-pub fn version(app: &AppHandle, tool: Tool) -> Option<String> {
+/// while every single job failed with a dynamic-loader error. Going through
+/// `command()` exercises the same environment a real job gets, so a linkage
+/// problem shows up once, as "unavailable", instead of separately inside every
+/// operation.
+///
+/// One function rather than a separate `is_available` and `version`, because
+/// each call is a process spawn and yt-dlp is a PyInstaller bundle that unpacks
+/// itself and boots CPython every time -- measured at 1.8-2.1s. Asking the same
+/// question twice cost four seconds for one answer.
+///
+/// Async, and spawned through `process::output`, so this never occupies the
+/// thread it was called from.
+pub async fn probe(app: &AppHandle, tool: Tool) -> Option<String> {
     let mut cmd = command(app, tool).ok()?;
     cmd.arg(tool.version_arg());
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
+
+    let stdout = crate::process::output(cmd, tool.name()).await.ok()?;
     // ffmpeg prints a whole banner; yt-dlp prints just the version. Either way
     // the first line is the useful one.
-    String::from_utf8_lossy(&output.stdout)
+    stdout
         .lines()
         .next()
         .map(|line| line.trim().to_string())
@@ -158,18 +156,22 @@ fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
 
     // Last resort: a system install. Handy in dev, where the app runs straight
     // out of target/ and the resource dir does not exist yet.
-    let mut probe = Command::new(&file);
-    probe.arg(tool.version_arg());
-    hide_console(&mut probe);
-    let works = probe
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-
-    works.then(|| Resolved {
-        path: PathBuf::from(&file),
-        dir: None,
-    })
+    //
+    // A PATH walk rather than running the tool: `resolve` is called from async
+    // code on every job, and spawning yt-dlp here to ask whether yt-dlp exists
+    // cost two blocking seconds. Nothing is lost by not validating -- `probe`
+    // runs the tool immediately afterwards, and a present-but-broken binary
+    // *should* report as unavailable, which is what the health check is for.
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(&file))
+        .find(|candidate| candidate.is_file())
+        .map(|_| Resolved {
+            // The bare name, not the resolved path: leaving it to the OS keeps
+            // this working if PATH is reordered mid-session.
+            path: PathBuf::from(&file),
+            dir: None,
+        })
 }
 
 /// Builds a command for `tool` with the environment it needs to actually run.

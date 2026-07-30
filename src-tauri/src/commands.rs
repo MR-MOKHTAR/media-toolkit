@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use tauri::{AppHandle, Manager, State};
 
@@ -16,7 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::jobs::{JobKind, JobSummary, Jobs};
 use crate::paths;
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolStatus {
     pub ytdlp: bool,
@@ -27,20 +28,70 @@ pub struct ToolStatus {
     pub ytdlp_version: Option<String>,
 }
 
+/// Answering this means running yt-dlp, which is a PyInstaller bundle that
+/// unpacks itself and boots CPython on every launch -- about two seconds, and
+/// the Download and Settings screens both ask on mount. Since the answer only
+/// changes when the updater replaces a binary, it is computed once per session
+/// and cleared from `update_ytdlp`.
+///
+/// The lock is held across the measurement on purpose: two screens mounting at
+/// once should not both spawn yt-dlp, the second should wait for the first.
+fn status_cache() -> &'static tokio::sync::Mutex<Option<ToolStatus>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<Option<ToolStatus>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// `async` is load-bearing, not decoration. A plain `fn` command runs inline in
+/// the IPC handler on the main thread, so the four seconds this used to take
+/// froze the entire window, not just the request -- which is what made clicking
+/// Download or Settings feel like the app had hung.
 #[tauri::command]
-pub fn tool_status(app: AppHandle) -> ToolStatus {
+pub async fn tool_status(app: AppHandle) -> ToolStatus {
+    let mut cached = status_cache().lock().await;
+    if let Some(status) = cached.as_ref() {
+        return status.clone();
+    }
+    let status = measure_tools(&app).await;
+    *cached = Some(status.clone());
+    status
+}
+
+/// Fills the cache from the app's `setup` hook, so the first navigation to
+/// Download or Settings finds the answer already waiting.
+pub async fn warm_tool_status(app: &AppHandle) {
+    let mut cached = status_cache().lock().await;
+    if cached.is_none() {
+        *cached = Some(measure_tools(app).await);
+    }
+}
+
+async fn measure_tools(app: &AppHandle) -> ToolStatus {
+    let (ytdlp_version, ffmpeg, ffprobe) = tokio::join!(
+        binaries::probe(app, Tool::YtDlp),
+        binaries::probe(app, Tool::Ffmpeg),
+        binaries::probe(app, Tool::Ffprobe),
+    );
+
     ToolStatus {
-        ytdlp_version: binaries::version(&app, Tool::YtDlp),
-        ytdlp: binaries::is_available(&app, Tool::YtDlp),
-        ffmpeg: binaries::is_available(&app, Tool::Ffmpeg),
-        ffprobe: binaries::is_available(&app, Tool::Ffprobe),
+        // Availability *is* "it ran and told us its version". A separate
+        // existence check is what previously let a broken ffmpeg linkage
+        // report as ready and then fail inside every single job.
+        ytdlp: ytdlp_version.is_some(),
+        ffmpeg: ffmpeg.is_some(),
+        ffprobe: ffprobe.is_some(),
+        ytdlp_version,
     }
 }
 
 /// Downloads a current yt-dlp into the app data dir, ahead of the bundled copy.
 #[tauri::command]
 pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateResult> {
-    crate::updater::update_ytdlp(&app).await
+    let result = crate::updater::update_ytdlp(&app).await?;
+    // The cache names the version we just replaced. Leaving it would make
+    // Settings report the old one until restart, so the update would look like
+    // it had done nothing.
+    *status_cache().lock().await = None;
+    Ok(result)
 }
 
 #[tauri::command]

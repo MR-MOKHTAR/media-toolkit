@@ -17,6 +17,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Jobs::default())
+        .setup(|app| {
+            // Checking the tools means running them, and yt-dlp takes about two
+            // seconds to unpack itself. Do it here, in the background, while the
+            // user is still looking at the home screen -- by the time they open
+            // Download or Settings the answer is cached and the screen is
+            // instant. Failures need no handling: the result is just "not
+            // available", which those screens already report.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                commands::warm_tool_status(&handle).await;
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::tool_status,
             commands::update_ytdlp,

@@ -53,7 +53,7 @@ fn asset_name() -> AppResult<&'static str> {
 }
 
 pub async fn update_ytdlp(app: &AppHandle) -> AppResult<UpdateResult> {
-    let previous = binaries::version(app, Tool::YtDlp);
+    let previous = binaries::probe(app, Tool::YtDlp).await;
     let dir = binaries::writable_bin_dir(app)?;
     let final_path = dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
     let staged = dir.join(".yt-dlp.download");

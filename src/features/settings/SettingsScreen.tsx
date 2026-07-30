@@ -99,7 +99,10 @@ export function SettingsScreen({
         <h2 className="text-sm font-medium text-fg-soft">{t("bundled_tools")}</h2>
         <div className="flex flex-col divide-y divide-line rounded-lg border border-line bg-surface">
           {(["ytdlp", "ffmpeg", "ffprobe"] as const).map((tool) => {
-            const ok = tools?.[tool] ?? false;
+            // Three states, not two. Defaulting the unknown one to false meant
+            // every tool flashed a red "not installed" before the answer
+            // arrived -- a claim the app had not checked yet.
+            const ok = tools ? tools[tool] : null;
             return (
               <div key={tool} className="flex items-center gap-2 px-3 py-2.5">
                 <span className="min-w-0 flex-1 truncate text-base text-fg" dir="ltr">
@@ -128,11 +131,29 @@ export function SettingsScreen({
                 <span
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 text-sm",
-                    ok ? "text-success" : "text-danger",
+                    ok === null
+                      ? "text-fg-muted"
+                      : ok
+                        ? "text-success"
+                        : "text-danger",
                   )}
                 >
-                  {ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
-                  {ok ? t("tool_ready") : t("tool_missing")}
+                  {ok === null ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      {t("tool_checking")}
+                    </>
+                  ) : ok ? (
+                    <>
+                      <CheckCircle2 size={15} />
+                      {t("tool_ready")}
+                    </>
+                  ) : (
+                    <>
+                      <XCircle size={15} />
+                      {t("tool_missing")}
+                    </>
+                  )}
                 </span>
               </div>
             );
