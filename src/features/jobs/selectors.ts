@@ -14,9 +14,11 @@ export function listJobs(state: JobsState): Job[] {
   return state.order.map((id) => state.byId[id]).filter(Boolean);
 }
 
-/** The recent jobs one tool has run, for the history block on its own screen.
- *  Already newest-first, so a job started a moment ago lands at the top. */
-export function jobsOfKind(jobs: Job[], kind: JobKind, limit: number): Job[] {
+/** The jobs one tool has run, for the history panel on its own screen. Already
+ *  newest-first, so a job started a moment ago lands at the top. The limit is
+ *  optional because the panel scrolls: capping it there would hide history for
+ *  no reason. */
+export function jobsOfKind(jobs: Job[], kind: JobKind, limit = Infinity): Job[] {
   const result: Job[] = [];
   for (const job of jobs) {
     if (job.kind !== kind) continue;

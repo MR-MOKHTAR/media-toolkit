@@ -69,10 +69,15 @@
   --radius-xl: 1.5rem;     /* 24 -- dialogs, tool cards */
 
   /* --------------------------------------------------------- color ---
-   * One accent, one neutral ramp, three semantic. The ad-hoc purple that
-   * used to mark audio is gone: audio and video are told apart by icon
-   * shape inside a neutral container, which takes the palette from five
-   * hues on screen at once down to three. */
+   * One accent, one neutral ramp, three semantic, and one hue that exists
+   * only to mark audio.
+   *
+   * That last one was removed once, on the theory that icon shape alone
+   * could separate audio from video inside a neutral container. It could
+   * not: a grey glyph is the last thing read on a card, so the fastest
+   * signal on the row was also its quietest. Video reuses the accent and
+   * GIF reuses the warning hue, so telling three kinds apart costs exactly
+   * one new colour. */
   --color-canvas: #f3f5f9;
   --color-surface: #ffffff;
   --color-surface-soft: #f7f9fc;
@@ -94,6 +99,10 @@
   --color-success: #13936b;
   --color-danger: #db3d4b;
   --color-warning: #d4870d;
+
+  /* Audio. Far enough from the accent blue to read as a different kind at a
+     glance, and not close to danger red or success green. */
+  --color-media-audio: #7048c9;
 
   /* -------------------------------------------------------- motion ---
    * Two durations and one curve. */
@@ -131,6 +140,8 @@
     --color-success: #40c99a;
     --color-danger: #f06470;
     --color-warning: #f0ac40;
+
+    --color-media-audio: #a68bfa;
 
     --shadow-panel: 0 22px 70px rgba(0, 0, 0, 0.5);
   }

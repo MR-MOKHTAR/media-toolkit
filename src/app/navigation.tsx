@@ -29,12 +29,15 @@ export type Route =
 
 interface NavigationValue {
   route: Route;
-  /** The whole trail, oldest first. The breadcrumb bar renders it directly. */
+  /** Where you have been, newest last. This is history -- it drives `back`,
+   *  not the breadcrumb, which renders the route's ancestors instead. */
   stack: Route[];
   go: (route: Route) => void;
   back: () => void;
-  /** Jump to a crumb, dropping everything after it. */
-  goToIndex: (index: number) => void;
+  /** Back to the root, clearing the trail rather than pushing another home
+   *  onto it. Home is the parent of every screen, so arriving there means the
+   *  history that led away from it is spent. */
+  goToRoot: () => void;
   canGoBack: boolean;
 }
 
@@ -58,10 +61,8 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     setStack((current) => (current.length > 1 ? current.slice(0, -1) : current));
   }, []);
 
-  const goToIndex = useCallback((index: number) => {
-    setStack((current) =>
-      index >= 0 && index < current.length - 1 ? current.slice(0, index + 1) : current,
-    );
+  const goToRoot = useCallback(() => {
+    setStack([{ name: "home" }]);
   }, []);
 
   // Escape and Alt+Left go back, which is what people try first in a window
@@ -83,8 +84,8 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   }, [back]);
 
   const value = useMemo(
-    () => ({ route, stack, go, back, goToIndex, canGoBack: stack.length > 1 }),
-    [route, stack, go, back, goToIndex],
+    () => ({ route, stack, go, back, goToRoot, canGoBack: stack.length > 1 }),
+    [route, stack, go, back, goToRoot],
   );
 
   return (

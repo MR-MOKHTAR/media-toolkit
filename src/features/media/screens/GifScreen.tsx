@@ -51,7 +51,7 @@ export function GifScreen({ initialFile, language, notify }: Props) {
   );
 
   return (
-    <ToolShell title={t("tool_gif")} subtitle={t("tool_gif_hint")} historyKind="gif">
+    <ToolShell title={t("tool_gif")} subtitle={t("tool_gif_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}

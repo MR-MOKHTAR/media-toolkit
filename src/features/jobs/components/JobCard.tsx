@@ -3,8 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  FileAudio2,
-  FileVideo2,
   FolderOpen,
   Loader2,
   Trash2,
@@ -20,6 +18,13 @@ import {
   formatPercent,
   formatRelativeTime,
 } from "../../../lib/format";
+import {
+  extensionOf,
+  MEDIA_KIND_ICON,
+  MEDIA_KIND_TINT,
+  mediaKindOfPath,
+  type MediaKind,
+} from "../../../lib/mediaKind";
 import type { AppError, Job } from "../types";
 
 interface JobCardProps {
@@ -31,7 +36,25 @@ interface JobCardProps {
   onReveal: (path: string) => void;
 }
 
+/** What a download sets as its detail when the user picked audio. */
 const AUDIO_DETAILS = new Set(["MP3", "M4A", "WAV"]);
+
+/**
+ * Which icon and hue this job earns, from the best evidence available.
+ *
+ * A running job has no output path yet, so the answer has to degrade: the
+ * finished path is exact, the title is nearly always right because every screen
+ * but one builds it with an extension, and the detail line is the last resort
+ * that still catches an audio download. Video is the floor, not an "unknown"
+ * state -- see mediaKindOfPath.
+ */
+function mediaKindOfJob(job: Job): MediaKind {
+  if (job.kind === "gif") return "gif";
+  if (job.outputPath) return mediaKindOfPath(job.outputPath);
+  if (extensionOf(job.title)) return mediaKindOfPath(job.title);
+  if (job.detail && AUDIO_DETAILS.has(job.detail)) return "audio";
+  return "video";
+}
 
 /**
  * One job, as a card.
@@ -58,8 +81,8 @@ function JobCardComponent({
 }: JobCardProps) {
   const { t } = useTranslation();
   const active = job.state === "running" || job.state === "queued";
-  const audio = job.detail ? AUDIO_DETAILS.has(job.detail) : false;
-  const Icon = audio ? FileAudio2 : FileVideo2;
+  const kind = mediaKindOfJob(job);
+  const Icon = MEDIA_KIND_ICON[kind];
   const revealable = job.state === "completed" && job.outputPath;
 
   return (
@@ -76,7 +99,7 @@ function JobCardComponent({
       <span
         className={cn(
           "pointer-events-none relative flex size-9 shrink-0 items-center justify-center rounded-md",
-          "bg-surface-soft text-fg-soft",
+          MEDIA_KIND_TINT[kind],
         )}
       >
         <Icon size={18} />

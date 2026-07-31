@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useState } from "react";
+
 import { NavigationProvider, useNavigation } from "./app/navigation";
 import { AppTitleBar } from "./components/layout/AppTitleBar";
 import { BreadcrumbBar } from "./components/layout/BreadcrumbBar";
@@ -6,6 +8,8 @@ import { Toast } from "./components/feedback/Toast";
 import { DownloadScreen } from "./features/downloads/DownloadScreen";
 import { HomeScreen } from "./features/home/HomeScreen";
 import { JobsScreen } from "./features/jobs/JobsScreen";
+import { HistoryPanel, HistoryToggle } from "./features/jobs/components/HistoryPanel";
+import type { JobKind } from "./features/jobs/types";
 import { JobsProvider } from "./features/jobs/useJobs";
 import { CompressScreen } from "./features/media/screens/CompressScreen";
 import { ConvertScreen } from "./features/media/screens/ConvertScreen";
@@ -19,12 +23,31 @@ import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
+/** The six screens that run jobs. `JobKind` and these route names are the same
+ *  six strings by construction, so this Set is the entire mapping. */
+const HISTORY_ROUTES = new Set<string>([
+  "download",
+  "compress",
+  "trim",
+  "convert",
+  "resize",
+  "gif",
+]);
+
 function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
   const { route } = useNavigation();
   const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
   const isRtl = language === "fa" || language === "ar";
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyKind = HISTORY_ROUTES.has(route.name) ? (route.name as JobKind) : null;
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+
+  // Arriving at a fresh tool with a panel already open would be a surprise, and
+  // the history shown would be for a different tool entirely.
+  useEffect(() => setHistoryOpen(false), [route.name]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-canvas">
@@ -35,45 +58,71 @@ function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
         onClose={close}
       />
 
-      <BreadcrumbBar isRtl={isRtl} />
+      <BreadcrumbBar
+        isRtl={isRtl}
+        trailing={
+          historyKind && (
+            <HistoryToggle
+              kind={historyKind}
+              open={historyOpen}
+              onToggle={() => setHistoryOpen((current) => !current)}
+            />
+          )
+        }
+      />
 
       <OfflineBanner isOnline={isOnline} />
 
-      {/* The only scroll container in the app. Screens size themselves inside
-          it, so a document-level horizontal scrollbar cannot happen -- the old
-          table had min-width: 785px inside an 800px window and scrolled at its
-          own default size. */}
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        {route.name === "home" && <HomeScreen language={language} />}
-        {route.name === "download" && (
-          <DownloadScreen isOnline={isOnline} notify={notify} />
-        )}
-        {route.name === "jobs" && <JobsScreen language={language} />}
-        {route.name === "settings" && (
-          <SettingsScreen
-            darkMode={darkMode}
-            onToggleTheme={toggleDarkMode}
-            language={language}
-            onLanguageChange={setLanguage}
-            notify={notify}
+      {/* A row, so the history panel can dock beside the screen rather than
+          extend it. `relative` is what the panel's overlay mode positions
+          against, which keeps it below the title bar and breadcrumb instead of
+          covering the window chrome. */}
+      <div className="relative flex min-h-0 flex-1">
+        {/* The screens' scroll container. They size themselves inside it, so a
+            document-level horizontal scrollbar cannot happen -- the old table had
+            min-width: 785px inside an 800px window and scrolled at its own
+            default size. */}
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          {route.name === "home" && <HomeScreen language={language} />}
+          {route.name === "download" && (
+            <DownloadScreen isOnline={isOnline} notify={notify} />
+          )}
+          {route.name === "jobs" && <JobsScreen language={language} />}
+          {route.name === "settings" && (
+            <SettingsScreen
+              darkMode={darkMode}
+              onToggleTheme={toggleDarkMode}
+              language={language}
+              onLanguageChange={setLanguage}
+              notify={notify}
+            />
+          )}
+          {route.name === "compress" && (
+            <CompressScreen initialFile={route.file} language={language} notify={notify} />
+          )}
+          {route.name === "trim" && (
+            <TrimScreen initialFile={route.file} notify={notify} />
+          )}
+          {route.name === "convert" && (
+            <ConvertScreen initialFile={route.file} notify={notify} />
+          )}
+          {route.name === "resize" && (
+            <ResizeScreen initialFile={route.file} notify={notify} />
+          )}
+          {route.name === "gif" && (
+            <GifScreen initialFile={route.file} language={language} notify={notify} />
+          )}
+        </main>
+
+        {historyKind && (
+          <HistoryPanel
+            kind={historyKind}
+            open={historyOpen}
+            onClose={closeHistory}
+            isRtl={isRtl}
           />
         )}
-        {route.name === "compress" && (
-          <CompressScreen initialFile={route.file} language={language} notify={notify} />
-        )}
-        {route.name === "trim" && (
-          <TrimScreen initialFile={route.file} notify={notify} />
-        )}
-        {route.name === "convert" && (
-          <ConvertScreen initialFile={route.file} notify={notify} />
-        )}
-        {route.name === "resize" && (
-          <ResizeScreen initialFile={route.file} notify={notify} />
-        )}
-        {route.name === "gif" && (
-          <GifScreen initialFile={route.file} language={language} notify={notify} />
-        )}
-      </main>
+      </div>
 
       <Toast toast={toast} isRtl={isRtl} onClose={dismiss} />
     </div>

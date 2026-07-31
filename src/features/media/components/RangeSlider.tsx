@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { TextInput } from "../../../components/ui/TextInput";
@@ -14,15 +15,19 @@ interface RangeSliderProps {
 }
 
 /**
- * Two handles over a timeline.
+ * Two handles over a timeline, with the field that edits each handle sitting on
+ * that handle's own side of the track.
  *
- * The direction rule here is not cosmetic. A native `<input type="range">`
- * REVERSES under `dir="rtl"` in both WebKit and Chromium: the minimum moves to
- * the right and the value grows leftward. That is correct for an abstract
- * quantity and wrong for a media timeline, which must always run left to right
- * because the video preview and every timecode do. So the track is pinned to
- * `dir="ltr"` here, once, where no individual tool can get it wrong -- only
- * the labels around it mirror.
+ * The whole control mirrors with the interface language: under `fa`/`ar` zero is
+ * on the right, the clip grows leftward, and the start field leads on the right.
+ * A native `<input type="range">` already reverses under `dir="rtl"` in WebKit
+ * and Chromium -- the two engines this ships on -- so that reversal is leaned on
+ * rather than fought, which also keeps the arrow keys honest: under RTL,
+ * ArrowLeft advances the time.
+ *
+ * The timecode *text* does not mirror. Digits stay ASCII and left to right
+ * inside their boxes, because a mm:ss field written right to left is unreadable
+ * and impossible to edit.
  */
 export function RangeSlider({
   durationSecs,
@@ -31,7 +36,7 @@ export function RangeSlider({
   onChange,
   maxSpanSecs,
 }: RangeSliderProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const step = durationSecs > 600 ? 1 : 0.1;
 
   const setStart = (value: number) => {
@@ -50,38 +55,44 @@ export function RangeSlider({
   const endPct = durationSecs > 0 ? (end / durationSecs) * 100 : 100;
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* dir="ltr" on the track and everything inside it. */}
-      <div dir="ltr" className="relative h-9 select-none">
-        <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-line" />
-        <div
-          className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent"
-          style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }}
-        />
-        <RangeInput
-          label={t("trim_start")}
-          value={start}
-          max={durationSecs}
-          step={step}
-          onChange={setStart}
-        />
-        <RangeInput
-          label={t("trim_end")}
-          value={end}
-          max={durationSecs}
-          step={step}
-          onChange={setEnd}
-        />
+    <div className="flex flex-col gap-2">
+      {/* No dir on this row: it inherits the page direction, so the DOM order
+          start -> track -> end lands start-left under English and start-right
+          under Persian and Arabic without any conditional ordering. */}
+      <div className="flex items-center gap-3">
+        <TimeField label={t("trim_start")} value={start} onCommit={setStart} />
+
+        <div dir={i18n.dir()} className="relative h-9 min-w-0 flex-1 select-none">
+          <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-line" />
+          <div
+            className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent"
+            style={{
+              insetInlineStart: `${startPct}%`,
+              width: `${Math.max(0, endPct - startPct)}%`,
+            }}
+          />
+          <RangeInput
+            label={t("trim_start")}
+            value={start}
+            max={durationSecs}
+            step={step}
+            onChange={setStart}
+          />
+          <RangeInput
+            label={t("trim_end")}
+            value={end}
+            max={durationSecs}
+            step={step}
+            onChange={setEnd}
+          />
+        </div>
+
+        <TimeField label={t("trim_end")} value={end} onCommit={setEnd} />
       </div>
 
-      <div className="flex items-center gap-2">
-        <TimeField label={t("trim_start")} value={start} onCommit={setStart} />
-        <span className="text-fg-muted">–</span>
-        <TimeField label={t("trim_end")} value={end} onCommit={setEnd} />
-        <span className="ms-auto text-sm text-fg-muted tnum" dir="ltr">
-          {formatTimecode(Math.max(0, end - start))}
-        </span>
-      </div>
+      <span className="text-center text-sm text-fg-muted tnum" dir="ltr">
+        {formatTimecode(Math.max(0, end - start))}
+      </span>
     </div>
   );
 }
@@ -126,6 +137,13 @@ function RangeInput({
   );
 }
 
+/**
+ * The number half of the two-way binding. While nothing is being typed the
+ * field has no state of its own and simply renders the live value, so dragging
+ * a handle counts it up frame by frame. Typing parks a draft so a half-written
+ * "1:" is not reformatted mid-keystroke -- and so moving the *other* handle
+ * cannot wipe out an edit in progress.
+ */
 function TimeField({
   label,
   value,
@@ -135,22 +153,33 @@ function TimeField({
   value: number;
   onCommit: (seconds: number) => void;
 }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const text = draft ?? formatTimecode(value);
+
+  const commit = () => {
+    const parsed = parseTimecode(text);
+    if (parsed !== null) onCommit(parsed);
+    // Dropping the draft either way: on success the clamped value flows back
+    // down as the new text, on failure the last good one does.
+    setDraft(null);
+  };
+
   return (
     <TextInput
       aria-label={label}
       // ASCII digits, left to right, tabular: Persian digits in an mm:ss field
       // are hard to read and awkward to edit.
       dir="ltr"
-      className="h-9 w-24 text-center tnum"
-      defaultValue={formatTimecode(value)}
-      key={formatTimecode(value)}
-      onBlur={(event) => {
-        const parsed = parseTimecode(event.target.value);
-        if (parsed !== null) onCommit(parsed);
-        else event.target.value = formatTimecode(value);
-      }}
+      className="h-9 w-24 shrink-0 text-center tnum"
+      value={text}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(null);
+          event.currentTarget.blur();
+        }
       }}
     />
   );

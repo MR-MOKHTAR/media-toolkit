@@ -1,12 +1,16 @@
 import type { ReactNode } from "react";
-import { FileVideo2, Folder, Upload } from "lucide-react";
+import { Folder, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../../components/ui/Button";
 import { cn } from "../../../lib/cn";
 import { fileNameOf, formatBytes, formatDuration } from "../../../lib/format";
-import { JobHistory } from "../../jobs/components/JobHistory";
-import type { JobKind } from "../../jobs/types";
+import {
+  MEDIA_KIND_ICON,
+  MEDIA_KIND_TINT,
+  mediaKindOfPath,
+  type MediaKind,
+} from "../../../lib/mediaKind";
 import type { MediaInfo } from "../useMediaFile";
 
 /**
@@ -21,30 +25,28 @@ import type { MediaInfo } from "../useMediaFile";
 export function ToolShell({
   title,
   subtitle,
-  historyKind,
   children,
 }: {
   title: string;
   subtitle: string;
-  /** Shows this tool's own recent jobs under the form. Omitted renders nothing. */
-  historyKind?: JobKind;
   children: ReactNode;
 }) {
   return (
-    // Deliberately not widened past 2xl on large screens. A form gets worse
-    // past about 700px, not better: the label drifts away from the control it
-    // labels. Only the card grids on Home and Jobs earn extra width.
+    // One width step, and only above lg. At the 600px window minimum and in the
+    // default 1100px window the form stays 2xl, which is where a form reads
+    // best -- past that the label drifts away from the control it labels. The
+    // extra 96px on a large screen exists for one reason: the trim range needs
+    // a timecode field on each side of its track without squeezing it.
     //
     // min-h-full + justify-center centres a short form vertically and falls
     // back to top-aligned once the content outgrows the viewport, because a
     // min-height leaves no free space to distribute at that point.
-    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-5 px-6 py-6">
+    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-5 px-6 py-6 lg:max-w-3xl">
       <div className="flex flex-col items-center gap-1 text-center">
         <h1 className="text-xl font-semibold text-fg">{title}</h1>
         <p className="text-sm text-fg-muted">{subtitle}</p>
       </div>
       {children}
-      {historyKind && <JobHistory kind={historyKind} />}
     </div>
   );
 }
@@ -84,6 +86,12 @@ export function FileDropZone({
     );
   }
 
+  // ffprobe is the authority once it has answered; until then the extension is
+  // the only thing known about the file, and it is right often enough that
+  // showing a neutral placeholder for a moment would just be a flicker.
+  const kind: MediaKind = info ? (info.video ? "video" : "audio") : mediaKindOfPath(path);
+  const Icon = MEDIA_KIND_ICON[kind];
+
   return (
     <div
       className={cn(
@@ -91,8 +99,13 @@ export function FileDropZone({
         isDragging ? "border-accent bg-accent-soft" : "border-line",
       )}
     >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-surface-soft text-fg-soft">
-        <FileVideo2 size={19} />
+      <span
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-md",
+          MEDIA_KIND_TINT[kind],
+        )}
+      >
+        <Icon size={19} />
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-base text-fg" title={path}>
@@ -128,9 +141,17 @@ export function OutputFolderRow({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2">
+    // The whole row is pinned to ltr, not just the path inside it. This row is
+    // a filesystem location, and a path only reads one way: folder icon, then
+    // the path, then the button that changes it -- identical in all three
+    // languages. Letting it mirror moved the change button to the left and put
+    // the icon on the far side of a path that still ran left to right.
+    <div
+      dir="ltr"
+      className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2"
+    >
       <Folder size={16} className="shrink-0 text-fg-muted" />
-      <span className="min-w-0 flex-1 truncate text-sm text-fg-soft" dir="ltr" title={folder}>
+      <span className="min-w-0 flex-1 truncate text-sm text-fg-soft" title={folder}>
         {folder || t("select_location")}
       </span>
       <Button variant="ghost" size="sm" onClick={onChoose}>

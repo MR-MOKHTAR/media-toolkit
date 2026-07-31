@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from "./mediaKind";
 import type {
   AppError,
   DownloadRequest,
@@ -65,13 +66,6 @@ export async function chooseFolder(defaultPath?: string) {
   const selected = await open({ directory: true, multiple: false, defaultPath });
   return typeof selected === "string" ? selected : null;
 }
-
-const VIDEO_EXTENSIONS = [
-  "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "flv", "wmv", "mpg", "mpeg",
-];
-const AUDIO_EXTENSIONS = [
-  "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma",
-];
 
 export async function chooseMediaFile(defaultPath?: string) {
   const selected = await open({

@@ -35,14 +35,25 @@ export function AppTitleBar({
   const { go, route } = useNavigation();
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-1 border-b border-line bg-surface px-2">
+    // dir is pinned rather than inherited. Everything else in the app follows
+    // the language, but minimise/maximise/close are window chrome, not content:
+    // every desktop and every website puts them on the same side regardless of
+    // the text direction, and having them jump to the left in Persian and
+    // Arabic broke that expectation. The breadcrumb bar below deliberately does
+    // still flip -- that one is content.
+    <header
+      dir="ltr"
+      className="flex h-11 shrink-0 items-center gap-1 border-b border-line bg-surface px-2"
+    >
       {/* The drag region has to be its own element. Marking the header would
           swallow clicks on the buttons inside it. */}
       <div
         data-tauri-drag-region
         className="drag-region flex h-full flex-1 items-center px-2 text-sm font-medium text-fg-soft"
       >
-        <span data-tauri-drag-region className="truncate">
+        {/* auto, not the header's ltr: the name itself is Persian or Arabic in
+            two of the three languages and has to shape in its own direction. */}
+        <span data-tauri-drag-region dir="auto" className="truncate">
           {t("app_name")}
         </span>
       </div>

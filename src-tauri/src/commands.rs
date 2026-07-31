@@ -159,6 +159,20 @@ pub async fn open_path(path: String) -> AppResult<()> {
 
 /// Opens the containing folder with the file selected.
 ///
+/// The per-platform implementation belongs to tauri-plugin-opener, which this
+/// app already depends on and registers. Doing it by hand here is what caused
+/// the "first click does nothing" bug: we shelled out to `dbus-send` without
+/// `--print-reply`, which fires the message and exits immediately. With no file
+/// manager running, D-Bus starts activating one, our sender is already gone,
+/// and the ShowItems message is dropped -- so the first click only warmed up
+/// the file manager and the second one was the one that worked. That same flag
+/// also meant `dbus-send` always exited 0, even against a destination that does
+/// not exist, so the xdg-open fallback below it was unreachable.
+///
+/// The plugin makes a real zbus call that waits for the reply, falls back to
+/// the XDG desktop portal (which matters under Flatpak, where we had nothing),
+/// and carries the Windows and macOS paths too.
+///
 /// When the file itself is gone -- renamed, moved, or deleted since the job
 /// finished -- this opens the folder it was written to rather than failing.
 /// "Show me where this went" is still answerable, and refusing outright reads
@@ -174,57 +188,15 @@ pub async fn reveal_in_folder(path: String) -> AppResult<()> {
         return run_detached(opener_command(parent));
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let mut cmd = Command::new("open");
-        cmd.arg("-R").arg(&target);
-        return run_detached(cmd);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let mut cmd = Command::new("explorer");
-        // No space after the comma: explorer treats "/select, path" as two
-        // arguments and silently opens Documents instead.
-        cmd.arg(format!("/select,{}", target.display()));
-        binaries::hide_console(&mut cmd);
-        // explorer.exe returns a non-zero exit code even when it succeeds.
-        let _ = cmd.spawn().map_err(|e| AppError::spawn("explorer", e))?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let canonical = target
-            .canonicalize()
-            .map_err(|error| AppError::io(&target, error))?;
-
-        // Most file managers implement this; it opens the parent with the file
-        // selected, which xdg-open cannot express.
-        let uri = file_uri(&canonical);
-        let ok = Command::new("dbus-send")
-            .args([
-                "--session",
-                "--dest=org.freedesktop.FileManager1",
-                "--type=method_call",
-                "/org/freedesktop/FileManager1",
-                "org.freedesktop.FileManager1.ShowItems",
-            ])
-            .arg(format!("array:string:{uri}"))
-            .arg("string:")
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if ok {
-            return Ok(());
-        }
-
-        let parent = canonical.parent().unwrap_or(&canonical);
-        return run_detached(opener_command(parent));
-    }
-
-    #[allow(unreachable_code)]
-    Err(AppError::invalid("platform", "unsupported"))
+    // The plugin's proxy is blocking, and waiting for a cold file manager to
+    // activate measured at 0.76s. This is an async command, so that has to
+    // happen off the runtime's worker threads.
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri_plugin_opener::reveal_item_in_dir(&target)
+            .map_err(|error| AppError::spawn("file manager", error))
+    })
+    .await
+    .map_err(|error| AppError::spawn("file manager", error))?
 }
 
 fn opener_command(path: &Path) -> Command {
@@ -248,18 +220,4 @@ fn run_detached(mut cmd: Command) -> AppResult<()> {
     cmd.spawn()
         .map(|_| ())
         .map_err(|error| AppError::spawn("file manager", error))
-}
-
-#[cfg(target_os = "linux")]
-fn file_uri(path: &Path) -> String {
-    let mut uri = String::from("file://");
-    for byte in path.to_string_lossy().as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                uri.push(*byte as char)
-            }
-            other => uri.push_str(&format!("%{other:02X}")),
-        }
-    }
-    uri
 }

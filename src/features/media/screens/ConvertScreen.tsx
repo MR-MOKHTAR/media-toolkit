@@ -59,7 +59,7 @@ export function ConvertScreen({ initialFile, notify }: Props) {
   const ready = Boolean(file.path && file.info && job.outputDir && !job.busy);
 
   return (
-    <ToolShell title={t("tool_convert")} subtitle={t("tool_convert_hint")} historyKind="convert">
+    <ToolShell title={t("tool_convert")} subtitle={t("tool_convert_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}

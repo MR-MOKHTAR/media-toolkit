@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../../../lib/cn";
+import { extensionOf } from "../../../lib/mediaKind";
 import type { ToastType } from "../../../types/feedback";
 import {
   FileDropZone,
@@ -36,8 +37,12 @@ export function TrimScreen({ initialFile, notify }: Props) {
     file.path && file.info && range.end > range.start && job.outputDir && !job.busy,
   );
 
+  // Mirrors what the backend picks (media/ops.rs): a stream copy keeps the
+  // source container, an exact cut has to re-encode and lands as MP4.
+  const outputExt = exact ? "mp4" : (extensionOf(file.path ?? "") ?? "mp4");
+
   return (
-    <ToolShell title={t("tool_trim")} subtitle={t("tool_trim_hint")} historyKind="trim">
+    <ToolShell title={t("tool_trim")} subtitle={t("tool_trim_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -91,7 +96,7 @@ export function TrimScreen({ initialFile, notify }: Props) {
               endSecs: range.end,
               exact,
             },
-            `${defaultOutputName(file.path)}-clip`,
+            `${defaultOutputName(file.path)}-clip.${outputExt}`,
             exact ? t("trim_exact") : t("trim_fast"),
           )
         }
