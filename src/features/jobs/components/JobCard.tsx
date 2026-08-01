@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  FileText,
   FolderOpen,
   Loader2,
   Trash2,
@@ -25,7 +26,8 @@ import {
   mediaKindOfPath,
   type MediaKind,
 } from "../../../lib/mediaKind";
-import type { AppError, Job } from "../types";
+import { describeAppError } from "../errorText";
+import type { Job } from "../types";
 
 interface JobCardProps {
   job: Job;
@@ -34,6 +36,9 @@ interface JobCardProps {
   onCancel: (id: string) => void;
   onRemove: (id: string) => void;
   onReveal: (path: string) => void;
+  /** Opens the transcript screen for a finished Whisper job. Optional because
+   *  most lists of jobs have nowhere to navigate to. */
+  onViewTranscript?: (id: string) => void;
 }
 
 /** What a download sets as its detail when the user picked audio. */
@@ -50,6 +55,10 @@ const AUDIO_DETAILS = new Set(["MP3", "M4A", "WAV"]);
  */
 function mediaKindOfJob(job: Job): MediaKind {
   if (job.kind === "gif") return "gif";
+  // Before the output path is consulted, not after: a finished transcript is a
+  // .srt, and mediaKindOfPath's floor is "video", so it would be drawn with a
+  // film icon.
+  if (job.kind === "transcribe") return "text";
   if (job.outputPath) return mediaKindOfPath(job.outputPath);
   if (extensionOf(job.title)) return mediaKindOfPath(job.title);
   if (job.detail && AUDIO_DETAILS.has(job.detail)) return "audio";
@@ -78,12 +87,17 @@ function JobCardComponent({
   onCancel,
   onRemove,
   onReveal,
+  onViewTranscript,
 }: JobCardProps) {
   const { t } = useTranslation();
   const active = job.state === "running" || job.state === "queued";
   const kind = mediaKindOfJob(job);
   const Icon = MEDIA_KIND_ICON[kind];
   const revealable = job.state === "completed" && job.outputPath;
+  // The card's stretched target still reveals the file, for every kind. Making
+  // it mean something different for one of them would contradict reveal_hint,
+  // which is on every other card in the same list.
+  const viewable = revealable && job.kind === "transcribe" && onViewTranscript;
 
   return (
     <li className="relative flex items-start gap-3 rounded-lg border border-line bg-surface p-3">
@@ -149,13 +163,27 @@ function JobCardComponent({
         )}
 
         {job.state === "failed" && job.error && (
-          <p className="mt-1 line-clamp-2 text-xs text-danger" title={describeError(job.error)}>
-            {describeError(job.error)}
+          <p
+            className="mt-1 line-clamp-2 text-xs text-danger"
+            title={describeAppError(job.error, t, language)}
+          >
+            {describeAppError(job.error, t, language)}
           </p>
         )}
       </div>
 
       <div className="relative flex shrink-0 items-center gap-1">
+        {viewable && (
+          <button
+            type="button"
+            onClick={() => onViewTranscript(job.id)}
+            aria-label={t("transcript_view")}
+            title={t("transcript_view")}
+            className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
+          >
+            <FileText size={16} />
+          </button>
+        )}
         {revealable && (
           <button
             type="button"
@@ -244,24 +272,6 @@ function Chip({
       {text}
     </span>
   );
-}
-
-/** The stderr tail is the whole point of capturing it: the last line is
- *  usually the actual reason, like "Video unavailable". */
-function describeError(error: AppError): string {
-  switch (error.kind) {
-    case "tool":
-      return error.tail.split("\n").filter(Boolean).pop() ?? `${error.tool} failed`;
-    case "toolMissing":
-      return `${error.tool} is not available`;
-    case "invalidInput":
-      return error.reason;
-    case "io":
-    case "spawn":
-      return error.message;
-    default:
-      return "";
-  }
 }
 
 export const JobCard = memo(JobCardComponent);

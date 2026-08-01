@@ -9,6 +9,7 @@ import { DownloadScreen } from "./features/downloads/DownloadScreen";
 import { HomeScreen } from "./features/home/HomeScreen";
 import { JobsScreen } from "./features/jobs/JobsScreen";
 import { HistoryPanel, HistoryToggle } from "./features/jobs/components/HistoryPanel";
+import { TasksButton } from "./features/jobs/components/TasksButton";
 import type { JobKind } from "./features/jobs/types";
 import { JobsProvider } from "./features/jobs/useJobs";
 import { CompressScreen } from "./features/media/screens/CompressScreen";
@@ -18,13 +19,15 @@ import { ResizeScreen } from "./features/media/screens/ResizeScreen";
 import { TrimScreen } from "./features/media/screens/TrimScreen";
 import { DragDropProvider } from "./features/media/useDragDrop";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
+import { TranscribeScreen } from "./features/transcribe/TranscribeScreen";
+import { TranscriptScreen } from "./features/transcribe/TranscriptScreen";
 import { useAppPreferences } from "./hooks/useAppPreferences";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
-/** The six screens that run jobs. `JobKind` and these route names are the same
- *  six strings by construction, so this Set is the entire mapping. */
+/** The seven screens that run jobs. `JobKind` and these route names are the
+ *  same seven strings by construction, so this Set is the entire mapping. */
 const HISTORY_ROUTES = new Set<string>([
   "download",
   "compress",
@@ -32,10 +35,11 @@ const HISTORY_ROUTES = new Set<string>([
   "convert",
   "resize",
   "gif",
+  "transcribe",
 ]);
 
 function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
-  const { route } = useNavigation();
+  const { route, go } = useNavigation();
   const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
@@ -61,13 +65,22 @@ function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
       <BreadcrumbBar
         isRtl={isRtl}
         trailing={
-          historyKind && (
-            <HistoryToggle
-              kind={historyKind}
-              open={historyOpen}
-              onToggle={() => setHistoryOpen((current) => !current)}
-            />
-          )
+          <div className="flex items-center gap-1">
+            {/* Tasks first, then the tool's own history: the global
+                destination anchors the group, and the screen-specific one
+                comes and goes beside it without moving it. Not shown on Tasks
+                itself, where it would link to the page you are on. */}
+            {route.name !== "jobs" && (
+              <TasksButton onOpen={() => go({ name: "jobs" })} />
+            )}
+            {historyKind && (
+              <HistoryToggle
+                kind={historyKind}
+                open={historyOpen}
+                onToggle={() => setHistoryOpen((current) => !current)}
+              />
+            )}
+          </div>
         }
       />
 
@@ -83,7 +96,7 @@ function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
             min-width: 785px inside an 800px window and scrolled at its own
             default size. */}
         <main className="min-h-0 flex-1 overflow-y-auto">
-          {route.name === "home" && <HomeScreen language={language} />}
+          {route.name === "home" && <HomeScreen />}
           {route.name === "download" && (
             <DownloadScreen isOnline={isOnline} notify={notify} />
           )}
@@ -111,6 +124,27 @@ function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
           )}
           {route.name === "gif" && (
             <GifScreen initialFile={route.file} language={language} notify={notify} />
+          )}
+          {route.name === "transcribe" && (
+            <TranscribeScreen
+              initialFile={route.file}
+              language={language}
+              // The only media tool that can fail for being offline, so it is
+              // the only one that needs to know.
+              isOnline={isOnline}
+              notify={notify}
+            />
+          )}
+          {route.name === "transcript" && (
+            <TranscriptScreen
+              // Keyed by job, so reopening a different transcript remounts
+              // rather than showing the previous one's text while the new file
+              // is still being read.
+              key={route.jobId}
+              jobId={route.jobId}
+              language={language}
+              notify={notify}
+            />
           )}
         </main>
 

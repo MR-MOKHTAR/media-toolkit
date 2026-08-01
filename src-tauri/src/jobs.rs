@@ -6,15 +6,17 @@
 //! progress event carries the id of the job it belongs to.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::time::{Duration, Instant};
 
-use crate::error::AppError;
+use crate::error::{AppError, AppResult};
 
 pub const PROGRESS_EVENT: &str = "job-progress";
 pub const STATUS_EVENT: &str = "job-status";
@@ -32,13 +34,17 @@ pub enum JobKind {
     Convert,
     Resize,
     Gif,
+    Transcribe,
 }
 
 impl JobKind {
     /// Which resource this kind competes for.
     fn lane(self) -> Lane {
         match self {
-            Self::Download => Lane::Network,
+            // Transcription runs one cheap ffmpeg extraction and then spends
+            // minutes waiting on HTTPS. Putting it in the CPU lane would park a
+            // compression behind an upload that is not using a core at all.
+            Self::Download | Self::Transcribe => Lane::Network,
             _ => Lane::Cpu,
         }
     }
@@ -61,6 +67,10 @@ pub enum Stage {
     Downloading,
     Merging,
     Encoding,
+    /// Waiting on Groq. Its own stage because the bar can sit still for a minute
+    /// at a time while a chunk is being transcribed, and "Processing" would
+    /// suggest this machine is the one doing the work.
+    Transcribing,
     Finalizing,
 }
 
@@ -130,6 +140,64 @@ pub struct JobSummary {
     pub title: String,
 }
 
+/// Cancellation for work that is not a child process.
+///
+/// Killing the child is enough for the five ffmpeg tools and for yt-dlp: the
+/// process *is* the job. Transcription is not -- it spends most of its life
+/// inside an HTTPS request and inside `sleep`s between retries, and there is no
+/// child there to take. So cancel raises a flag and wakes anyone waiting on it,
+/// in addition to killing whatever child happens to exist at the time.
+///
+/// A flag *and* a `Notify`, not one or the other: the flag answers "was it
+/// cancelled" for code between awaits, and the notify is what lets a request
+/// that is already in flight be dropped immediately instead of at the end of a
+/// 300-second timeout.
+#[derive(Clone, Default)]
+pub struct CancelSignal {
+    flag: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl CancelSignal {
+    fn cancel(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once cancelled, and immediately if it already has been.
+    ///
+    /// The early return is the whole point: `notify_waiters` only wakes tasks
+    /// that are *already* waiting, so a plain `notified().await` on a signal
+    /// that fired a moment ago would hang forever.
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        // Registered before the second check, so a cancel landing between the
+        // two is still caught by the future rather than missed by both.
+        let waiter = self.notify.notified();
+        if self.is_cancelled() {
+            return;
+        }
+        waiter.await;
+    }
+
+    /// Runs `future`, giving up the moment cancel fires.
+    pub async fn guard<F: Future>(&self, future: F) -> AppResult<F::Output> {
+        tokio::select! {
+            // Biased so a signal that is already raised wins deterministically
+            // rather than racing a future that may complete anyway.
+            biased;
+            () = self.cancelled() => Err(AppError::Cancelled),
+            value = future => Ok(value),
+        }
+    }
+}
+
 struct Entry {
     kind: JobKind,
     title: String,
@@ -138,6 +206,7 @@ struct Entry {
     child: Option<tokio::process::Child>,
     /// Removed on success so a completed job's output is never deleted.
     partial_output: Option<PathBuf>,
+    cancel: CancelSignal,
 }
 
 pub struct Jobs {
@@ -195,6 +264,17 @@ impl Jobs {
             .and_then(|entry| entry.child.take())
     }
 
+    /// A handle a long-running job holds for its whole life, so it can keep
+    /// checking after `finish` has already removed the entry.
+    pub async fn cancel_signal(&self, id: &str) -> CancelSignal {
+        self.entries
+            .lock()
+            .await
+            .get(id)
+            .map(|entry| entry.cancel.clone())
+            .unwrap_or_default()
+    }
+
     /// Records the file a job is writing, so cancelling can clean it up.
     pub async fn set_partial_output(&self, id: &str, path: PathBuf) {
         if let Some(entry) = self.entries.lock().await.get_mut(id) {
@@ -222,6 +302,11 @@ impl Jobs {
             let entry = entries
                 .get_mut(id)
                 .ok_or_else(|| AppError::UnknownJob { id: id.to_string() })?;
+            // Raised for every kind, not just the ones that watch it. The five
+            // ffmpeg tools ignore it and keep inferring cancellation from the
+            // missing child, so this costs them nothing and there is still one
+            // cancel path for the whole app.
+            entry.cancel.cancel();
             entry.child.take()
         };
 
@@ -269,6 +354,7 @@ impl InsertEntry for Mutex<HashMap<String, Entry>> {
                 title,
                 child: None,
                 partial_output: None,
+                cancel: CancelSignal::default(),
             },
         );
     }
@@ -363,6 +449,45 @@ mod tests {
             json.get("output_path").is_none(),
             "snake_case key leaked through: {json}"
         );
+    }
+
+    /// The bug this guards: `Notify::notify_waiters` only wakes tasks that are
+    /// already parked, so waiting on a signal that fired earlier would block
+    /// forever. A transcription cancelled while ffmpeg was still extracting
+    /// would then hang on the very next await instead of ending.
+    #[tokio::test]
+    async fn cancelling_before_the_wait_still_resolves() {
+        let signal = CancelSignal::default();
+        signal.cancel();
+        assert!(signal.is_cancelled());
+
+        // Would hang if `cancelled()` only awaited the notification.
+        tokio::time::timeout(Duration::from_millis(500), signal.cancelled())
+            .await
+            .expect("a signal raised earlier must resolve immediately");
+    }
+
+    #[tokio::test]
+    async fn guard_gives_up_on_a_future_that_would_never_finish() {
+        let signal = CancelSignal::default();
+        let watcher = signal.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            watcher.cancel();
+        });
+
+        // Stands in for an HTTPS request with a 300-second timeout: without the
+        // guard, cancelling would not be felt until that timeout expired.
+        let result = signal
+            .guard(tokio::time::sleep(Duration::from_secs(300)))
+            .await;
+        assert!(matches!(result, Err(AppError::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn guard_passes_a_value_through_when_nothing_cancels() {
+        let signal = CancelSignal::default();
+        assert_eq!(signal.guard(async { 7 }).await.unwrap(), 7);
     }
 
     /// The rest of the union, so a renamed variant or a new field cannot drift

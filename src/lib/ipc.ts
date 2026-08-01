@@ -7,15 +7,20 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from "./mediaKind";
 import type {
+  ApiKeyStatus,
   AppError,
   DownloadRequest,
   JobProgress,
   JobStatusEvent,
+  Quota,
   ToolStatus,
+  TranscribeModel,
+  TranscriptText,
   UpdateResult,
   UrlInfo,
 } from "../features/jobs/types";
@@ -80,6 +85,48 @@ export async function chooseMediaFile(defaultPath?: string) {
   });
   return typeof selected === "string" ? selected : null;
 }
+
+// ------------------------------------------------------------- transcribe
+
+/** Groq's remaining audio-seconds for a model, as best this machine can tell.
+ *  See the note in the Rust `ledger`: it can only ever be optimistic, so the
+ *  screen warns on it and never blocks. */
+export const groqQuota = (model: TranscribeModel) =>
+  invoke<Quota>("groq_quota", { model });
+
+/** What a file of this length will cost, overlaps included. */
+export const estimateTranscribeSecs = (durationSecs: number) =>
+  invoke<number>("estimate_transcribe_secs", { durationSecs });
+
+/** Reads a finished transcript back for display. Narrow by design -- the
+ *  backend checks the extension and the size, because the webview names the
+ *  path and a general file read would be an arbitrary-read primitive. */
+export const readTranscript = (path: string) =>
+  invoke<TranscriptText>("read_transcript", { path });
+
+/** Whether a Groq key is stored, and its last four characters. The key itself
+ *  is never returned: Rust makes every HTTP call, so it has no reason to exist
+ *  on this side of the bridge. */
+export const apiKeyStatus = () => invoke<ApiKeyStatus>("api_key_status");
+
+export const setApiKey = (key: string) => invoke<void>("set_api_key", { key });
+
+export const clearApiKey = () => invoke<void>("clear_api_key");
+
+/** Checks the key that is actually stored, not one passed in -- the saved key
+ *  is the thing that can be wrong. */
+export const testApiKey = () => invoke<void>("test_api_key");
+
+/**
+ * Copies text to the system clipboard.
+ *
+ * Goes through the Tauri plugin rather than `navigator.clipboard`, which is
+ * unavailable or rejects outside a secure context in the WebKitGTK webview the
+ * Linux build ships on -- while working perfectly in `vite dev` on localhost.
+ * That difference is the worst kind: a copy button that passes every manual
+ * test and is dead for every user.
+ */
+export const copyText = (text: string) => writeText(text);
 
 export const onJobProgress = (
   handler: (payload: JobProgress) => void,

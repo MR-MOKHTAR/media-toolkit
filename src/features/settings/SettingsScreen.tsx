@@ -10,6 +10,7 @@ import type { AppLanguage } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
 import { describe } from "../media/useMediaJob";
 import type { ToolStatus } from "../jobs/types";
+import { ApiKeyPanel } from "./ApiKeyPanel";
 
 interface Props {
   darkMode: boolean;
@@ -93,6 +94,12 @@ export function SettingsScreen({
             { value: "ar", label: "العربية" },
           ]}
         />
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-fg-soft">{t("transcription")}</h2>
+        <ApiKeyPanel notify={notify} />
+        <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
       </section>
 
       <section className="flex flex-col gap-2">

@@ -35,11 +35,20 @@ liblzma = { version = "0.4", features = ["static"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2.7.0"
+# Copying a transcript out of the app. navigator.clipboard is unreliable in the
+# WebKitGTK webview this ships on for Linux -- and works in `vite dev` on
+# localhost, which is the worst kind of difference: a copy button that passes
+# every manual test and is dead for every user.
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-# The in-app yt-dlp updater. rustls rather than native-tls so no OpenSSL
-# headers are needed on any build machine.
+# The in-app yt-dlp updater and the Groq client. rustls rather than native-tls
+# so no OpenSSL headers are needed on any build machine; `multipart` because
+# Groq's audio endpoints take nothing else. No `json` feature: the response is
+# parsed from the raw bytes, which are needed verbatim anyway to put Groq's own
+# error text into AppError::Api.
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
+    "multipart",
 ] }

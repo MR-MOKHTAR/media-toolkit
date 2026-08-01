@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../../lib/cn";
 import type { ToastType } from "../../../types/feedback";
 import {
   FileDropZone,
+  FormatGroup,
   InstantBadge,
   OutputFolderRow,
   RunButton,
@@ -109,48 +109,3 @@ export function ConvertScreen({ initialFile, notify }: Props) {
   );
 }
 
-function FormatGroup({
-  title,
-  formats,
-  value,
-  onChange,
-  disabled,
-  disabledHint,
-}: {
-  title: string;
-  formats: string[];
-  value: string;
-  onChange: (format: string) => void;
-  disabled?: boolean;
-  disabledHint?: string;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <p className="text-sm font-medium text-fg-soft">
-        {title}
-        {disabled && disabledHint && (
-          <span className="ms-2 text-xs font-normal text-fg-muted">{disabledHint}</span>
-        )}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        {formats.map((format) => (
-          <button
-            key={format}
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange(format)}
-            className={cn(
-              "rounded-sm border px-3 py-1.5 text-sm uppercase transition-colors duration-[--duration-fast]",
-              "disabled:cursor-not-allowed disabled:opacity-40",
-              value === format
-                ? "border-accent-line bg-accent-soft font-medium text-accent"
-                : "border-line bg-surface text-fg-soft hover:enabled:bg-surface-hover",
-            )}
-          >
-            {format}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}

@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { History, Inbox, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { useNavigation } from "../../../app/navigation";
 import { EmptyState } from "../../../components/ui/Card";
 import { cn } from "../../../lib/cn";
 import { formatCount } from "../../../lib/format";
@@ -42,6 +43,7 @@ export function HistoryPanel({
   const { t, i18n } = useTranslation();
   const language = i18n.language;
   const { jobs, state, cancel, remove, reveal } = useJobs();
+  const { go } = useNavigation();
   const reduceMotion = useReducedMotion();
 
   const recent = useMemo(() => jobsOfKind(jobs, kind), [jobs, kind]);
@@ -140,6 +142,7 @@ export function HistoryPanel({
                       onCancel={(id) => void cancel(id)}
                       onRemove={remove}
                       onReveal={(path) => void reveal(path)}
+                      onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
                     />
                   ))}
                 </ul>

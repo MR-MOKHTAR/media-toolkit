@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, ListChecks, Loader, Trash2, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { useNavigation } from "../../app/navigation";
 import { EmptyState } from "../../components/ui/Card";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
@@ -22,6 +23,7 @@ const FILTERS: { value: JobFilter; labelKey: string; icon: LucideIcon }[] = [
 export function JobsScreen({ language }: { language: string }) {
   const { t } = useTranslation();
   const { jobs, state, cancel, remove, reveal, clearFinished } = useJobs();
+  const { go } = useNavigation();
   const [filter, setFilter] = useState<JobFilter>("all");
 
   const counts = useMemo(() => countJobs(jobs), [jobs]);
@@ -109,6 +111,7 @@ export function JobsScreen({ language }: { language: string }) {
                       onCancel={(id) => void cancel(id)}
                       onRemove={remove}
                       onReveal={(path) => void reveal(path)}
+                      onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
                     />
                   </motion.div>
                 ))}

@@ -177,6 +177,60 @@ export function RunButton({
   );
 }
 
+/**
+ * A row of short, fixed choices -- container formats, transcript formats.
+ *
+ * Lives here rather than in ConvertScreen, where it started, because Transcribe
+ * needs the identical control and a second copy would drift. Distinct from
+ * `Segmented`: that one divides the full width into equal columns for two to
+ * four options with hints, this one wraps a row of short uppercase tokens.
+ */
+export function FormatGroup({
+  title,
+  formats,
+  value,
+  onChange,
+  disabled,
+  disabledHint,
+}: {
+  title: string;
+  formats: string[];
+  value: string;
+  onChange: (format: string) => void;
+  disabled?: boolean;
+  disabledHint?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm font-medium text-fg-soft">
+        {title}
+        {disabled && disabledHint && (
+          <span className="ms-2 text-xs font-normal text-fg-muted">{disabledHint}</span>
+        )}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {formats.map((format) => (
+          <button
+            key={format}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(format)}
+            className={cn(
+              "rounded-sm border px-3 py-1.5 text-sm uppercase transition-colors duration-[--duration-fast]",
+              "disabled:cursor-not-allowed disabled:opacity-40",
+              value === format
+                ? "border-accent-line bg-accent-soft font-medium text-accent"
+                : "border-line bg-surface text-fg-soft hover:enabled:bg-surface-hover",
+            )}
+          >
+            {format}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Green badge for the cases where a job is a stream copy: instant, lossless,
  *  and worth telling the user before they wait for nothing. */
 export function InstantBadge({ text }: { text: string }) {

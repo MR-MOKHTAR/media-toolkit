@@ -16,6 +16,14 @@ import { useDownloadForm } from "./useDownloadForm";
 
 const QUALITIES = ["best", "1080", "720", "480"] as const;
 
+/** 720p, not "best".
+ *
+ *  "Best available" is whatever the site happens to serve -- on YouTube that is
+ *  often 4K, which is a multi-gigabyte file and a long wait for something most
+ *  people watch on a laptop. 720p is the size everyone can afford; anyone who
+ *  wants the full thing is one click away from it. */
+const DEFAULT_QUALITY: string = "720";
+
 interface Props {
   isOnline: boolean;
   notify: (type: ToastType, message: string) => void;
@@ -37,7 +45,7 @@ export function DownloadScreen({ isOnline, notify }: Props) {
 
   const [url, setUrl] = useState("");
   const [mediaType, setMediaType] = useState<"video" | "audio">("video");
-  const [quality, setQuality] = useState<string>("best");
+  const [quality, setQuality] = useState<string>(DEFAULT_QUALITY);
   const [info, setInfo] = useState<UrlInfo | null>(null);
   const [probing, setProbing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -147,11 +155,14 @@ export function DownloadScreen({ isOnline, notify }: Props) {
         />
       </div>
 
-      {/* Nothing replaces this when audio is selected. The old modal had a
-          whole styled panel whose only content was that audio needs no
-          quality setting -- a panel explaining an absent control is the
-          definition of clutter. */}
-      {mediaType === "video" && (
+      {/* Audio has no quality to pick -- yt-dlp is asked for the best MP3 it
+          can make either way -- but the slot still has to be filled. Dropping
+          the row outright shortened the form by its own height, so every
+          control below it, including the button being aimed at, jumped up the
+          moment Audio was clicked. A line stating what audio will produce
+          holds the layout still and answers the question the missing control
+          would otherwise raise. */}
+      {mediaType === "video" ? (
         <Segmented
           label={t("video_quality")}
           value={quality}
@@ -161,6 +172,10 @@ export function DownloadScreen({ isOnline, notify }: Props) {
             label: value === "best" ? t("quality_best") : `${value}p`,
           }))}
         />
+      ) : (
+        <p className="rounded-md border border-line bg-surface px-3 py-2.5 text-center text-base text-fg-soft">
+          {t("audio_quality_note")}
+        </p>
       )}
 
       <OutputFolderRow folder={savePath} onChoose={selectFolder} />

@@ -1,4 +1,10 @@
-import { FileAudio2, FileImage, FileVideo2, type LucideIcon } from "lucide-react";
+import {
+  FileAudio2,
+  FileImage,
+  FileText,
+  FileVideo2,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * What kind of thing a file is, and how it should look.
@@ -8,7 +14,7 @@ import { FileAudio2, FileImage, FileVideo2, type LucideIcon } from "lucide-react
  * deciding which icon to draw. When those two disagreed, an `.opus` file was
  * selectable as audio and then drawn with a video icon.
  */
-export type MediaKind = "video" | "audio" | "gif";
+export type MediaKind = "video" | "audio" | "gif" | "text";
 
 export const VIDEO_EXTENSIONS = [
   "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "flv", "wmv", "mpg", "mpeg",
@@ -46,6 +52,7 @@ export const MEDIA_KIND_ICON: Record<MediaKind, LucideIcon> = {
   video: FileVideo2,
   audio: FileAudio2,
   gif: FileImage,
+  text: FileText,
 };
 
 /**
@@ -57,4 +64,7 @@ export const MEDIA_KIND_TINT: Record<MediaKind, string> = {
   video: "bg-accent/10 text-accent",
   audio: "bg-media-audio/10 text-media-audio",
   gif: "bg-warning/10 text-warning",
+  // Neutral on purpose: a transcript is the one output that is not media, and
+  // giving it a fifth hue would imply a distinction that does not exist.
+  text: "bg-fg-muted/10 text-fg-soft",
 };

@@ -1,4 +1,5 @@
 import {
+  Captions,
   Crop,
   Download,
   FileVideo2,
@@ -27,4 +28,7 @@ export const TOOLS: ToolDefinition[] = [
   { route: { name: "convert" }, key: "convert", icon: Repeat2, takesFile: true },
   { route: { name: "resize" }, key: "resize", icon: Crop, takesFile: true },
   { route: { name: "gif" }, key: "gif", icon: FileVideo2, takesFile: true },
+  // `Captions` rather than `Mic`: a microphone reads as "record", which is the
+  // one thing this tool does not do.
+  { route: { name: "transcribe" }, key: "transcribe", icon: Captions, takesFile: true },
 ];

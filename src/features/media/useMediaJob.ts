@@ -6,6 +6,7 @@ import { useNavigation } from "../../app/navigation";
 import * as ipc from "../../lib/ipc";
 import { fileNameOf } from "../../lib/format";
 import type { ToastType } from "../../types/feedback";
+import { describeAppError } from "../jobs/errorText";
 import type { JobKind } from "../jobs/types";
 import { useJobs } from "../jobs/useJobs";
 
@@ -20,6 +21,14 @@ export function useMediaJob(
   kind: JobKind,
   command: string,
   notify: (type: ToastType, message: string) => void,
+  /**
+   * Whether starting the job hands the user off to Tasks.
+   *
+   * True for every tool that produces a file to open somewhere else -- there is
+   * nothing more to see on the form. Transcribe passes false: its result is
+   * text, and it shows that text in place.
+   */
+  { navigateOnStart = true }: { navigateOnStart?: boolean } = {},
 ) {
   const { t } = useTranslation();
   const { addExternalJob } = useJobs();
@@ -63,41 +72,27 @@ export function useMediaJob(
           detail,
         });
         notify("info", t("job_started"));
-        go({ name: "jobs" });
+        if (navigateOnStart) go({ name: "jobs" });
+        return id;
       } catch (raw) {
         // The typed error carries the real reason -- an unreadable file, a
-        // range that makes no sense -- instead of an exit code.
+        // range that makes no sense, a key that is not there -- instead of an
+        // exit code.
         notify("error", describe(ipc.toAppError(raw), t));
+        return null;
       } finally {
         setBusy(false);
       }
     },
-    [addExternalJob, command, go, kind, notify, outputDir, t],
+    [addExternalJob, command, go, kind, navigateOnStart, notify, outputDir, t],
   );
 
   return { outputDir, setOutputDir, followInput, chooseFolder, run, busy };
 }
 
-export function describe(
-  error: ReturnType<typeof ipc.toAppError>,
-  t: (key: string) => string,
-): string {
-  switch (error.kind) {
-    case "toolMissing":
-      return t("ffmpeg_not_found");
-    case "invalidInput":
-      return error.reason;
-    case "tool":
-      return error.tail.split("\n").filter(Boolean).pop() ?? t("job_failed");
-    case "io":
-    case "spawn":
-      return error.message;
-    case "cancelled":
-      return t("status_cancelled");
-    default:
-      return t("job_failed");
-  }
-}
+/** Kept as the name every screen already imports; the wording itself lives in
+ *  one place now, shared with the job card. */
+export const describe = describeAppError;
 
 export const defaultOutputName = (path: string | null) =>
   path ? fileNameOf(path).replace(/\.[^.]+$/, "") : "";

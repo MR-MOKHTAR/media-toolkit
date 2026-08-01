@@ -16,12 +16,15 @@ export function routeLabelKey(route: Route): string {
       return "nav_jobs";
     case "settings":
       return "settings";
+    case "transcript":
+      return "nav_transcript";
     case "download":
     case "compress":
     case "trim":
     case "convert":
     case "resize":
     case "gif":
+    case "transcribe":
       return `tool_${route.name}`;
   }
 }

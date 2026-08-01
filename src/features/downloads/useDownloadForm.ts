@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 
 import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
+import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
 import type { DownloadRequest } from "../jobs/types";
 
@@ -46,7 +47,7 @@ export function useDownloadForm({ isOnline, notify }: Options) {
         setToolsReady(tools.ytdlp);
         if (!tools.ytdlp) notify("warning", t("ytdlp_not_found"));
       } catch (error) {
-        if (!cancelled) notify("error", describe(error));
+        if (!cancelled) notify("error", describeAppError(ipc.toAppError(error), t));
       }
     })();
     return () => {
@@ -95,7 +96,7 @@ export function useDownloadForm({ isOnline, notify }: Options) {
         title: values.filename.trim() || url,
         source: url,
         detail: values.mediaType === "audio" ? "MP3" : values.quality,
-      }).catch((error) => notify("error", describe(error)));
+      }).catch((error) => notify("error", describeAppError(ipc.toAppError(error), t)));
 
       notify("info", t("job_started"));
       onSuccess();
@@ -107,25 +108,3 @@ export function useDownloadForm({ isOnline, notify }: Options) {
   return { savePath, toolsReady, selectFolder, start };
 }
 
-/** Turns the typed backend error into something a person can read. Phase 7
- *  replaces this with per-kind translations. */
-function describe(error: unknown): string {
-  const app = ipc.toAppError(error);
-  switch (app.kind) {
-    case "toolMissing":
-      return `${app.tool} is not available`;
-    case "invalidInput":
-      return app.reason;
-    case "tool":
-      // The tail is the whole point: "Video unavailable" rather than "exit 1".
-      return app.tail.split("\n").filter(Boolean).pop() ?? `${app.tool} failed`;
-    case "io":
-      return app.message;
-    case "spawn":
-      return app.message;
-    case "cancelled":
-      return "cancelled";
-    case "unknownJob":
-      return "job not found";
-  }
-}
