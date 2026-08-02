@@ -36,7 +36,7 @@ const HISTORY_ROUTES = new Set<string>([
   "transcribe",
 ]);
 
-function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
+function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
   const { route } = useNavigation();
   const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
   const isOnline = useNetworkStatus();
@@ -150,7 +150,7 @@ function Shell({ toast, notify, dismiss }: ReturnType<typeof useToast>) {
         </div>
       </div>
 
-      <Toast toast={toast} isRtl={isRtl} onClose={dismiss} />
+      <Toast toasts={toasts} isRtl={isRtl} onDismiss={dismiss} />
     </div>
   );
 }
