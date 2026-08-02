@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../../app/navigation";
 import { EmptyState } from "../../../components/ui/Card";
+import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
 import { formatCount } from "../../../lib/format";
 import { jobsOfKind } from "../selectors";
@@ -25,9 +26,11 @@ const PANEL_ID = "tool-history-panel";
  * job did the same. A panel in its own column cannot do that -- the form's
  * height stops depending on how much history exists.
  *
- * Docked at `lg` and wider; below that the window (600px minimum) has no room
- * for two columns, so the same element becomes an overlay. That is one
- * `lg:static` rather than two component trees.
+ * Docked at `xl` and wider; below that the window has no room for it beside the
+ * form, so the same element becomes an overlay. That is one `xl:static` rather
+ * than two component trees. The breakpoint is `xl` and not `lg` because the row
+ * now starts with a 240px sidebar: at 1024px the form would be left with 384px,
+ * less than it gets in the smallest window the app allows.
  */
 export function HistoryPanel({
   kind,
@@ -84,7 +87,7 @@ export function HistoryPanel({
             exit={{ opacity: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.18 }}
             onClick={onClose}
-            className="absolute inset-0 z-30 bg-fg/20 lg:hidden"
+            className="absolute inset-0 z-30 bg-fg/20 xl:hidden"
             aria-hidden
           />
 
@@ -100,7 +103,7 @@ export function HistoryPanel({
               "border-s border-line bg-surface shadow-(--shadow-panel)",
               // static puts it back in the flex row, so the form keeps the rest
               // of the width instead of being covered by it.
-              "lg:static lg:z-auto lg:w-100 lg:max-w-none lg:shadow-none",
+              "xl:static xl:z-auto xl:w-100 xl:max-w-none xl:shadow-none",
             )}
           >
             <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
@@ -155,8 +158,16 @@ export function HistoryPanel({
   );
 }
 
-/** The button that opens it, for the breadcrumb bar's trailing slot. */
-export function HistoryToggle({
+/**
+ * The strip that opens it, on the edge opposite the sidebar.
+ *
+ * It used to be a button in the breadcrumb bar's trailing slot, which no longer
+ * exists. A rail rather than a floating button: it is part of the flex row, so
+ * it can never sit on top of the form the way a corner button does in a 600px
+ * window, and it makes the edge it lives on the permanent home of this tool's
+ * history -- opened or closed, the control is in the same place.
+ */
+export function HistoryRail({
   kind,
   open,
   onToggle,
@@ -170,26 +181,31 @@ export function HistoryToggle({
   const count = useMemo(() => jobsOfKind(jobs, kind).length, [jobs, kind]);
 
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={count === 0}
-      aria-expanded={open}
-      aria-controls={PANEL_ID}
-      title={t("history")}
-      className={cn(
-        "flex h-7 shrink-0 items-center gap-1.5 rounded-sm px-2 text-sm",
-        "transition-colors duration-[--duration-fast]",
-        count === 0
-          ? "text-fg-muted opacity-50"
-          : open
-            ? "bg-accent-soft text-accent"
-            : "text-fg-muted hover:bg-surface-hover hover:text-fg",
-      )}
-    >
-      <History size={15} />
-      <span>{t("history")}</span>
-      <span className="tnum">{formatCount(count, i18n.language)}</span>
-    </button>
+    <aside className="flex w-11 shrink-0 flex-col items-center border-s border-line bg-surface-soft py-2">
+      <Tooltip label={t("history")}>
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={count === 0}
+          aria-expanded={open}
+          aria-controls={PANEL_ID}
+          aria-label={t("history")}
+          className={cn(
+            "flex w-9 flex-col items-center gap-0.5 rounded-sm py-2",
+            "transition-colors duration-[--duration-fast]",
+            count === 0
+              ? "text-fg-muted opacity-40"
+              : open
+                ? "bg-accent-soft text-accent"
+                : "text-fg-muted hover:bg-surface-hover hover:text-fg",
+          )}
+        >
+          <History size={17} />
+          {/* The count is the whole reason to look here, so it stays even
+              collapsed to a rail -- it is the one thing an icon cannot say. */}
+          <span className="text-xs tnum">{formatCount(count, i18n.language)}</span>
+        </button>
+      </Tooltip>
+    </aside>
   );
 }

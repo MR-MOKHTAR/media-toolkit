@@ -25,7 +25,6 @@ export type ToolName =
   | "transcribe";
 
 export type Route =
-  | { name: "home" }
   | { name: "download" }
   | { name: "jobs" }
   | { name: "settings" }
@@ -40,8 +39,8 @@ export type Route =
 
 interface NavigationValue {
   route: Route;
-  /** Where you have been, newest last. This is history -- it drives `back`,
-   *  not the breadcrumb, which renders the route's ancestors instead. */
+  /** Where you have been, newest last. Drives `back`. The sidebar shows where
+   *  you *are*, which is a different question and answered by `route`. */
   stack: Route[];
   go: (route: Route) => void;
   /** Swaps the current entry without adding to history.
@@ -52,17 +51,15 @@ interface NavigationValue {
    *  knows about it. Otherwise returning to a form always means an empty one. */
   replace: (route: Route) => void;
   back: () => void;
-  /** Back to the root, clearing the trail rather than pushing another home
-   *  onto it. Home is the parent of every screen, so arriving there means the
-   *  history that led away from it is spent. */
-  goToRoot: () => void;
-  canGoBack: boolean;
 }
 
 const NavigationContext = createContext<NavigationValue | null>(null);
 
 export function NavigationProvider({ children }: { children: ReactNode }) {
-  const [stack, setStack] = useState<Route[]>([{ name: "home" }]);
+  // Download, not a landing screen. Every tool is one click away in the
+  // sidebar, so a screen whose only content was a list of those same tools was
+  // a stop on the way to the thing people opened the app to do.
+  const [stack, setStack] = useState<Route[]>([{ name: "download" }]);
   const route = stack[stack.length - 1];
 
   const go = useCallback((next: Route) => {
@@ -81,10 +78,6 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
 
   const back = useCallback(() => {
     setStack((current) => (current.length > 1 ? current.slice(0, -1) : current));
-  }, []);
-
-  const goToRoot = useCallback(() => {
-    setStack([{ name: "home" }]);
   }, []);
 
   // Escape and Alt+Left go back, which is what people try first in a window
@@ -106,8 +99,8 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   }, [back]);
 
   const value = useMemo(
-    () => ({ route, stack, go, replace, back, goToRoot, canGoBack: stack.length > 1 }),
-    [route, stack, go, replace, back, goToRoot],
+    () => ({ route, stack, go, replace, back }),
+    [route, stack, go, replace, back],
   );
 
   return (

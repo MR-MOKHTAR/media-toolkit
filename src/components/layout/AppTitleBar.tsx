@@ -1,8 +1,6 @@
-import { Minus, Settings, Square, X } from "lucide-react";
+import { Minus, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useNavigation } from "../../app/navigation";
-import { cn } from "../../lib/cn";
 import { IconButton } from "../ui/Button";
 
 interface AppTitleBarProps {
@@ -13,17 +11,17 @@ interface AppTitleBarProps {
 }
 
 /**
- * Identity, drag area, settings, window controls. Nothing else.
+ * Identity, drag area, window controls. Nothing else.
  *
- * The title is the app name and never changes: which screen you are on, and
- * how you get back, is the breadcrumb bar's job. Before that bar existed this
- * header carried the only back button in the app, which told you nothing about
- * where you were or how deep you had gone.
+ * The title is the app name and never changes: which screen you are on is the
+ * sidebar's job, and it answers that by highlighting the row you are on.
  *
- * Further back it also held a gradient "New Download" call to action, a theme
- * toggle and a raw <select> for the language, all crammed into 40px next to
- * the window buttons. Theme and language are set once per install and belong
- * in Settings.
+ * Everything else that has passed through here has left: a back button that
+ * said nothing about where you were, a gradient "New Download" call to action,
+ * a theme toggle, a raw <select> for the language, and most recently the
+ * settings gear -- Settings is a destination like any other and now sits with
+ * Tasks at the foot of the sidebar, so there is one way to reach it rather
+ * than two.
  */
 export function AppTitleBar({
   isMaximized,
@@ -32,15 +30,14 @@ export function AppTitleBar({
   onClose,
 }: AppTitleBarProps) {
   const { t } = useTranslation();
-  const { go, route } = useNavigation();
 
   return (
     // dir is pinned rather than inherited. Everything else in the app follows
     // the language, but minimise/maximise/close are window chrome, not content:
     // every desktop and every website puts them on the same side regardless of
     // the text direction, and having them jump to the left in Persian and
-    // Arabic broke that expectation. The breadcrumb bar below deliberately does
-    // still flip -- that one is content.
+    // Arabic broke that expectation. The sidebar below deliberately does still
+    // flip -- that one is content.
     <header
       dir="ltr"
       className="flex h-11 shrink-0 items-center gap-1 border-b border-line bg-surface px-2"
@@ -57,14 +54,6 @@ export function AppTitleBar({
           {t("app_name")}
         </span>
       </div>
-
-      <IconButton
-        label={t("settings")}
-        onClick={() => go({ name: "settings" })}
-        className={cn("no-drag", route.name === "settings" && "text-accent")}
-      >
-        <Settings size={17} />
-      </IconButton>
 
       <div className="no-drag ms-1 flex items-center">
         <IconButton label={t("minimize")} onClick={onMinimize}>
