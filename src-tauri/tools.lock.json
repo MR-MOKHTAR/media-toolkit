@@ -1,0 +1,210 @@
+{
+  "$comment": [
+    "Pinned sources for the external binaries bundled into the installer.",
+    "build.rs reads this file; editing it is how you change what ships.",
+    "",
+    "sha256: null means 'record whatever we got, do not enforce'. Set it to a hex",
+    "digest to make the build fail on mismatch. It is null by default for ffmpeg",
+    "because BtbN re-publishes the n8.1-latest assets in place every few days --",
+    "a hard pin there would break every build within the week. The URL is the pin;",
+    "the recorded digest lands in binaries/.tools.json so drift is visible.",
+    "",
+    "yt-dlp tracks the nightly channel's latest/download, so a clean build picks",
+    "up whatever is current rather than a pin that goes stale. See the note on",
+    "the ytdlp entry for why nightly and not stable. Already-installed users are",
+    "covered by the in-app updater, which writes to the app data dir and is read",
+    "first (see the resolution order in binaries.rs)."
+  ],
+  "tools": {
+    "ytdlp": {
+      "license": "Unlicense",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe",
+          "archive": "raw",
+          "member": null,
+          "install_as": "yt-dlp.exe",
+          "sha256": null
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux",
+          "archive": "raw",
+          "member": null,
+          "install_as": "yt-dlp",
+          "sha256": null
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux_aarch64",
+          "archive": "raw",
+          "member": null,
+          "install_as": "yt-dlp",
+          "sha256": null
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos",
+          "archive": "raw",
+          "member": null,
+          "install_as": "yt-dlp",
+          "sha256": null
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos",
+          "archive": "raw",
+          "member": null,
+          "install_as": "yt-dlp",
+          "sha256": null
+        }
+      },
+      "$comment": "Nightly, not stable. yt-dlp's stable channel ships every few months while YouTube breaks extractors every few weeks; nightly carries those fixes within days. Measured 2026-07-30: nightly 2026.07.23 vs stable 2026.07.04. For an app whose whole job is downloading, a stale extractor is an outage."
+    },
+    "ffmpeg": {
+      "license": "GPL-3.0-or-later",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/ffmpeg.exe",
+          "install_as": "ffmpeg.exe",
+          "sha256": null
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "bin/ffmpeg",
+          "install_as": "ffmpeg",
+          "sha256": null
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "bin/ffmpeg",
+          "install_as": "ffmpeg",
+          "sha256": null
+        },
+        "macos-x86_64": {
+          "url": "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip",
+          "archive": "zip",
+          "member": "ffmpeg",
+          "install_as": "ffmpeg",
+          "sha256": null
+        },
+        "macos-aarch64": {
+          "url": "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip",
+          "archive": "zip",
+          "member": "ffmpeg",
+          "install_as": "ffmpeg",
+          "sha256": null
+        }
+      }
+    },
+    "ffmpeg-license": {
+      "$comment": "Shipped next to the binaries to satisfy GPL-3.0. Extracted from the same archive as ffmpeg, so the text always matches the build we actually ship. No macOS entry: the martin-riedl zips carry only the binary, so LICENSE-ffmpeg.txt for macOS comes from resources/ instead.",
+      "license": "GPL-3.0-or-later",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "LICENSE.txt",
+          "install_as": "LICENSE-ffmpeg.txt",
+          "executable": false,
+          "sha256": null
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "LICENSE.txt",
+          "install_as": "LICENSE-ffmpeg.txt",
+          "executable": false,
+          "sha256": null
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "LICENSE.txt",
+          "install_as": "LICENSE-ffmpeg.txt",
+          "executable": false,
+          "sha256": null
+        }
+      }
+    },
+    "ffmpeg-libs": {
+      "$comment": "The shared build's libraries. ffmpeg and ffprobe each embed the full codec set in a static build (144 MB apiece), so sharing one copy takes the installer from ~120 MB to ~50 MB. On Linux they land in binaries/lib and the spawn sets LD_LIBRARY_PATH; on Windows the DLLs sit next to the .exe, which is where the loader already looks. macOS keeps standalone binaries, so it has no entry here.",
+      "license": "GPL-3.0-or-later",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/",
+          "install_as": ".",
+          "exclude": [
+            ".exe"
+          ],
+          "executable": false,
+          "sha256": null
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "lib/",
+          "install_as": "lib",
+          "exclude": [
+            "pkgconfig"
+          ],
+          "executable": false,
+          "sha256": null
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "lib/",
+          "install_as": "lib",
+          "exclude": [
+            "pkgconfig"
+          ],
+          "executable": false,
+          "sha256": null
+        }
+      }
+    },
+    "ffprobe": {
+      "license": "GPL-3.0-or-later",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/ffprobe.exe",
+          "install_as": "ffprobe.exe",
+          "sha256": null
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "bin/ffprobe",
+          "install_as": "ffprobe",
+          "sha256": null
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linuxarm64-gpl-shared-8.1.tar.xz",
+          "archive": "tar.xz",
+          "member": "bin/ffprobe",
+          "install_as": "ffprobe",
+          "sha256": null
+        },
+        "macos-x86_64": {
+          "url": "https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffprobe.zip",
+          "archive": "zip",
+          "member": "ffprobe",
+          "install_as": "ffprobe",
+          "sha256": null
+        },
+        "macos-aarch64": {
+          "url": "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffprobe.zip",
+          "archive": "zip",
+          "member": "ffprobe",
+          "install_as": "ffprobe",
+          "sha256": null
+        }
+      }
+    }
+  }
+}

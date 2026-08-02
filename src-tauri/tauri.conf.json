@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "downloader",
+  "productName": "Media Toolkit",
   "version": "0.1.0",
   "identifier": "com.mtr.downloader",
   "build": {
@@ -13,14 +13,14 @@
     "windows": [
       {
         "label": "main",
-        "title": "downloader",
-        "width": 800,
-        "height": 600,
+        "title": "Media Toolkit",
+        "width": 1100,
+        "height": 740,
         "minWidth": 600,
         "minHeight": 500,
         "resizable": true,
         "decorations": false,
-        "maximized": true
+        "center": true
       }
     ],
     "security": {
@@ -31,8 +31,8 @@
     "active": true,
     "targets": "all",
     "publisher": "mtr",
-    "shortDescription": "YouTube Audio/Video Downloader",
-    "longDescription": "A tool to download audio and video from YouTube without external dependencies.",
+    "shortDescription": "Download and edit media, offline",
+    "longDescription": "Download video and audio from the web, then compress, trim, convert, resize, or turn it into a GIF. yt-dlp and FFmpeg are bundled, so nothing else has to be installed.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,7 +41,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "binaries": "./binaries"
+      "binaries": "./binaries",
+      "resources/THIRD-PARTY.md": "THIRD-PARTY.md"
     }
   }
 }
