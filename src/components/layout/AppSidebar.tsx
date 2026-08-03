@@ -13,10 +13,7 @@ import { cn } from "../../lib/cn";
 import { isActiveJob } from "../../features/jobs/types";
 import { useJobs } from "../../features/jobs/useJobs";
 import { Tooltip } from "../ui/Tooltip";
-// The window icon Tauri already ships, rather than a second mark drawn in the
-// frontend that could drift from it. Imported at 128px and drawn at 28 so it
-// stays sharp on a HiDPI screen.
-import appIcon from "../../../src-tauri/icons/128x128.png";
+import { AppIdentity } from "./AppIdentity";
 
 /**
  * Every screen, always reachable.
@@ -96,25 +93,7 @@ export function AppSidebar({
           collapsed ? "justify-center" : "gap-2 ps-1.5",
         )}
       >
-        {!collapsed && (
-          <>
-            <img
-              src={appIcon}
-              alt=""
-              aria-hidden
-              className="pointer-events-none size-7 shrink-0"
-            />
-            {/* auto: the name is Persian or Arabic in two of the three
-                languages and has to shape in its own direction. */}
-            <span
-              data-tauri-drag-region
-              dir="auto"
-              className="min-w-0 flex-1 truncate text-sm font-semibold text-fg"
-            >
-              {t("app_name")}
-            </span>
-          </>
-        )}
+        {!collapsed && <AppIdentity className="flex-1" />}
 
         <Tooltip
           label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}

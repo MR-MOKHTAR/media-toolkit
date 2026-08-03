@@ -19,6 +19,38 @@ export function Card({
   );
 }
 
+/**
+ * The surface every form in the app is drawn on.
+ *
+ * One card, one border, one shadow, holding the whole set of controls -- which
+ * is what a form looks like everywhere else, and what the screens here were
+ * missing: each control carried its own border and they stacked loose down the
+ * middle of the canvas, so a five-control form read as five unrelated boxes.
+ *
+ * Glass, not a flat panel: a translucent surface over the canvas with a blur
+ * behind it. It sits lighter than the page instead of being a second, brighter
+ * white, and anything sliding underneath -- the history panel, a toast --
+ * shows through rather than stopping at a hard edge.
+ */
+export function FormCard({
+  className,
+  children,
+  ...props
+}: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3.5 rounded-xl border border-line p-5",
+        "bg-surface/70 shadow-(--shadow-card) backdrop-blur-md",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}
+
 interface FieldProps {
   label: string;
   /** Marks the control optional without an extra line of explanation. */

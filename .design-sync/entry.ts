@@ -7,7 +7,7 @@
  * what the design system publishes.
  */
 export { Button, IconButton } from "../src/components/ui/Button";
-export { Card, Field, EmptyState } from "../src/components/ui/Card";
+export { Card, FormCard, Field, EmptyState } from "../src/components/ui/Card";
 export { ProgressBar } from "../src/components/ui/ProgressBar";
 export { Segmented } from "../src/components/ui/Segmented";
 export { TextInput } from "../src/components/ui/TextInput";

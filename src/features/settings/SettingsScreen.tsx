@@ -10,6 +10,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
+import { FormCard } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
 import { cn } from "../../lib/cn";
 import * as ipc from "../../lib/ipc";
@@ -74,120 +75,125 @@ export function SettingsScreen({
   };
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-6 px-6 py-6">
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-fg-soft">{t("appearance")}</h2>
-        <Segmented
-          label={t("appearance")}
-          value={darkMode ? "dark" : "light"}
-          onChange={(value) => {
-            if ((value === "dark") !== darkMode) onToggleTheme();
-          }}
-          options={[
-            {
-              value: "light",
-              label: t("theme_light"),
-              icon: <Sun size={16} />,
-            },
-            { value: "dark", label: t("theme_dark"), icon: <Moon size={16} /> },
-          ]}
-        />
-      </section>
+    // The same card, the same width as every tool form: Settings is a form
+    // too, and it looked like a different app while it was the one screen
+    // still laying its controls loose on the canvas.
+    <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center px-6 py-6 xl:max-w-2xl">
+      <FormCard className="gap-5">
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-fg-soft">{t("appearance")}</h2>
+          <Segmented
+            label={t("appearance")}
+            value={darkMode ? "dark" : "light"}
+            onChange={(value) => {
+              if ((value === "dark") !== darkMode) onToggleTheme();
+            }}
+            options={[
+              {
+                value: "light",
+                label: t("theme_light"),
+                icon: <Sun size={16} />,
+              },
+              { value: "dark", label: t("theme_dark"), icon: <Moon size={16} /> },
+            ]}
+          />
+        </section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-fg-soft">{t("language")}</h2>
-        <Segmented
-          label={t("language")}
-          value={language}
-          onChange={(value) => onLanguageChange(value as AppLanguage)}
-          options={[
-            { value: "en", label: "English" },
-            { value: "fa", label: "فارسی" },
-            { value: "ar", label: "العربية" },
-          ]}
-        />
-      </section>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-fg-soft">{t("language")}</h2>
+          <Segmented
+            label={t("language")}
+            value={language}
+            onChange={(value) => onLanguageChange(value as AppLanguage)}
+            options={[
+              { value: "en", label: "English" },
+              { value: "fa", label: "فارسی" },
+              { value: "ar", label: "العربية" },
+            ]}
+          />
+        </section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-fg-soft">
-          {t("transcription")}
-        </h2>
-        <ApiKeyPanel notify={notify} />
-        <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
-      </section>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-fg-soft">
+            {t("transcription")}
+          </h2>
+          <ApiKeyPanel notify={notify} />
+          <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
+        </section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-fg-soft">
-          {t("bundled_tools")}
-        </h2>
-        <div className="flex flex-col divide-y divide-line rounded-lg border border-line bg-surface">
-          {(["ytdlp", "ffmpeg", "ffprobe"] as const).map((tool) => {
-            // Three states, not two. Defaulting the unknown one to false meant
-            // every tool flashed a red "not installed" before the answer
-            // arrived -- a claim the app had not checked yet.
-            const ok = tools ? tools[tool] : null;
-            return (
-              <div key={tool} className="flex items-center gap-2 px-3 py-2.5">
-                <span
-                  className="min-w-0 flex-1 truncate text-base text-fg"
-                  dir="ltr"
-                >
-                  {tool === "ytdlp" ? "yt-dlp" : tool}
-                  {tool === "ytdlp" && tools?.ytdlpVersion && (
-                    <span className="ms-2 text-xs text-fg-muted tnum">
-                      {tools.ytdlpVersion}
-                    </span>
-                  )}
-                </span>
-                {tool === "ytdlp" && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={updating}
-                    onClick={() => void updateYtdlp()}
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-fg-soft">
+            {t("bundled_tools")}
+          </h2>
+          <div className="flex flex-col divide-y divide-line rounded-lg border border-line bg-surface">
+            {(["ytdlp", "ffmpeg", "ffprobe"] as const).map((tool) => {
+              // Three states, not two. Defaulting the unknown one to false meant
+              // every tool flashed a red "not installed" before the answer
+              // arrived -- a claim the app had not checked yet.
+              const ok = tools ? tools[tool] : null;
+              return (
+                <div key={tool} className="flex items-center gap-2 px-3 py-2">
+                  <span
+                    className="min-w-0 flex-1 truncate text-sm text-fg"
+                    dir="ltr"
                   >
-                    {updating ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <RefreshCw size={14} />
+                    {tool === "ytdlp" ? "yt-dlp" : tool}
+                    {tool === "ytdlp" && tools?.ytdlpVersion && (
+                      <span className="ms-2 text-xs text-fg-muted tnum">
+                        {tools.ytdlpVersion}
+                      </span>
                     )}
-                    {t("check_for_updates")}
-                  </Button>
-                )}
-                <span
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 text-sm",
-                    ok === null
-                      ? "text-fg-muted"
-                      : ok
-                        ? "text-success"
-                        : "text-danger",
+                  </span>
+                  {tool === "ytdlp" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={updating}
+                      onClick={() => void updateYtdlp()}
+                    >
+                      {updating ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <RefreshCw size={14} />
+                      )}
+                      {t("check_for_updates")}
+                    </Button>
                   )}
-                >
-                  {ok === null ? (
-                    <>
-                      <Loader2 size={15} className="animate-spin" />
-                      {t("tool_checking")}
-                    </>
-                  ) : ok ? (
-                    <>
-                      <CheckCircle2 size={15} />
-                      {t("tool_ready")}
-                    </>
-                  ) : (
-                    <>
-                      <XCircle size={15} />
-                      {t("tool_missing")}
-                    </>
-                  )}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        <p className="text-xs text-fg-muted">{t("tools_bundled_note")}</p>
-        <p className="text-xs text-fg-muted">{t("ytdlp_update_note")}</p>
-      </section>
+                  <span
+                    className={cn(
+                      "flex shrink-0 items-center gap-1.5 text-sm",
+                      ok === null
+                        ? "text-fg-muted"
+                        : ok
+                          ? "text-success"
+                          : "text-danger",
+                    )}
+                  >
+                    {ok === null ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" />
+                        {t("tool_checking")}
+                      </>
+                    ) : ok ? (
+                      <>
+                        <CheckCircle2 size={15} />
+                        {t("tool_ready")}
+                      </>
+                    ) : (
+                      <>
+                        <XCircle size={15} />
+                        {t("tool_missing")}
+                      </>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs text-fg-muted">{t("tools_bundled_note")}</p>
+          <p className="text-xs text-fg-muted">{t("ytdlp_update_note")}</p>
+        </section>
+      </FormCard>
     </div>
   );
 }

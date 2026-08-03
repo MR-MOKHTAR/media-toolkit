@@ -118,6 +118,9 @@
   --duration-base: 200ms;
 
   --shadow-panel: 0 18px 55px rgba(31, 43, 68, 0.16);
+  /* The form card. Far lighter than the panel shadow above: a card that sits
+     in the middle of the canvas needs to lift off it, not float over it. */
+  --shadow-card: 0 10px 30px rgba(31, 43, 68, 0.07);
 }
 
 /* Dark is a token override, not a second stylesheet. `data-theme` wins in
@@ -151,6 +154,7 @@
     --color-media-audio: #a68bfa;
 
     --shadow-panel: 0 22px 70px rgba(0, 0, 0, 0.5);
+    --shadow-card: 0 12px 34px rgba(0, 0, 0, 0.32);
   }
 }
 

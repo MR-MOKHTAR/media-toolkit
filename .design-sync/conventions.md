@@ -39,7 +39,7 @@ exactly the vocabulary below.** Off-palette classes (`bg-blue-500`,
 | Semantic | `text-success`, `text-danger`, `text-warning`, `text-media-audio` (audio only) |
 | Type | `text-xs` 12 · `text-sm` 13 · `text-base` 14 (body **and every control**) · `text-lg` 16 · `text-xl` 20 · `text-2xl` 24 |
 | Radius | `rounded-sm` 6 (chips, inputs) · `rounded-md` 10 (buttons, rows) · `rounded-lg` 16 (cards) · `rounded-xl` 24 |
-| Elevation | `shadow-(--shadow-panel)` — the only shadow |
+| Elevation | `shadow-(--shadow-panel)` (panels that float over the app) · `shadow-(--shadow-card)` (the form card) — there are no others |
 | Motion | `duration-[--duration-fast]` 120ms · `duration-[--duration-base]` 200ms |
 | Helper | `tnum` — tabular numerals; use on **every** number that counts or measures |
 

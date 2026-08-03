@@ -99,9 +99,9 @@ export function DownloadScreen({ isOnline, notify }: Props) {
     <ToolShell subtitle={t("tool_download_about")}>
       <div className="relative">
         <Link2
-          size={17}
-          className="pointer-events-none absolute inset-inline-start-3 top-1/2 -translate-y-1/2 text-fg-muted"
-          style={{ insetInlineStart: "0.75rem" }}
+          size={15}
+          className="pointer-events-none absolute top-1/2 -translate-y-1/2 text-fg-muted"
+          style={{ insetInlineStart: "0.625rem" }}
         />
         <TextInput
           ref={inputRef}
@@ -112,20 +112,20 @@ export function DownloadScreen({ isOnline, notify }: Props) {
           placeholder={t("url_placeholder")}
           // Always LTR: a URL reads left to right in every language.
           dir="ltr"
-          className="h-11 ps-10"
+          className="ps-8"
         />
       </div>
 
       {(info || probing) && (
-        <div className="flex items-center gap-3 rounded-lg border border-line bg-surface p-3">
+        <div className="flex items-center gap-2.5 rounded-lg border border-line bg-surface p-2.5">
           {info?.thumbnail ? (
             <img
               src={info.thumbnail}
               alt=""
-              className="h-12 w-20 shrink-0 rounded-sm object-cover"
+              className="h-10 w-16 shrink-0 rounded-sm object-cover"
             />
           ) : (
-            <div className="h-12 w-20 shrink-0 animate-pulse rounded-sm bg-surface-soft" />
+            <div className="h-10 w-16 shrink-0 animate-pulse rounded-sm bg-surface-soft" />
           )}
           <div className="min-w-0 flex-1">
             {probing && !info ? (
@@ -135,7 +135,7 @@ export function DownloadScreen({ isOnline, notify }: Props) {
               </div>
             ) : (
               <>
-                <p className="truncate text-base text-fg" title={info?.title}>
+                <p className="truncate text-sm text-fg" title={info?.title}>
                   {info?.title}
                 </p>
                 <p className="truncate text-xs text-fg-muted">
@@ -152,13 +152,13 @@ export function DownloadScreen({ isOnline, notify }: Props) {
       <div className="grid grid-cols-2 gap-2">
         <TypeCard
           selected={mediaType === "video"}
-          icon={<Video size={19} />}
+          icon={<Video size={17} />}
           label={t("download_type_video")}
           onSelect={() => setMediaType("video")}
         />
         <TypeCard
           selected={mediaType === "audio"}
-          icon={<Music2 size={19} />}
+          icon={<Music2 size={17} />}
           label={t("download_type_audio")}
           onSelect={() => setMediaType("audio")}
         />
@@ -182,7 +182,7 @@ export function DownloadScreen({ isOnline, notify }: Props) {
           }))}
         />
       ) : (
-        <p className="rounded-md border border-line bg-surface px-3 py-2.5 text-center text-base text-fg-soft">
+        <p className="rounded-md border border-line bg-surface px-3 py-2 text-center text-sm text-fg-soft">
           {t("audio_quality_note")}
         </p>
       )}
@@ -218,12 +218,12 @@ function TypeCard({
       variant="secondary"
       onClick={onSelect}
       className={cn(
-        "h-auto flex-col gap-2 py-4",
+        "h-auto flex-col gap-1.5 py-3",
         selected && "border-accent-line bg-accent-soft text-accent",
       )}
     >
       {icon}
-      <span className={cn("text-base", selected && "font-medium")}>
+      <span className={cn("text-sm", selected && "font-medium")}>
         {label}
       </span>
     </Button>

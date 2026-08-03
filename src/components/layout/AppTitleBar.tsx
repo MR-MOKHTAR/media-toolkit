@@ -3,6 +3,7 @@ import { Minus, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { IconButton } from "../ui/Button";
+import { AppIdentity } from "./AppIdentity";
 
 interface AppTitleBarProps {
   isMaximized: boolean;
@@ -60,15 +61,11 @@ export function AppTitleBar({
           swallow clicks on the buttons inside it. */}
       <div
         data-tauri-drag-region
-        className="drag-region flex h-full flex-1 items-center px-2 text-sm font-medium text-fg-soft"
+        className="drag-region flex h-full min-w-0 flex-1 items-center px-2"
       >
-        {/* auto: the name is Persian or Arabic in two of the three languages
-            and has to shape in its own direction whatever the header's is. */}
-        {showTitle && (
-          <span data-tauri-drag-region dir="auto" className="truncate">
-            {t("app_name")}
-          </span>
-        )}
+        {/* The same component the sidebar's top row draws, so the name and icon
+            are identical either side of a collapse -- see AppIdentity. */}
+        {showTitle && <AppIdentity />}
       </div>
 
       <div className="no-drag ms-1 flex items-center">

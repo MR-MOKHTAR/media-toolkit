@@ -6,6 +6,7 @@ export function Default() {
   return (
     <div className="w-full">
       <AppTitleBar
+        showTitle
         isMaximized={false}
         onMinimize={noop}
         onToggleMaximize={noop}
@@ -23,6 +24,7 @@ export function AboveContent() {
   return (
     <div className="flex w-full flex-col bg-canvas">
       <AppTitleBar
+        showTitle
         isMaximized={false}
         onMinimize={noop}
         onToggleMaximize={noop}
