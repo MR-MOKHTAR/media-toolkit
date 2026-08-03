@@ -34,7 +34,11 @@ export function TrimScreen({ initialFile, notify }: Props) {
   }, [file.info]);
 
   const ready = Boolean(
-    file.path && file.info && range.end > range.start && job.outputDir && !job.busy,
+    file.path &&
+    file.info &&
+    range.end > range.start &&
+    job.outputDir &&
+    !job.busy,
   );
 
   // Mirrors what the backend picks (media/ops.rs): a stream copy keeps the
@@ -42,7 +46,7 @@ export function TrimScreen({ initialFile, notify }: Props) {
   const outputExt = exact ? "mp4" : (extensionOf(file.path ?? "") ?? "mp4");
 
   return (
-    <ToolShell title={t("tool_trim")} subtitle={t("tool_trim_about")}>
+    <ToolShell subtitle={t("tool_trim_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -82,7 +86,10 @@ export function TrimScreen({ initialFile, notify }: Props) {
         </>
       )}
 
-      <OutputFolderRow folder={job.outputDir} onChoose={() => void job.chooseFolder()} />
+      <OutputFolderRow
+        folder={job.outputDir}
+        onChoose={() => void job.chooseFolder()}
+      />
 
       <RunButton
         label={t("tool_trim")}

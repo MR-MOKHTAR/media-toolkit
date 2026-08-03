@@ -34,7 +34,9 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
   const file = useMediaFile(initialFile);
   const job = useMediaJob("compress", "start_compress", notify);
   const [preset, setPreset] = useState<Preset>("balanced");
-  const [estimates, setEstimates] = useState<Partial<Record<Preset, number>>>({});
+  const [estimates, setEstimates] = useState<Partial<Record<Preset, number>>>(
+    {},
+  );
   const isDragging = useDragDropState(file.acceptDrop);
 
   useEffect(() => job.followInput(file.path), [file.path]);
@@ -74,7 +76,7 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
   const ready = Boolean(file.path && isMedia && job.outputDir && !job.busy);
 
   return (
-    <ToolShell title={t("tool_compress")} subtitle={t("tool_compress_about")}>
+    <ToolShell subtitle={t("tool_compress_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -93,24 +95,33 @@ export function CompressScreen({ initialFile, language, notify }: Props) {
             label={t("compress_quality")}
             value={preset}
             onChange={setPreset}
-            options={(["small", "balanced", "high"] as Preset[]).map((value) => ({
-              value,
-              label: t(`compress_${value}`),
-              hint: estimates[value]
-                ? `≈ ${formatBytes(estimates[value], language)}`
-                : undefined,
-            }))}
+            options={(["small", "balanced", "high"] as Preset[]).map(
+              (value) => ({
+                value,
+                label: t(`compress_${value}`),
+                hint: estimates[value]
+                  ? `≈ ${formatBytes(estimates[value], language)}`
+                  : undefined,
+              }),
+            )}
           />
           <p className="-mt-2 text-xs text-fg-muted">
-            {t("compress_was", { size: formatBytes(file.info.sizeBytes, language) })}
+            {t("compress_was", {
+              size: formatBytes(file.info.sizeBytes, language),
+            })}
           </p>
           {isAudioOnly && (
-            <p className="-mt-1 text-xs text-fg-muted">{t("compress_audio_note")}</p>
+            <p className="-mt-1 text-xs text-fg-muted">
+              {t("compress_audio_note")}
+            </p>
           )}
         </>
       )}
 
-      <OutputFolderRow folder={job.outputDir} onChoose={() => void job.chooseFolder()} />
+      <OutputFolderRow
+        folder={job.outputDir}
+        onChoose={() => void job.chooseFolder()}
+      />
 
       <RunButton
         label={t("tool_compress")}

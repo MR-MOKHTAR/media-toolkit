@@ -21,10 +21,16 @@ const VARIANTS: Record<Variant, string> = {
   danger: "text-danger hover:bg-danger/10",
 };
 
+/** Three heights, 8px apart, and one type size across all of them.
+ *
+ *  `lg` used to be 44px with 15px text -- a touch target on a mouse-driven
+ *  desktop window, and next to a 40px input it read as a banner rather than a
+ *  button. 40/36/32 keeps the run button clearly the largest control in a form
+ *  without it being the loudest thing on the screen. */
 const SIZES: Record<Size, string> = {
   sm: "h-8 px-3 text-sm gap-1.5 rounded-sm",
-  md: "h-9 px-4 text-base gap-2 rounded-md",
-  lg: "h-11 px-6 text-base gap-2 rounded-md font-medium",
+  md: "h-9 px-4 text-sm gap-2 rounded-md",
+  lg: "h-10 px-5 text-sm gap-2 rounded-md font-medium",
 };
 
 export function Button({

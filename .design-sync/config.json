@@ -1,0 +1,37 @@
+{
+  "projectId": "70738884-00a5-40d6-84fb-5f28d846bc0d",
+  "shape": "package",
+  "pkg": "downloader",
+  "globalName": "DownloaderDS",
+  "srcDir": "src",
+  "tsconfig": "tsconfig.json",
+  "buildCmd": "node .design-sync/prepare.mjs",
+  "cssEntry": ".design-sync/generated/styles.css",
+  "docsDir": ".design-sync/docs",
+  "readmeHeader": ".design-sync/conventions.md",
+  "provider": { "component": "DesignSystemProvider" },
+  "overrides": {
+    "Toast": { "cardMode": "single", "primaryStory": "Tones", "viewport": "520x320" },
+    "Card": { "cardMode": "column" },
+    "Field": { "cardMode": "column" },
+    "ProgressBar": { "cardMode": "column" },
+    "TextInput": { "cardMode": "column" },
+    "AppSidebar": { "cardMode": "column" }
+  },
+  "componentSrcMap": {
+    "DesignSystemProvider": null,
+    "Button": "src/components/ui/Button.tsx",
+    "IconButton": "src/components/ui/Button.tsx",
+    "Card": "src/components/ui/Card.tsx",
+    "Field": "src/components/ui/Card.tsx",
+    "EmptyState": "src/components/ui/Card.tsx",
+    "ProgressBar": "src/components/ui/ProgressBar.tsx",
+    "Segmented": "src/components/ui/Segmented.tsx",
+    "TextInput": "src/components/ui/TextInput.tsx",
+    "Tooltip": "src/components/ui/Tooltip.tsx",
+    "Toast": "src/components/feedback/Toast.tsx",
+    "OfflineBanner": "src/components/feedback/OfflineBanner.tsx",
+    "AppTitleBar": "src/components/layout/AppTitleBar.tsx",
+    "AppSidebar": "src/components/layout/AppSidebar.tsx"
+  }
+}

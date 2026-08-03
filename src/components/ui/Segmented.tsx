@@ -57,7 +57,7 @@ export function Segmented<T extends string>({
             title={option.disabled ? option.disabledReason : undefined}
             onClick={() => onChange(option.value)}
             className={cn(
-              "flex flex-col items-center justify-center gap-0.5 rounded-md border px-3 py-2.5",
+              "flex flex-col items-center justify-center gap-0.5 rounded-md border px-3 py-2",
               "text-center transition-colors duration-[--duration-fast]",
               "disabled:cursor-not-allowed disabled:opacity-40",
               selected
@@ -66,7 +66,7 @@ export function Segmented<T extends string>({
             )}
           >
             {option.icon}
-            <span className={cn("text-base", selected && "font-medium")}>
+            <span className={cn("text-sm", selected && "font-medium")}>
               {option.label}
             </span>
             {(option.hint || option.disabledReason) && (

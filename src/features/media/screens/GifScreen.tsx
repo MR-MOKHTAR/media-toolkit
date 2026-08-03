@@ -36,7 +36,10 @@ export function GifScreen({ initialFile, language, notify }: Props) {
   useEffect(() => job.followInput(file.path), [file.path]);
   useEffect(() => {
     if (file.info) {
-      setRange({ start: 0, end: Math.min(MAX_SECONDS, file.info.durationSecs) });
+      setRange({
+        start: 0,
+        end: Math.min(MAX_SECONDS, file.info.durationSecs),
+      });
     }
   }, [file.info]);
 
@@ -51,7 +54,7 @@ export function GifScreen({ initialFile, language, notify }: Props) {
   );
 
   return (
-    <ToolShell title={t("tool_gif")} subtitle={t("tool_gif_about")}>
+    <ToolShell subtitle={t("tool_gif_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -88,7 +91,10 @@ export function GifScreen({ initialFile, language, notify }: Props) {
         </>
       )}
 
-      <OutputFolderRow folder={job.outputDir} onChoose={() => void job.chooseFolder()} />
+      <OutputFolderRow
+        folder={job.outputDir}
+        onChoose={() => void job.chooseFolder()}
+      />
 
       <RunButton
         label={t("tool_gif")}

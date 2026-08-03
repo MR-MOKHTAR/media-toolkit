@@ -13,13 +13,20 @@
 //!    forever -- which is how the bundled yt-dlp went three months stale while
 //!    every build reported success.
 //!
-//! Provisioning is best-effort: a network failure warns and continues, so an
-//! offline or rate-limited build still compiles. A missing binary surfaces at
-//! runtime as a clear "tool not found" error instead of a mystery spawn failure.
+//! Provisioning is best-effort by default: a network failure warns and
+//! continues, so an offline or rate-limited build still compiles. A missing
+//! binary surfaces at runtime as a clear "tool not found" error instead of a
+//! mystery spawn failure.
+//!
+//! That leniency is right for a dev machine and wrong for a release. CI sets
+//! DOWNLOADER_REQUIRE_TOOLS=1, which turns every warning below into a hard
+//! failure -- otherwise a rate-limited runner publishes an installer whose
+//! Download button cannot work, and the build reports success.
 //!
 //! Env overrides:
 //!   DOWNLOADER_FORCE_TOOL_FETCH=1  re-download everything, ignoring the manifest
 //!   DOWNLOADER_SKIP_TOOL_FETCH=1   never touch the network (airgapped dev)
+//!   DOWNLOADER_REQUIRE_TOOLS=1     fail the build if any tool is missing (CI)
 
 use std::collections::BTreeMap;
 use std::env;
@@ -38,15 +45,35 @@ fn main() {
     println!("cargo:rerun-if-changed=tools.lock.json");
     println!("cargo:rerun-if-env-changed=DOWNLOADER_FORCE_TOOL_FETCH");
     println!("cargo:rerun-if-env-changed=DOWNLOADER_SKIP_TOOL_FETCH");
+    println!("cargo:rerun-if-env-changed=DOWNLOADER_REQUIRE_TOOLS");
 
-    if let Err(error) = provision() {
-        // Never fatal. A build without the binaries still produces a working
-        // app; the tools are reported as missing in the UI instead.
-        warn(format!("tool provisioning failed: {error}"));
+    let strict = env::var_os("DOWNLOADER_REQUIRE_TOOLS").is_some();
+
+    match provision() {
+        // Not fatal by default. A build without the binaries still produces a
+        // working app; the tools are reported as missing in the UI instead.
+        Err(error) => fail_if_strict(strict, format!("tool provisioning failed: {error}")),
+        Ok(problems) if !problems.is_empty() => fail_if_strict(
+            strict,
+            format!("tools not provisioned:\n  - {}", problems.join("\n  - ")),
+        ),
+        Ok(_) => {}
     }
 
     // MUST stay last, outside every `?`. See rule 1 above.
     tauri_build::build();
+}
+
+/// Panics under DOWNLOADER_REQUIRE_TOOLS, warns otherwise.
+///
+/// The panic does skip `tauri_build::build()`, which rule 1 forbids -- but rule
+/// 1 exists to stop a *successful* build from shipping without Tauri's codegen.
+/// Here the whole build fails and no artifact exists to be wrong.
+fn fail_if_strict(strict: bool, message: String) {
+    if strict {
+        panic!("{message}\n(DOWNLOADER_REQUIRE_TOOLS is set, so this is fatal)");
+    }
+    warn(message);
 }
 
 // ---------------------------------------------------------------- lock file
@@ -108,7 +135,12 @@ struct Entry {
 
 // ------------------------------------------------------------------ provision
 
-fn provision() -> Res<()> {
+/// Returns the list of things that went wrong but were survivable: a failed
+/// download, or a tool the lock file pins for this target that is not on disk
+/// afterwards. Empty means every pinned tool is present. The caller decides
+/// whether that is fatal.
+fn provision() -> Res<Vec<String>> {
+    let mut problems = Vec::new();
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let binaries_dir = manifest_dir.join("binaries");
     fs::create_dir_all(&binaries_dir)?;
@@ -151,19 +183,26 @@ fn provision() -> Res<()> {
                 }
                 save_manifest(&binaries_dir, &manifest);
             }
-            Err(error) => warn(format!("failed to provision from {url}: {error}")),
+            Err(error) => {
+                let problem = format!("failed to provision from {url}: {error}");
+                warn(problem.clone());
+                problems.push(problem);
+            }
         }
     }
 
     for (tool, spec) in &lock.tools {
         if let Some(t) = spec.targets.get(&target) {
             if !binaries_dir.join(&t.install_as).exists() {
-                warn(format!("{tool} is MISSING -- the app will report it as unavailable"));
+                let problem =
+                    format!("{tool} is MISSING -- the app will report it as unavailable");
+                warn(problem.clone());
+                problems.push(problem);
             }
         }
     }
 
-    Ok(())
+    Ok(problems)
 }
 
 fn needs_fetch(

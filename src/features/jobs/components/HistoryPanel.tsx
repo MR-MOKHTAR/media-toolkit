@@ -5,9 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../../app/navigation";
 import { EmptyState } from "../../../components/ui/Card";
-import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
-import { formatCount } from "../../../lib/format";
 import { jobsOfKind } from "../selectors";
 import type { JobKind } from "../types";
 import { useJobs } from "../useJobs";
@@ -108,9 +106,6 @@ export function HistoryPanel({
           >
             <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
               <h2 className="flex-1 text-sm font-medium text-fg">{t("history")}</h2>
-              <span className="text-sm text-fg-muted tnum">
-                {formatCount(recent.length, language)}
-              </span>
               <button
                 type="button"
                 onClick={onClose}
@@ -159,15 +154,17 @@ export function HistoryPanel({
 }
 
 /**
- * The strip that opens it, on the edge opposite the sidebar.
+ * The button that opens it, in the title bar beside the window controls.
  *
- * It used to be a button in the breadcrumb bar's trailing slot, which no longer
- * exists. A rail rather than a floating button: it is part of the flex row, so
- * it can never sit on top of the form the way a corner button does in a 600px
- * window, and it makes the edge it lives on the permanent home of this tool's
- * history -- opened or closed, the control is in the same place.
+ * It was a full-height rail on the edge opposite the sidebar, which cost every
+ * tool 44px of form width to show one button. In the title bar it costs
+ * nothing: that row is a drag region with empty space in it either way, and the
+ * control still lives in a fixed spot rather than floating over the form.
+ *
+ * `title` rather than the styled `Tooltip`: the bubble opens inward from the
+ * trigger's inline-end side, which here is on top of the window buttons.
  */
-export function HistoryRail({
+export function HistoryToggle({
   kind,
   open,
   onToggle,
@@ -176,36 +173,32 @@ export function HistoryRail({
   open: boolean;
   onToggle: () => void;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { jobs } = useJobs();
+  // Only ever compared against zero: the count is not printed here. A number in
+  // the title bar was a second tally of what the panel's own header already
+  // says, on a row that is otherwise the window's rather than the app's.
   const count = useMemo(() => jobsOfKind(jobs, kind).length, [jobs, kind]);
 
   return (
-    <aside className="flex w-11 shrink-0 flex-col items-center border-s border-line bg-surface-soft py-2">
-      <Tooltip label={t("history")}>
-        <button
-          type="button"
-          onClick={onToggle}
-          disabled={count === 0}
-          aria-expanded={open}
-          aria-controls={PANEL_ID}
-          aria-label={t("history")}
-          className={cn(
-            "flex w-9 flex-col items-center gap-0.5 rounded-sm py-2",
-            "transition-colors duration-[--duration-fast]",
-            count === 0
-              ? "text-fg-muted opacity-40"
-              : open
-                ? "bg-accent-soft text-accent"
-                : "text-fg-muted hover:bg-surface-hover hover:text-fg",
-          )}
-        >
-          <History size={17} />
-          {/* The count is the whole reason to look here, so it stays even
-              collapsed to a rail -- it is the one thing an icon cannot say. */}
-          <span className="text-xs tnum">{formatCount(count, i18n.language)}</span>
-        </button>
-      </Tooltip>
-    </aside>
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={count === 0}
+      aria-expanded={open}
+      aria-controls={PANEL_ID}
+      aria-label={t("history")}
+      title={t("history")}
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-sm",
+        "transition-colors duration-[--duration-fast]",
+        "disabled:cursor-not-allowed disabled:opacity-45",
+        open
+          ? "bg-accent-soft text-accent"
+          : "text-fg-soft hover:bg-surface-hover hover:text-fg",
+      )}
+    >
+      <History size={16} />
+    </button>
   );
 }

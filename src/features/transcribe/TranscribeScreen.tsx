@@ -62,10 +62,11 @@ export function TranscribeScreen({ initialFile, language, isOnline, notify }: Pr
   const { t } = useTranslation();
 
   const file = useMediaFile(initialFile);
-  // Does not navigate to Tasks: this tool goes to its own result screen, which
-  // shows the same progress plus the thing Tasks cannot show -- the text.
+  // Does not open the history panel: this tool goes to its own result screen,
+  // which shows the same progress plus the thing history cannot show -- the
+  // text.
   const job = useMediaJob("transcribe", "start_transcribe", notify, {
-    navigateOnStart: false,
+    openHistoryOnStart: false,
   });
   const isDragging = useDragDropState(file.acceptDrop);
 
@@ -151,7 +152,7 @@ export function TranscribeScreen({ initialFile, language, isOnline, notify }: Pr
   );
 
   return (
-    <ToolShell title={t("tool_transcribe")} subtitle={t("tool_transcribe_about")}>
+    <ToolShell subtitle={t("tool_transcribe_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -211,8 +212,9 @@ export function TranscribeScreen({ initialFile, language, isOnline, notify }: Pr
                 value={settings.language}
                 onChange={(event) => update("language", event.target.value)}
                 className={cn(
-                  "h-10 w-full rounded-md border border-line bg-surface px-3",
-                  "text-base text-fg transition-colors duration-[--duration-fast]",
+                  // Matches TextInput exactly -- it sits in the same row as one.
+                  "h-9 w-full rounded-md border border-line bg-surface px-3",
+                  "text-sm text-fg transition-colors duration-[--duration-fast]",
                   "hover:border-line-strong focus:border-accent focus:outline-none",
                 )}
               >
