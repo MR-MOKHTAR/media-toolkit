@@ -12,26 +12,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-22.04, windows-latest]
+        include:
+          # ubuntu-24.04, not -22.04: the 22.04 image starts brownout failures
+          # on 2026-09-17 and is unsupported after 2027-04-17. The cost is glibc
+          # 2.39, so the .deb installs on Ubuntu 24.04+ / Debian 13+ and not on
+          # older ones. Building on the oldest supported image is the only lever
+          # for that, and 24.04 is now the oldest.
+          - platform: ubuntu-24.04
+            args: "--target x86_64-unknown-linux-gnu --bundles deb"
+          - platform: windows-latest
+            args: "--target x86_64-pc-windows-msvc --bundles nsis,msi"
     runs-on: ${{ matrix.platform }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
+      # libwebkit2gtk-4.1 is the Tauri v2 webview; patchelf is what the deb
+      # bundler uses to fix up the binary's rpath.
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
 
       # Cold Tauri builds are 8-15 min per platform; this is the actual cost
       # centre, not the binary downloads.
@@ -39,6 +56,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.platform }}
 
       # src-tauri/binaries is deliberately NOT cached. build.rs only re-fetches
       # when the pinned URL changes, so a warm cache would freeze yt-dlp at
@@ -47,7 +65,7 @@ jobs:
       # guarantees every release ships a current yt-dlp and ffmpeg.
 
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       # Cheap, and it runs before the 15-minute Tauri build so a locale gap
       # fails in seconds rather than at the end of a release run.
@@ -58,10 +76,31 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # yt-dlp, ffmpeg and ffprobe are downloaded by src-tauri/build.rs
+          # during this step, straight from their upstream GitHub releases.
+          # Without this the download is best-effort: a rate-limited runner
+          # would publish an installer with no downloader in it and still go
+          # green. Here a failed fetch fails the release.
+          DOWNLOADER_REQUIRE_TOOLS: "1"
+          DOWNLOADER_FORCE_TOOL_FETCH: "1"
         with:
           tagName: __VERSION__
-          releaseName: "App v__VERSION__"
+          releaseName: "Media Toolkit v__VERSION__"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.platform == 'ubuntu-22.04' && '--target x86_64-unknown-linux-gnu --bundles deb' || '' }}
+          args: ${{ matrix.args }}
+
+      # The installers are attached to the release by the step above; this is
+      # for workflow_dispatch runs, where reading a draft release to check an
+      # artifact is more friction than downloading it from the run.
+      - name: Upload installers to the workflow run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/*/release/bundle/deb/*.deb
+            src-tauri/target/*/release/bundle/nsis/*.exe
+            src-tauri/target/*/release/bundle/msi/*.msi
