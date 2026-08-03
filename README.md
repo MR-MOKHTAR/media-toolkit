@@ -24,6 +24,18 @@ installed and everything except downloading works offline.
 Jobs run concurrently and each reports its own progress. FFmpeg work is capped
 by a semaphore, so four compressions cannot make the app itself unresponsive.
 
+## Where files go
+
+Everything the app produces lands in one folder it owns —
+`~/Downloads/Media Toolkit` — sorted into `Video`, `Audio`, `Compressed`,
+`Trimmed`, `Converted`, `Resized`, `GIF`, and `Transcripts`. Nothing is written
+loose into Downloads beside your own files.
+
+Settings moves that folder, flattens it into a single directory, or switches the
+editing tools back to writing next to the file they opened. The choice is stored
+in `settings.json` next to the API key, so it survives a restart; picking a
+folder on a tool screen still overrides it for that one job.
+
 ## Languages
 
 English, Persian, and Arabic, with full RTL. Inter and Vazirmatn are bundled as
@@ -72,6 +84,7 @@ src/
   i18n/locales/   en, fa, ar
 src-tauri/src/
   binaries.rs     tool resolution: app data dir -> bundled resources -> PATH
+  library.rs      the app's storage folder and its per-tool layout
   jobs.rs         job registry, cancellation, CPU/network semaphores
   process.rs      spawn + concurrent stdout/stderr drain
   media/          probe, ffmpeg runner, and the five operations

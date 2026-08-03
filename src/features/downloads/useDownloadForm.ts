@@ -7,7 +7,7 @@
  * and the "one download at a time" guard, which existed only because the
  * backend had a single process slot.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import * as ipc from "../../lib/ipc";
@@ -19,6 +19,9 @@ import type { DownloadRequest } from "../jobs/types";
 interface Options {
   isOnline: boolean;
   notify: (type: ToastType, message: string) => void;
+  /** Video and audio land on different shelves of the library, so the save
+   *  folder tracks the toggle on the form. */
+  mediaType: "video" | "audio";
 }
 
 export interface DownloadFormValues {
@@ -28,22 +31,21 @@ export interface DownloadFormValues {
   quality: string;
 }
 
-export function useDownloadForm({ isOnline, notify }: Options) {
+export function useDownloadForm({ isOnline, notify, mediaType }: Options) {
   const { t } = useTranslation();
   const { startDownload } = useJobs();
   const [savePath, setSavePath] = useState("");
   const [toolsReady, setToolsReady] = useState(true);
+  /** Once the user has picked a folder, switching video/audio must not move it
+   *  back under them. */
+  const chosen = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [path, tools] = await Promise.all([
-          ipc.getDefaultDownloadPath(),
-          ipc.getToolStatus(),
-        ]);
+        const tools = await ipc.getToolStatus();
         if (cancelled) return;
-        setSavePath(path);
         setToolsReady(tools.ytdlp);
         if (!tools.ytdlp) notify("warning", t("ytdlp_not_found"));
       } catch (error) {
@@ -55,10 +57,29 @@ export function useDownloadForm({ isOnline, notify }: Options) {
     };
   }, [notify, t]);
 
+  // Separate from the tool check because it re-runs on the media toggle, and
+  // re-probing yt-dlp for that would be two seconds of nothing.
+  useEffect(() => {
+    if (chosen.current) return;
+    let cancelled = false;
+    void ipc
+      .getLibraryFolder(mediaType === "audio" ? "audio" : "video")
+      .then((folder) => {
+        if (!cancelled && !chosen.current) setSavePath(folder);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaType]);
+
   const selectFolder = useCallback(async () => {
     try {
       const selected = await ipc.chooseFolder(savePath);
-      if (selected) setSavePath(selected);
+      if (selected) {
+        chosen.current = true;
+        setSavePath(selected);
+      }
     } catch {
       notify("error", t("error_selecting_folder"));
     }

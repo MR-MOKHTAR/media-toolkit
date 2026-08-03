@@ -19,6 +19,7 @@ import type { ToastType } from "../../types/feedback";
 import { describe } from "../media/useMediaJob";
 import type { ToolStatus } from "../jobs/types";
 import { ApiKeyPanel } from "./ApiKeyPanel";
+import { StoragePanel } from "./StoragePanel";
 
 interface Props {
   darkMode: boolean;
@@ -111,6 +112,12 @@ export function SettingsScreen({
               { value: "ar", label: "العربية" },
             ]}
           />
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-fg-soft">{t("storage")}</h2>
+          <StoragePanel notify={notify} />
+          <p className="text-xs text-fg-muted">{t("library_note")}</p>
         </section>
 
         <section className="flex flex-col gap-2">

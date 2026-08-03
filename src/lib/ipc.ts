@@ -17,6 +17,8 @@ import type {
   DownloadRequest,
   JobProgress,
   JobStatusEvent,
+  LibraryInfo,
+  LibrarySlot,
   Quota,
   ToolStatus,
   TranscribeModel,
@@ -44,8 +46,30 @@ export const getToolStatus = () => invoke<ToolStatus>("tool_status");
  *  YouTube changes something. */
 export const updateYtdlp = () => invoke<UpdateResult>("update_ytdlp");
 
-export const getDefaultDownloadPath = () =>
-  invoke<string>("get_default_download_path");
+// ---------------------------------------------------------------- library
+//
+// Where the app's own files live. Rust owns the layout -- see `library.rs` --
+// so no screen ever builds an output path itself.
+
+/** The folder for one kind of result, created on the way out. */
+export const getLibraryFolder = (slot: LibrarySlot) =>
+  invoke<string>("library_folder", { slot });
+
+export const getLibraryInfo = () => invoke<LibraryInfo>("library_info");
+
+/** Rejects a folder the app cannot write to, so the failure lands in the
+ *  picker rather than in the first download that uses it. */
+export const setLibraryRoot = (path: string) =>
+  invoke<LibraryInfo>("set_library_root", { path });
+
+export const resetLibraryRoot = () =>
+  invoke<LibraryInfo>("reset_library_root");
+
+export const setLibraryOrganize = (enabled: boolean) =>
+  invoke<LibraryInfo>("set_library_organize", { enabled });
+
+export const setSaveNextToInput = (enabled: boolean) =>
+  invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
 export const probeUrl = (url: string) => invoke<UrlInfo>("probe_url", { url });
 

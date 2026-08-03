@@ -3,6 +3,7 @@ mod commands;
 mod download;
 mod error;
 mod jobs;
+mod library;
 mod media;
 mod paths;
 mod process;
@@ -31,6 +32,11 @@ pub fn run() {
             // between a working install and a slowly filling /tmp.
             sweep_stale_workdirs();
 
+            // The library is created here rather than on the first save, so
+            // "your files go to ~/Downloads/Media Toolkit" is true from the
+            // moment the app is installed and the folder is there to be found.
+            library::ensure_layout(app.handle());
+
             // Checking the tools means running them, and yt-dlp takes about two
             // seconds to unpack itself. Do it here, in the background, while the
             // user is still looking at the home screen -- by the time they open
@@ -46,7 +52,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::tool_status,
             commands::update_ytdlp,
-            commands::get_default_download_path,
+            library::library_info,
+            library::library_folder,
+            library::set_library_root,
+            library::reset_library_root,
+            library::set_library_organize,
+            library::set_save_next_to_input,
             commands::probe_url,
             commands::start_download,
             commands::cancel_job,

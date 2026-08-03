@@ -15,7 +15,6 @@ use crate::binaries::{self, Tool};
 use crate::download::{self, DownloadRequest, UrlInfo};
 use crate::error::{AppError, AppResult};
 use crate::jobs::{JobKind, JobSummary, Jobs};
-use crate::paths;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,11 +91,6 @@ pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateRes
     // it had done nothing.
     *status_cache().lock().await = None;
     Ok(result)
-}
-
-#[tauri::command]
-pub fn get_default_download_path(app: AppHandle) -> String {
-    paths::default_download_dir(&app)
 }
 
 #[tauri::command]

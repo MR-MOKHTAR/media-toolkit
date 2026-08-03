@@ -98,6 +98,42 @@ export interface DownloadRequest {
   quality?: string;
 }
 
+/** One shelf in the app's library folder. Mirrors `library::Slot` in Rust; a
+ *  download splits by what it produced, which is why "video" and "audio" are
+ *  here rather than a single "download". */
+export type LibrarySlot =
+  | "video"
+  | "audio"
+  | "compressed"
+  | "trimmed"
+  | "converted"
+  | "resized"
+  | "gif"
+  | "transcripts";
+
+/** Which shelf each tool writes to. Kept beside the type so adding a tool has
+ *  exactly one place to answer "where does its output go". */
+export const SLOT_FOR_KIND: Record<Exclude<JobKind, "download">, LibrarySlot> = {
+  compress: "compressed",
+  trim: "trimmed",
+  convert: "converted",
+  resize: "resized",
+  gif: "gif",
+  transcribe: "transcripts",
+};
+
+export interface LibraryInfo {
+  /** Where files are being written now. */
+  root: string;
+  /** `<Downloads>/Media Toolkit`, for the "reset" affordance. */
+  defaultRoot: string;
+  isDefault: boolean;
+  /** One subfolder per tool inside the root. */
+  organizeByTool: boolean;
+  /** Media tools default to the source file's folder instead of the library. */
+  saveNextToInput: boolean;
+}
+
 export interface UrlInfo {
   title: string;
   uploader: string | null;

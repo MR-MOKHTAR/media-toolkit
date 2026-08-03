@@ -45,13 +45,14 @@ interface Props {
 export function DownloadScreen({ isOnline, notify }: Props) {
   const { t } = useTranslation();
   const { openPanel } = useHistoryPanel();
+  const [url, setUrl] = useState("");
+  const [mediaType, setMediaType] = useState<"video" | "audio">("video");
   const { savePath, toolsReady, selectFolder, start } = useDownloadForm({
     isOnline,
     notify,
+    mediaType,
   });
 
-  const [url, setUrl] = useState("");
-  const [mediaType, setMediaType] = useState<"video" | "audio">("video");
   const [quality, setQuality] = useState<string>(DEFAULT_QUALITY);
   const [info, setInfo] = useState<UrlInfo | null>(null);
   const [probing, setProbing] = useState(false);

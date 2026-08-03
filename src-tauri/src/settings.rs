@@ -19,10 +19,38 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub groq_api_key: Option<String>,
+
+    /// Where the app keeps what it produces. `None` means the default,
+    /// `<Downloads>/Media Toolkit` -- storing the resolved path instead would
+    /// freeze a Downloads folder the user is still free to move.
+    pub library_root: Option<String>,
+
+    /// One subfolder per tool inside the root.
+    pub organize_by_tool: bool,
+
+    /// Media tools default their output to the source file's folder rather than
+    /// to the library. Off by default: keeping the app's output together is the
+    /// point of having a library at all.
+    pub save_next_to_input: bool,
+}
+
+/// Written by hand because `derive(Default)` would make `organize_by_tool`
+/// false, and `#[serde(default)]` fills every missing field from here -- so a
+/// settings file written before these fields existed would silently opt out of
+/// the layout instead of getting it.
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            groq_api_key: None,
+            library_root: None,
+            organize_by_tool: true,
+            save_next_to_input: false,
+        }
+    }
 }
 
 /// What the frontend is allowed to know. Never the key itself.
@@ -159,6 +187,7 @@ mod tests {
     fn settings_round_trip_through_json() {
         let settings = Settings {
             groq_api_key: Some("gsk_test".into()),
+            ..Default::default()
         };
         let raw = serde_json::to_string(&settings).unwrap();
         // camelCase across the boundary, matching every other serialized type.
@@ -202,5 +231,16 @@ mod tests {
         // newer build -- or an empty one -- load instead of resetting.
         let back: Settings = serde_json::from_str("{}").unwrap();
         assert!(back.groq_api_key.is_none());
+    }
+
+    /// A file written before the library existed holds only `groqApiKey`, and
+    /// that install must still get the organized layout rather than a flat
+    /// folder it never asked for.
+    #[test]
+    fn an_older_settings_file_still_gets_the_layout() {
+        let back: Settings = serde_json::from_str(r#"{"groqApiKey":"gsk_test"}"#).unwrap();
+        assert!(back.organize_by_tool, "the layout defaulted to off");
+        assert!(!back.save_next_to_input);
+        assert!(back.library_root.is_none(), "a root appeared from nowhere");
     }
 }
