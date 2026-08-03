@@ -52,14 +52,21 @@
   --font-sans: "InterVar", "Vazirmatn", system-ui, sans-serif;
 
   /* ---------------------------------------------------------- type ---
-   * The 10-11px floor is gone. Smallest allowed is 12px, and only for
-   * metadata. */
-  --text-xs: 0.75rem;      /* 12 -- timestamps, units */
-  --text-sm: 0.8125rem;    /* 13 -- labels, secondary text */
-  --text-base: 0.875rem;   /* 14 -- body and every control */
-  --text-lg: 1rem;         /* 16 -- card titles */
-  --text-xl: 1.25rem;      /* 20 -- screen titles */
-  --text-2xl: 1.5rem;      /* 24 -- the home heading */
+   * The 10-11px floor is gone. Smallest allowed is 13px, and only for
+   * metadata.
+   *
+   * One step up from the scale this replaces, which put body text at 14px and
+   * metadata at 12px. Those are web-page sizes on a page the user reads once;
+   * this is a desktop window read at arm's length, and at 14px the labels under
+   * every control were the first thing to go. Everything here is still a
+   * multiple of a pixel at the default root size, so nothing lands on a half
+   * pixel and blurs. */
+  --text-xs: 0.8125rem;    /* 13 -- timestamps, units */
+  --text-sm: 0.875rem;     /* 14 -- labels, secondary text */
+  --text-base: 0.9375rem;  /* 15 -- body and every control */
+  --text-lg: 1.0625rem;    /* 17 -- card titles */
+  --text-xl: 1.375rem;     /* 22 -- screen titles */
+  --text-2xl: 1.625rem;    /* 26 -- the home heading */
 
   /* -------------------------------------------------------- radius ---
    * Four values. Anything else is a mistake. */
@@ -174,10 +181,17 @@
   }
 
   /* Arabic script sits smaller than Latin at the same nominal size, so it
-     needs about a pixel more to match x-height. */
+     needs about a pixel more to match x-height.
+
+     16px, not the 15px this replaces. Every size in the scale above is in rem,
+     so the root font size multiplies all of them: 15px was not adding a pixel
+     to Persian and Arabic text, it was shrinking the entire UI by 6% in exactly
+     the two languages the comment meant to help. 16px is the default root size,
+     so the scale above now lands where it says it does, and Vazirmatn's
+     x-height carries the rest. */
   :root:lang(fa),
   :root:lang(ar) {
-    font-size: 15px;
+    font-size: 16px;
   }
 
   button,

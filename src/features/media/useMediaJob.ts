@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 
-import { useNavigation } from "../../app/navigation";
 import * as ipc from "../../lib/ipc";
 import { fileNameOf } from "../../lib/format";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import type { JobKind } from "../jobs/types";
+import { useHistoryPanel } from "../jobs/useHistoryPanel";
 import { useJobs } from "../jobs/useJobs";
 
 /**
@@ -22,17 +22,20 @@ export function useMediaJob(
   command: string,
   notify: (type: ToastType, message: string) => void,
   /**
-   * Whether starting the job hands the user off to Tasks.
+   * Whether starting the job opens this tool's history panel.
    *
-   * True for every tool that produces a file to open somewhere else -- there is
-   * nothing more to see on the form. Transcribe passes false: its result is
-   * text, and it shows that text in place.
+   * True for every tool that produces a file: the form has nothing more to show,
+   * and the panel is where the progress bar for what was just started appears.
+   * The screen itself stays put -- it used to navigate to Tasks instead, which
+   * threw away the loaded file and the chosen settings to show a list of every
+   * tool's work. Transcribe passes false: its result is text, and it shows that
+   * text in place.
    */
-  { navigateOnStart = true }: { navigateOnStart?: boolean } = {},
+  { openHistoryOnStart = true }: { openHistoryOnStart?: boolean } = {},
 ) {
   const { t } = useTranslation();
   const { addExternalJob } = useJobs();
-  const { go } = useNavigation();
+  const { openPanel } = useHistoryPanel();
   const [outputDir, setOutputDir] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -72,7 +75,7 @@ export function useMediaJob(
           detail,
         });
         notify("info", t("job_started"));
-        if (navigateOnStart) go({ name: "jobs" });
+        if (openHistoryOnStart) openPanel();
         return id;
       } catch (raw) {
         // The typed error carries the real reason -- an unreadable file, a
@@ -84,7 +87,16 @@ export function useMediaJob(
         setBusy(false);
       }
     },
-    [addExternalJob, command, go, kind, navigateOnStart, notify, outputDir, t],
+    [
+      addExternalJob,
+      command,
+      kind,
+      notify,
+      openHistoryOnStart,
+      openPanel,
+      outputDir,
+      t,
+    ],
   );
 
   return { outputDir, setOutputDir, followInput, chooseFolder, run, busy };

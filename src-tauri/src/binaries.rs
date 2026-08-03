@@ -196,24 +196,43 @@ pub fn command(app: &AppHandle, tool: Tool) -> AppResult<Command> {
     // path, not an edge case.
     #[cfg(target_os = "linux")]
     if matches!(tool, Tool::Ffmpeg | Tool::Ffprobe | Tool::YtDlp) {
-        if let Some(dir) = &resolved.dir {
-            let lib = dir.join("lib");
-            if lib.is_dir() {
-                let value = match std::env::var_os("LD_LIBRARY_PATH") {
-                    Some(existing) => {
-                        let mut paths = vec![lib];
-                        paths.extend(std::env::split_paths(&existing));
-                        std::env::join_paths(paths)
-                            .map_err(|e| AppError::spawn(tool.name(), e))?
-                    }
-                    None => lib.into_os_string(),
-                };
-                cmd.env("LD_LIBRARY_PATH", value);
-            }
+        if let Some(lib) = lib_dir_for(app, &resolved) {
+            let value = match std::env::var_os("LD_LIBRARY_PATH") {
+                Some(existing) => {
+                    let mut paths = vec![lib];
+                    paths.extend(std::env::split_paths(&existing));
+                    std::env::join_paths(paths).map_err(|e| AppError::spawn(tool.name(), e))?
+                }
+                None => lib.into_os_string(),
+            };
+            cmd.env("LD_LIBRARY_PATH", value);
         }
     }
 
     Ok(cmd)
+}
+
+/// Where the ffmpeg shared libraries live, for a tool that is about to run.
+///
+/// Not simply `resolved.dir.join("lib")`. That is right for ffmpeg and ffprobe,
+/// which sit beside the `lib` folder they need, and wrong for yt-dlp the moment
+/// the in-app updater has run: the fresher yt-dlp lands in the app data dir,
+/// which holds one file and no `lib`, so the search path was left unset and the
+/// ffmpeg yt-dlp spawns died on `libavdevice.so`. yt-dlp reads that as "ffmpeg
+/// is not installed", drops to a warning, and leaves the video and audio
+/// streams beside each other as two unplayable files -- silently, exit code 0.
+///
+/// So the answer comes from wherever ffmpeg itself was found, with the tool's
+/// own directory tried first for the case where ffprobe and ffmpeg are not
+/// installed together.
+#[cfg(target_os = "linux")]
+fn lib_dir_for(app: &AppHandle, resolved: &Resolved) -> Option<PathBuf> {
+    let own = resolved.dir.as_ref().map(|dir| dir.join("lib"));
+    if let Some(lib) = own.filter(|lib| lib.is_dir()) {
+        return Some(lib);
+    }
+    let lib = resolve(app, Tool::Ffmpeg).ok()?.dir?.join("lib");
+    lib.is_dir().then_some(lib)
 }
 
 /// Unix only. A resource unpacked by an installer can land without the execute

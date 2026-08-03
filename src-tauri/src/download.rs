@@ -175,8 +175,14 @@ pub async fn run(
 
     // yt-dlp shells out to ffmpeg to merge and to transcode audio. Point it at
     // the copy we bundle so it never depends on a system install.
+    //
+    // Only when there is a real directory to point at. A system ffmpeg found on
+    // PATH resolves to the bare name "ffmpeg", whose parent is the empty path --
+    // and yt-dlp answers `--ffmpeg-location ""` with "does not exist! Continuing
+    // without ffmpeg", which is worse than saying nothing and letting it search
+    // PATH itself.
     if let Ok(ffmpeg) = binaries::resolve(&app, Tool::Ffmpeg) {
-        if let Some(parent) = ffmpeg.path.parent() {
+        if let Some(parent) = ffmpeg.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             args.push("--ffmpeg-location".into());
             args.push(parent.to_string_lossy().into_owned());
         }
@@ -197,6 +203,8 @@ pub async fn run(
     let mut tail = StderrTail::default();
     let mut final_path: Option<PathBuf> = None;
     let mut stage = Stage::Downloading;
+    // See `merge_was_skipped`.
+    let mut unmerged = false;
 
     while let Some(line) = lines.recv().await {
         match line {
@@ -212,6 +220,7 @@ pub async fn run(
                 }
             }
             Line::Stderr(line) => {
+                unmerged |= merge_was_skipped(&line);
                 // yt-dlp reports merging on stderr, and it is the one phase
                 // that can sit at 100% for a long time on a large video.
                 if line.contains("[Merger]") || line.contains("Merging formats") {
@@ -244,6 +253,25 @@ pub async fn run(
         .wait()
         .await
         .map_err(|error| AppError::spawn(Tool::YtDlp.name(), error))?;
+
+    // Zero exit, no usable file: see `merge_was_skipped`. Reported as the
+    // missing tool it is, which is the one thing the user can act on -- the UI
+    // turns `ToolMissing` into a pointer at Settings. The two streams are left
+    // where they are rather than cleaned up: they downloaded completely, and
+    // guessing which of them is the "partial" one would delete half a video.
+    if status.success() && unmerged {
+        let error = AppError::tool_missing(Tool::Ffmpeg.name());
+        jobs.clear_partial_output(&id).await;
+        jobs.finish(&id).await;
+        emitters.status(
+            &id,
+            JobKind::Download,
+            JobStatus::Failed {
+                error: error.clone(),
+            },
+        );
+        return Err(error);
+    }
 
     if !status.success() {
         cleanup_partial(jobs, &id).await;
@@ -282,6 +310,20 @@ pub async fn run(
         },
     );
     Ok(())
+}
+
+/// Whether yt-dlp has just told us it is giving up on merging.
+///
+/// On YouTube the video and audio streams arrive separately and are joined by
+/// ffmpeg at the end. When ffmpeg cannot be run, yt-dlp does not fail: it
+/// prints this warning, keeps both streams as `name.f399.mp4` and
+/// `name.f251.webm`, and exits zero -- so the job reported success and left two
+/// files that neither play together nor on their own.
+///
+/// Matched on the half of the sentence that is stable across yt-dlp versions
+/// and shared with the post-processing variant of the same message.
+fn merge_was_skipped(line: &str) -> bool {
+    line.contains("ffmpeg is not installed") || line.contains("ffmpeg could not be found")
 }
 
 async fn cleanup_partial(jobs: &Jobs, id: &str) {
@@ -420,6 +462,18 @@ mod tests {
     fn best_needs_no_height_filter() {
         assert_eq!(format_selector(Some("best")), "bestvideo+bestaudio/best");
         assert_eq!(format_selector(None), "bestvideo+bestaudio/best");
+    }
+
+    #[test]
+    fn spots_the_warning_that_leaves_two_files_behind() {
+        // Verbatim from yt-dlp. It exits 0 after printing this, which is why it
+        // has to be recognised rather than left to the exit code.
+        assert!(merge_was_skipped(
+            "WARNING: You have requested merging of multiple formats but ffmpeg is not installed. \
+             The formats won't be merged."
+        ));
+        assert!(!merge_was_skipped("[Merger] Merging formats into \"a.mp4\""));
+        assert!(!merge_was_skipped("[download] 100% of 12.00MiB"));
     }
 
     #[test]

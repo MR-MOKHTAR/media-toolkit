@@ -40,11 +40,15 @@ export function ResizeScreen({ initialFile, notify }: Props) {
   }, [sourceHeight, height]);
 
   const ready = Boolean(
-    file.path && file.info?.video && height < sourceHeight && job.outputDir && !job.busy,
+    file.path &&
+    file.info?.video &&
+    height < sourceHeight &&
+    job.outputDir &&
+    !job.busy,
   );
 
   return (
-    <ToolShell title={t("tool_resize")} subtitle={t("tool_resize_about")}>
+    <ToolShell subtitle={t("tool_resize_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -66,12 +70,16 @@ export function ResizeScreen({ initialFile, notify }: Props) {
             value: String(value),
             label: `${value}p`,
             disabled: value >= sourceHeight,
-            disabledReason: value >= sourceHeight ? t("already_smaller") : undefined,
+            disabledReason:
+              value >= sourceHeight ? t("already_smaller") : undefined,
           }))}
         />
       )}
 
-      <OutputFolderRow folder={job.outputDir} onChoose={() => void job.chooseFolder()} />
+      <OutputFolderRow
+        folder={job.outputDir}
+        onChoose={() => void job.chooseFolder()}
+      />
 
       <RunButton
         label={t("tool_resize")}

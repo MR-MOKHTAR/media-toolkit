@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preview harness</title>
+    <script>
+      // Temporary screenshot harness. Stubs the Tauri bridge and seeds history.
+      window.__TAURI_INTERNALS__ = {
+        transformCallback(callback) {
+          const id = Math.floor(Math.random() * 1e9);
+          window[`_${id}`] = callback;
+          return id;
+        },
+        convertFileSrc: (p) => p,
+        metadata: {
+          currentWindow: { label: "main" },
+          currentWebview: { windowLabel: "main", label: "main" },
+        },
+        plugins: { path: { sep: "/", delimiter: ":" } },
+        async invoke(cmd) {
+          if (cmd === "plugin:event|listen") return 1;
+          if (cmd === "plugin:event|unlisten") return null;
+          if (cmd === "tool_status") return { ytdlp: true, ffmpeg: true, ytdlpVersion: "1", ffmpegVersion: "1" };
+          if (cmd === "get_default_download_path") return "/home/user/Downloads";
+          if (cmd === "running_jobs" || cmd === "active_jobs") return [];
+          return null;
+        },
+      };
+
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+
+      const now = Date.now();
+      const jobs = [
+        ["a", "download", "Big Buck Bunny 1080p", "https://youtube.com/watch?v=x", "completed"],
+        ["b", "compress", "holiday-clip.mp4", "/home/user/holiday-clip.mp4", "completed"],
+        ["c", "convert", "interview.wav", "/home/user/interview.wav", "failed"],
+        ["d", "trim", "lecture-part-2.mkv", "/home/user/lecture-part-2.mkv", "cancelled"],
+      ];
+      const byId = {};
+      const order = [];
+      jobs.forEach(([id, kind, title, source, state], i) => {
+        byId[id] = {
+          id, kind, title, source, state,
+          stage: "finalizing",
+          percent: state === "completed" ? 100 : null,
+          createdAt: now - i * 600000,
+          endedAt: now - i * 600000 + 60000,
+          outputPath: state === "completed" ? `/home/user/out-${id}.mp4` : undefined,
+          detail: "1080p",
+        };
+        order.push(id);
+      });
+      localStorage.setItem("media-toolkit-jobs-v3", JSON.stringify({ byId, order }));
+
+      const params = new URLSearchParams(location.search);
+      if (params.get("sidebar")) localStorage.setItem("downloader-sidebar", params.get("sidebar"));
+      if (params.get("lang")) localStorage.setItem("downloader-language", params.get("lang"));
+
+      // Click a nav row once the app has mounted, so a headless screenshot can
+      // land on a screen other than the default one.
+      const hover = params.get("hover");
+      if (hover) {
+        window.addEventListener("load", () => {
+          setTimeout(() => {
+            const hit = [...document.querySelectorAll("nav button")].find(
+              (b) => (b.getAttribute("aria-label") || "").toLowerCase() === hover.toLowerCase(),
+            );
+            if (hit) {
+              hit.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+              hit.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+            }
+            const rail = document.querySelector("nav > div:nth-child(2)");
+            if (rail) console.log("RAIL overflow:", rail.scrollWidth, rail.clientWidth, rail.scrollHeight, rail.clientHeight);
+          }, 900);
+        });
+      }
+
+      const nav = params.get("nav");
+      if (nav) {
+        window.addEventListener("load", () => {
+          setTimeout(() => {
+            const buttons = [...document.querySelectorAll("nav button")];
+            const hit = buttons.find((b) => (b.getAttribute("aria-label") || "").toLowerCase() === nav.toLowerCase());
+            if (hit) hit.click();
+            else console.log("NAV MISS:", buttons.map((b) => b.getAttribute("aria-label")).join(" | "));
+          }, 600);
+        });
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

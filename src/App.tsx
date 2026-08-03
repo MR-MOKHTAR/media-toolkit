@@ -1,5 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
-
 import { NavigationProvider, useNavigation } from "./app/navigation";
 import { AppSidebar } from "./components/layout/AppSidebar";
 import { AppTitleBar } from "./components/layout/AppTitleBar";
@@ -7,8 +5,14 @@ import { OfflineBanner } from "./components/feedback/OfflineBanner";
 import { Toast } from "./components/feedback/Toast";
 import { DownloadScreen } from "./features/downloads/DownloadScreen";
 import { JobsScreen } from "./features/jobs/JobsScreen";
-import { HistoryPanel, HistoryRail } from "./features/jobs/components/HistoryPanel";
-import type { JobKind } from "./features/jobs/types";
+import {
+  HistoryPanel,
+  HistoryToggle,
+} from "./features/jobs/components/HistoryPanel";
+import {
+  HistoryPanelProvider,
+  useHistoryPanel,
+} from "./features/jobs/useHistoryPanel";
 import { JobsProvider } from "./features/jobs/useJobs";
 import { CompressScreen } from "./features/media/screens/CompressScreen";
 import { ConvertScreen } from "./features/media/screens/ConvertScreen";
@@ -21,57 +25,63 @@ import { TranscribeScreen } from "./features/transcribe/TranscribeScreen";
 import { TranscriptScreen } from "./features/transcribe/TranscriptScreen";
 import { useAppPreferences } from "./hooks/useAppPreferences";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
+import { useSidebarCollapsed } from "./hooks/useSidebarCollapsed";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
-/** The seven screens that run jobs. `JobKind` and these route names are the
- *  same seven strings by construction, so this Set is the entire mapping. */
-const HISTORY_ROUTES = new Set<string>([
-  "download",
-  "compress",
-  "trim",
-  "convert",
-  "resize",
-  "gif",
-  "transcribe",
-]);
-
 function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
   const { route } = useNavigation();
-  const { darkMode, toggleDarkMode, language, setLanguage } = useAppPreferences();
+  const { darkMode, toggleDarkMode, language, setLanguage } =
+    useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
   const isRtl = language === "fa" || language === "ar";
+  // Read here rather than inside the sidebar, because the title bar needs the
+  // same answer: it prints the app name only when the sidebar is too narrow to.
+  const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed();
 
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const historyKind = HISTORY_ROUTES.has(route.name) ? (route.name as JobKind) : null;
-  const closeHistory = useCallback(() => setHistoryOpen(false), []);
-
-  // Arriving at a fresh tool with a panel already open would be a surprise, and
-  // the history shown would be for a different tool entirely.
-  useEffect(() => setHistoryOpen(false), [route.name]);
+  const {
+    kind: historyKind,
+    open: historyOpen,
+    close: closeHistory,
+    toggle: toggleHistory,
+  } = useHistoryPanel();
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-canvas">
-      <AppTitleBar
-        isMaximized={isMaximized}
-        onMinimize={minimize}
-        onToggleMaximize={toggleMaximize}
-        onClose={close}
-      />
+    // One row for the whole window, sidebar first. It is the outermost element
+    // rather than a row under the title bar, which is what gives the sidebar
+    // the full window height: the title bar is now inside the column beside it
+    // and starts where the sidebar ends. Having no `dir` of its own, the
+    // sidebar still takes the leading edge in both writing directions.
+    <div className="flex h-full overflow-hidden bg-canvas">
+      <AppSidebar isRtl={isRtl} collapsed={collapsed} onToggle={toggleSidebar} />
 
-      <OfflineBanner isOnline={isOnline} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <AppTitleBar
+          showTitle={collapsed}
+          isMaximized={isMaximized}
+          onMinimize={minimize}
+          onToggleMaximize={toggleMaximize}
+          onClose={close}
+          // History sits with the window controls now instead of on a rail of
+          // its own: it is one button per screen that has one, and the rail
+          // spent 44px of every tool's width saying so.
+          actions={
+            historyKind && (
+              <HistoryToggle
+                kind={historyKind}
+                open={historyOpen}
+                onToggle={toggleHistory}
+              />
+            )
+          }
+        />
 
-      {/* Sidebar, screen, history: one row for the whole app below the title
-          bar. The sidebar is first with no `dir` of its own, so it takes the
-          leading edge and the history rail takes the opposite one, in both
-          writing directions. */}
-      <div className="flex min-h-0 flex-1">
-        <AppSidebar isRtl={isRtl} />
+        <OfflineBanner isOnline={isOnline} />
 
-        {/* `relative` belongs to this column, not the row: it is what the
+        {/* `relative` belongs to this row, not the column: it is what the
             history panel's overlay mode positions against, and anchoring it
-            here keeps the overlay off the sidebar. */}
+            here keeps the overlay off the title bar. */}
         <div className="relative flex min-h-0 flex-1">
           {/* The screens' scroll container. They size themselves inside it, so a
               document-level horizontal scrollbar cannot happen -- the old table had
@@ -92,7 +102,11 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
               />
             )}
             {route.name === "compress" && (
-              <CompressScreen initialFile={route.file} language={language} notify={notify} />
+              <CompressScreen
+                initialFile={route.file}
+                language={language}
+                notify={notify}
+              />
             )}
             {route.name === "trim" && (
               <TrimScreen initialFile={route.file} notify={notify} />
@@ -104,7 +118,11 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
               <ResizeScreen initialFile={route.file} notify={notify} />
             )}
             {route.name === "gif" && (
-              <GifScreen initialFile={route.file} language={language} notify={notify} />
+              <GifScreen
+                initialFile={route.file}
+                language={language}
+                notify={notify}
+              />
             )}
             {route.name === "transcribe" && (
               <TranscribeScreen
@@ -129,23 +147,15 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
             )}
           </main>
 
-          {/* Panel before rail, so that when it docks at xl it lands between
-              the screen and the rail -- the rail stays the outermost edge
-              whether the history is open or shut. */}
+          {/* Last in the row, so docked at xl it takes the edge opposite the
+              sidebar -- the same side it slides in from below that width. */}
           {historyKind && (
-            <>
-              <HistoryPanel
-                kind={historyKind}
-                open={historyOpen}
-                onClose={closeHistory}
-                isRtl={isRtl}
-              />
-              <HistoryRail
-                kind={historyKind}
-                open={historyOpen}
-                onToggle={() => setHistoryOpen((current) => !current)}
-              />
-            </>
+            <HistoryPanel
+              kind={historyKind}
+              open={historyOpen}
+              onClose={closeHistory}
+              isRtl={isRtl}
+            />
           )}
         </div>
       </div>
@@ -165,9 +175,14 @@ export default function App() {
   return (
     <JobsProvider notify={toast.notify}>
       <NavigationProvider>
-        <DragDropProvider>
-          <Shell {...toast} />
-        </DragDropProvider>
+        {/* Inside NavigationProvider: the panel belongs to whichever tool the
+            route is on, and closes itself when that changes. Above the screens,
+            because starting a job is what opens it. */}
+        <HistoryPanelProvider>
+          <DragDropProvider>
+            <Shell {...toast} />
+          </DragDropProvider>
+        </HistoryPanelProvider>
       </NavigationProvider>
     </JobsProvider>
   );

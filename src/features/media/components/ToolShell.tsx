@@ -23,11 +23,9 @@ import type { MediaInfo } from "../useMediaFile";
  * what makes five tools feel like one product instead of five dialogs.
  */
 export function ToolShell({
-  title,
   subtitle,
   children,
 }: {
-  title: string;
   subtitle: string;
   children: ReactNode;
 }) {
@@ -43,7 +41,6 @@ export function ToolShell({
     // min-height leaves no free space to distribute at that point.
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-5 px-6 py-6 lg:max-w-3xl">
       <div className="flex flex-col items-center gap-1 text-center">
-        <h1 className="text-xl font-semibold text-fg">{title}</h1>
         <p className="text-sm text-fg-muted">{subtitle}</p>
       </div>
       {children}
@@ -89,7 +86,11 @@ export function FileDropZone({
   // ffprobe is the authority once it has answered; until then the extension is
   // the only thing known about the file, and it is right often enough that
   // showing a neutral placeholder for a moment would just be a flicker.
-  const kind: MediaKind = info ? (info.video ? "video" : "audio") : mediaKindOfPath(path);
+  const kind: MediaKind = info
+    ? info.video
+      ? "video"
+      : "audio"
+    : mediaKindOfPath(path);
   const Icon = MEDIA_KIND_ICON[kind];
 
   return (
@@ -116,7 +117,9 @@ export function FileDropZone({
             ? t("reading_file")
             : info
               ? [
-                  info.video ? `${info.video.width}×${info.video.height}` : null,
+                  info.video
+                    ? `${info.video.width}×${info.video.height}`
+                    : null,
                   formatDuration(info.durationSecs),
                   formatBytes(info.sizeBytes, "en"),
                 ]
@@ -151,7 +154,10 @@ export function OutputFolderRow({
       className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2"
     >
       <Folder size={16} className="shrink-0 text-fg-muted" />
-      <span className="min-w-0 flex-1 truncate text-sm text-fg-soft" title={folder}>
+      <span
+        className="min-w-0 flex-1 truncate text-sm text-fg-soft"
+        title={folder}
+      >
         {folder || t("select_location")}
       </span>
       <Button variant="ghost" size="sm" onClick={onChoose}>
@@ -171,7 +177,13 @@ export function RunButton({
   onClick: () => void;
 }) {
   return (
-    <Button variant="primary" size="lg" disabled={disabled} onClick={onClick} className="w-full">
+    <Button
+      variant="primary"
+      size="lg"
+      disabled={disabled}
+      onClick={onClick}
+      className="w-full"
+    >
       {label}
     </Button>
   );
@@ -205,7 +217,9 @@ export function FormatGroup({
       <p className="text-sm font-medium text-fg-soft">
         {title}
         {disabled && disabledHint && (
-          <span className="ms-2 text-xs font-normal text-fg-muted">{disabledHint}</span>
+          <span className="ms-2 text-xs font-normal text-fg-muted">
+            {disabledHint}
+          </span>
         )}
       </p>
       <div className="flex flex-wrap gap-2">

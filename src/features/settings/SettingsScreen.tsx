@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Loader2, Moon, RefreshCw, Sun, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Loader2,
+  Moon,
+  RefreshCw,
+  Sun,
+  XCircle,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
@@ -38,7 +45,10 @@ export function SettingsScreen({
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
-    void ipc.getToolStatus().then(setTools).catch(() => undefined);
+    void ipc
+      .getToolStatus()
+      .then(setTools)
+      .catch(() => undefined);
   }, []);
 
   // yt-dlp breaks against YouTube every few weeks. New installs get a current
@@ -65,8 +75,6 @@ export function SettingsScreen({
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center gap-6 px-6 py-6">
-      <h1 className="text-center text-xl font-semibold text-fg">{t("settings")}</h1>
-
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-fg-soft">{t("appearance")}</h2>
         <Segmented
@@ -76,7 +84,11 @@ export function SettingsScreen({
             if ((value === "dark") !== darkMode) onToggleTheme();
           }}
           options={[
-            { value: "light", label: t("theme_light"), icon: <Sun size={16} /> },
+            {
+              value: "light",
+              label: t("theme_light"),
+              icon: <Sun size={16} />,
+            },
             { value: "dark", label: t("theme_dark"), icon: <Moon size={16} /> },
           ]}
         />
@@ -97,13 +109,17 @@ export function SettingsScreen({
       </section>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-fg-soft">{t("transcription")}</h2>
+        <h2 className="text-sm font-medium text-fg-soft">
+          {t("transcription")}
+        </h2>
         <ApiKeyPanel notify={notify} />
         <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
       </section>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-medium text-fg-soft">{t("bundled_tools")}</h2>
+        <h2 className="text-sm font-medium text-fg-soft">
+          {t("bundled_tools")}
+        </h2>
         <div className="flex flex-col divide-y divide-line rounded-lg border border-line bg-surface">
           {(["ytdlp", "ffmpeg", "ffprobe"] as const).map((tool) => {
             // Three states, not two. Defaulting the unknown one to false meant
@@ -112,7 +128,10 @@ export function SettingsScreen({
             const ok = tools ? tools[tool] : null;
             return (
               <div key={tool} className="flex items-center gap-2 px-3 py-2.5">
-                <span className="min-w-0 flex-1 truncate text-base text-fg" dir="ltr">
+                <span
+                  className="min-w-0 flex-1 truncate text-base text-fg"
+                  dir="ltr"
+                >
                   {tool === "ytdlp" ? "yt-dlp" : tool}
                   {tool === "ytdlp" && tools?.ytdlpVersion && (
                     <span className="ms-2 text-xs text-fg-muted tnum">

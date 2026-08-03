@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Link2, Music2, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useNavigation } from "../../app/navigation";
 import { Button } from "../../components/ui/Button";
 import { Segmented } from "../../components/ui/Segmented";
 import { TextInput } from "../../components/ui/TextInput";
@@ -10,8 +9,13 @@ import { cn } from "../../lib/cn";
 import * as ipc from "../../lib/ipc";
 import { formatDuration } from "../../lib/format";
 import type { ToastType } from "../../types/feedback";
-import { OutputFolderRow, RunButton, ToolShell } from "../media/components/ToolShell";
+import {
+  OutputFolderRow,
+  RunButton,
+  ToolShell,
+} from "../media/components/ToolShell";
 import type { UrlInfo } from "../jobs/types";
+import { useHistoryPanel } from "../jobs/useHistoryPanel";
 import { useDownloadForm } from "./useDownloadForm";
 
 const QUALITIES = ["best", "1080", "720", "480"] as const;
@@ -40,8 +44,11 @@ interface Props {
  */
 export function DownloadScreen({ isOnline, notify }: Props) {
   const { t } = useTranslation();
-  const { go } = useNavigation();
-  const { savePath, toolsReady, selectFolder, start } = useDownloadForm({ isOnline, notify });
+  const { openPanel } = useHistoryPanel();
+  const { savePath, toolsReady, selectFolder, start } = useDownloadForm({
+    isOnline,
+    notify,
+  });
 
   const [url, setUrl] = useState("");
   const [mediaType, setMediaType] = useState<"video" | "audio">("video");
@@ -83,11 +90,13 @@ export function DownloadScreen({ isOnline, notify }: Props) {
       { url, filename: info?.title ?? "", mediaType, quality },
       () => setUrl(""),
     );
-    if (ok) go({ name: "jobs" });
+    // The form clears itself and stays, ready for the next link; the history
+    // beside it opens so the download that just started is visible.
+    if (ok) openPanel();
   };
 
   return (
-    <ToolShell title={t("tool_download")} subtitle={t("tool_download_about")}>
+    <ToolShell subtitle={t("tool_download_about")}>
       <div className="relative">
         <Link2
           size={17}
@@ -214,7 +223,9 @@ function TypeCard({
       )}
     >
       {icon}
-      <span className={cn("text-base", selected && "font-medium")}>{label}</span>
+      <span className={cn("text-base", selected && "font-medium")}>
+        {label}
+      </span>
     </Button>
   );
 }

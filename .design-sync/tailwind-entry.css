@@ -1,0 +1,76 @@
+/* Tailwind entry for the design-sync export.
+ *
+ * Mirrors src/index.css, but adds the authored preview files as a scan source
+ * so utilities used only inside a preview card still make it into the compiled
+ * stylesheet. Compiled by .design-sync/build-css.mjs. */
+@import "tailwindcss";
+@import "../src/styles/theme.css";
+
+@source "../src";
+@source "./previews";
+
+/* The shipped utility vocabulary.
+ *
+ * Two reasons this list exists rather than relying on source scanning:
+ *
+ *  1. Ordering. Utilities used only inside a preview card are missing unless
+ *     this file is recompiled *after* that preview is written -- and previews
+ *     rebuild on their own far more often than the stylesheet does. The card
+ *     then lays out wrong for reasons invisible in its source.
+ *
+ *  2. Reach. This compiled sheet is the whole stylesheet a rendered design
+ *     gets. Whatever is not in here does not exist downstream, no matter how
+ *     ordinary a Tailwind class it is.
+ *
+ * Structure is therefore generous, and colour is deliberately not: every
+ * colour utility below comes from the @theme scale in src/styles/theme.css and
+ * there are no others. That constraint is the point of the token scale -- an
+ * agent reaching for `bg-blue-500` should find nothing, because this design
+ * system has one accent. */
+
+/* display / position */
+@source inline("flex inline-flex grid inline-grid block inline-block hidden");
+@source inline("relative absolute fixed sticky inset-0 top-0 bottom-0 z-{10,20,50}");
+
+/* flex + grid */
+@source inline("flex-{row,col,wrap,nowrap,1,auto,none} shrink-0 grow grow-0");
+@source inline("items-{start,center,end,baseline,stretch}");
+@source inline("justify-{start,center,end,between,around}");
+@source inline("self-{start,center,end,stretch}");
+@source inline("grid-cols-{1,2,3,4,5,6} col-span-{1,2,3,full}");
+
+/* spacing -- the app's own 4px-based rhythm */
+@source inline("gap-{0,0.5,1,1.5,2,2.5,3,3.5,4,5,6,8,10,12}");
+@source inline("gap-x-{1,2,3,4,6} gap-y-{1,2,3,4,6}");
+@source inline("p-{0,0.5,1,1.5,2,2.5,3,3.5,4,5,6,8,10,12}");
+@source inline("px-{0,1,1.5,2,2.5,3,4,5,6,8} py-{0,1,1.5,2,2.5,3,4,5,6,8}");
+@source inline("ps-{1,2,3,4,6} pe-{1,2,3,4,6} pt-{1,2,3,4,6} pb-{1,2,3,4,6}");
+@source inline("m-0 mx-auto mt-{0.5,1,1.5,2,3,4,6} mb-{1,2,3,4,6}");
+@source inline("ms-{1,2,3,auto} me-{1,2,3,auto} space-y-{1,2,3,4}");
+
+/* sizing */
+@source inline("w-full w-auto w-fit w-{8,9,10,11,12,14,16,20,24,32,40,48,56,60,64,72,80,96}");
+@source inline("h-full h-auto h-fit h-{1,1.5,8,9,10,11,12,14,16,20,24,32,40,48,64,72,96}");
+@source inline("size-{4,5,6,8,10,12} min-w-0 min-h-0 max-w-{xs,sm,md,lg,xl,2xl,full}");
+
+/* typography -- sizes and weights are the theme scale, nothing outside it */
+@source inline("text-{xs,sm,base,lg,xl,2xl} font-{normal,medium,semibold,bold}");
+@source inline("text-{start,center,end} truncate text-nowrap whitespace-nowrap");
+@source inline("line-clamp-{1,2,3} leading-{none,tight,snug,normal,relaxed} tnum");
+
+/* colour -- the entire palette, and nothing else */
+@source inline("{bg,text,border}-{canvas,surface,surface-soft,surface-hover}");
+@source inline("{bg,text,border}-{fg,fg-soft,fg-muted}");
+@source inline("{bg,text,border}-{line,line-strong}");
+@source inline("{bg,text,border}-{accent,accent-hover,accent-soft,accent-line,on-accent}");
+@source inline("{bg,text,border}-{success,danger,warning,media-audio}");
+@source inline("bg-transparent text-transparent border-transparent");
+
+/* borders / radius / elevation */
+@source inline("border border-{0,2,4} border-{t,b,s,e} border-{t,b,s,e}-2");
+@source inline("rounded-{none,sm,md,lg,xl,full}");
+@source inline("shadow-(--shadow-panel) opacity-{0,40,45,60,80,100}");
+
+/* overflow + motion */
+@source inline("overflow-{hidden,auto,y-auto,x-auto} cursor-{pointer,not-allowed}");
+@source inline("transition-{colors,opacity,all} duration-[--duration-fast] duration-[--duration-base]");
