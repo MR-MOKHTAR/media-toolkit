@@ -318,7 +318,7 @@ fn download(url: &str, dest: &Path) -> Res<(String, u64)> {
 fn download_once(url: &str, dest: &Path) -> Res<(String, u64)> {
     let mut response = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
-        .user_agent("downloader-build-script")
+        .user_agent("media-toolkit-build-script")
         .build()?
         .get(url)
         .send()?

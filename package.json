@@ -1,13 +1,14 @@
 {
-  "name": "downloader",
+  "name": "media-toolkit",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.1.0",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "set-version": "node scripts/set-version.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "build:deb": "tauri build --bundles deb"
