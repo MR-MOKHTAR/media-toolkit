@@ -92,15 +92,6 @@ pub struct ConvertRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResizeRequest {
-    pub input: String,
-    pub output_dir: String,
-    pub output_name: Option<String>,
-    pub height: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct GifRequest {
     pub input: String,
     pub output_dir: String,
@@ -174,14 +165,13 @@ pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> 
     let output = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
     let duration = Some(info.duration_secs);
 
-    // Small caps at 720p on top of its CRF; the others keep the source size
-    // unless the user asked otherwise.
-    let height_cap = request.max_height.or(match request.preset {
-        CompressPreset::Small => Some(720),
-        _ => None,
-    });
+    // The request is the only thing that decides resolution. The Small preset
+    // used to cap itself at 720p here, which was invisible from the screen and
+    // fought with the resolution control that replaced the resize tool: picking
+    // "original" still handed back 720p.
     let source_height = info.video.as_ref().map(|v| v.height).unwrap_or(0);
-    let scale = height_cap
+    let scale = request
+        .max_height
         .filter(|cap| source_height > *cap)
         .map(scale_to_height);
 
@@ -485,40 +475,6 @@ pub fn convert(request: &ConvertRequest, info: &MediaInfo) -> AppResult<Plan> {
     })
 }
 
-// ---------------------------------------------------------------- resize
-
-pub fn resize(request: &ResizeRequest, info: &MediaInfo) -> AppResult<Plan> {
-    let input = paths::require_file(&request.input)?;
-    let video = info
-        .video
-        .as_ref()
-        .ok_or_else(|| AppError::invalid("file", "this tool needs a video"))?;
-    if request.height >= video.height {
-        // Upscaling produces a bigger file that looks no better. The UI also
-        // disables these options, but a request could still arrive.
-        return Err(AppError::invalid("height", "the video is already this small"));
-    }
-    let output = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
-
-    let mut args = vec![arg("-i"), path_arg(&input), arg("-vf"), scale_to_height(request.height)];
-    args.extend(
-        ["-c:v", "libx264", "-crf", "23", "-preset", "medium", "-pix_fmt", "yuv420p",
-         // Re-encoding audio for a resize is pure waste; nothing about it changed.
-         "-c:a", "copy", "-movflags", "+faststart"].iter().map(arg),
-    );
-    args.push(path_arg(&output));
-
-    Ok(Plan {
-        passes: vec![Pass {
-            args,
-            duration_secs: Some(info.duration_secs),
-            label: "resize",
-        }],
-        output,
-        temp_files: Vec::new(),
-    })
-}
-
 // ------------------------------------------------------------------- gif
 
 pub fn gif(request: &GifRequest, info: &MediaInfo) -> AppResult<Plan> {
@@ -657,6 +613,38 @@ mod tests {
         assert!(filter.starts_with("scale=-2:720"), "{filter}");
     }
 
+    /// The resolution control replaced the resize tool, so `max_height` is now
+    /// the only thing that scales a compression -- no preset does it quietly.
+    #[test]
+    fn compress_scales_only_when_the_request_asks() {
+        let path = std::env::temp_dir().join(format!("mt-compress-{}.mp4", std::process::id()));
+        std::fs::write(&path, b"x").unwrap();
+        let base = CompressRequest {
+            input: path.to_string_lossy().into(),
+            output_dir: std::env::temp_dir().to_string_lossy().into(),
+            output_name: Some("c".into()),
+            preset: CompressPreset::Small,
+            target_size_mb: None,
+            max_height: None,
+        };
+        let source = sample(1920, 1080, 10.0);
+
+        // Smallest preset, no height asked for: the frames keep their size.
+        let plan = compress(&base, &source).unwrap();
+        assert!(!joined(&plan, 0).contains("scale="), "{}", joined(&plan, 0));
+
+        let capped = CompressRequest { max_height: Some(720), ..base };
+        let plan = compress(&capped, &source).unwrap();
+        assert!(joined(&plan, 0).contains("scale=-2:720"), "{}", joined(&plan, 0));
+
+        // A cap above the source is not an upscale, it is a no-op.
+        let taller = CompressRequest { max_height: Some(1440), ..capped };
+        let plan = compress(&taller, &source).unwrap();
+        assert!(!joined(&plan, 0).contains("scale="), "{}", joined(&plan, 0));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn trim_uses_duration_not_end_timestamp() {
         let request = TrimRequest {
@@ -710,36 +698,6 @@ mod tests {
         vp9.video.as_mut().unwrap().codec = "vp9".into();
         assert!(!can_stream_copy(&vp9, "mp4"));
         assert!(can_stream_copy(&vp9, "mkv"));
-    }
-
-    #[test]
-    fn resize_refuses_to_upscale() {
-        let path = std::env::temp_dir().join("mt-resize.mp4");
-        std::fs::write(&path, b"x").unwrap();
-        let request = ResizeRequest {
-            input: path.to_string_lossy().into(),
-            output_dir: std::env::temp_dir().to_string_lossy().into(),
-            output_name: Some("r".into()),
-            height: 1080,
-        };
-        // Source is already 720 tall.
-        assert!(resize(&request, &sample(1280, 720, 10.0)).is_err());
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn resize_copies_the_audio_untouched() {
-        let path = std::env::temp_dir().join("mt-resize2.mp4");
-        std::fs::write(&path, b"x").unwrap();
-        let request = ResizeRequest {
-            input: path.to_string_lossy().into(),
-            output_dir: std::env::temp_dir().to_string_lossy().into(),
-            output_name: Some("r2".into()),
-            height: 720,
-        };
-        let plan = resize(&request, &sample(1920, 1080, 10.0)).unwrap();
-        assert!(joined(&plan, 0).contains("-c:a copy"), "{}", joined(&plan, 0));
-        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

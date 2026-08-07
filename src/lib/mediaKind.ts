@@ -65,6 +65,6 @@ export const MEDIA_KIND_TINT: Record<MediaKind, string> = {
   audio: "bg-media-audio/10 text-media-audio",
   gif: "bg-warning/10 text-warning",
   // Neutral on purpose: a transcript is the one output that is not media, and
-  // giving it a fifth hue would imply a distinction that does not exist.
+  // giving it a fourth hue would imply a distinction that does not exist.
   text: "bg-fg-muted/10 text-fg-soft",
 };

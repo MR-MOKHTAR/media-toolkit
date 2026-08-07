@@ -14,7 +14,7 @@ import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
-import type { DownloadRequest } from "../jobs/types";
+import type { DownloadRequest, LibrarySlot } from "../jobs/types";
 
 interface Options {
   isOnline: boolean;
@@ -22,6 +22,10 @@ interface Options {
   /** Video and audio land on different shelves of the library, so the save
    *  folder tracks the toggle on the form. */
   mediaType: "video" | "audio";
+  /** Set once a probe says the link points straight at a file. Those go to
+   *  their own shelf -- filing a zip under "Video" is where they went when a
+   *  download could only ever be video or audio. */
+  isFile?: boolean;
 }
 
 export interface DownloadFormValues {
@@ -29,9 +33,11 @@ export interface DownloadFormValues {
   filename: string;
   mediaType: "video" | "audio";
   quality: string;
+  /** A file link needs no yt-dlp, so a missing one must not block it. */
+  isFile?: boolean;
 }
 
-export function useDownloadForm({ isOnline, notify, mediaType }: Options) {
+export function useDownloadForm({ isOnline, notify, mediaType, isFile }: Options) {
   const { t } = useTranslation();
   const { startDownload } = useJobs();
   const [savePath, setSavePath] = useState("");
@@ -57,13 +63,20 @@ export function useDownloadForm({ isOnline, notify, mediaType }: Options) {
     };
   }, [notify, t]);
 
-  // Separate from the tool check because it re-runs on the media toggle, and
-  // re-probing yt-dlp for that would be two seconds of nothing.
+  // Separate from the tool check because it re-runs on the media toggle -- and
+  // now on what the link turns out to be -- and re-probing yt-dlp for either
+  // would be two seconds of nothing.
+  const slot: LibrarySlot = isFile
+    ? "files"
+    : mediaType === "audio"
+      ? "audio"
+      : "video";
+
   useEffect(() => {
     if (chosen.current) return;
     let cancelled = false;
     void ipc
-      .getLibraryFolder(mediaType === "audio" ? "audio" : "video")
+      .getLibraryFolder(slot)
       .then((folder) => {
         if (!cancelled && !chosen.current) setSavePath(folder);
       })
@@ -71,7 +84,7 @@ export function useDownloadForm({ isOnline, notify, mediaType }: Options) {
     return () => {
       cancelled = true;
     };
-  }, [mediaType]);
+  }, [slot]);
 
   const selectFolder = useCallback(async () => {
     try {
@@ -100,7 +113,9 @@ export function useDownloadForm({ isOnline, notify, mediaType }: Options) {
         notify("error", t("no_internet"));
         return false;
       }
-      if (!toolsReady) {
+      // Only for a link that needs the extractor. A direct file is fetched by
+      // the app itself, so a missing yt-dlp has nothing to do with it.
+      if (!toolsReady && !values.isFile) {
         notify("warning", t("ytdlp_not_found"));
         return false;
       }
@@ -111,12 +126,20 @@ export function useDownloadForm({ isOnline, notify, mediaType }: Options) {
         outputName: values.filename.trim() || undefined,
         mediaType: values.mediaType,
         quality: values.mediaType === "audio" ? undefined : values.quality,
+        // Always auto. The probe this screen ran is a preview, not a decision:
+        // it can be stale by the time Download is pressed, and the backend is
+        // the one that has to be right.
+        mode: "auto",
       };
 
       void startDownload(request, {
         title: values.filename.trim() || url,
         source: url,
-        detail: values.mediaType === "audio" ? "MP3" : values.quality,
+        detail: values.isFile
+          ? undefined
+          : values.mediaType === "audio"
+            ? "MP3"
+            : values.quality,
       }).catch((error) => notify("error", describeAppError(ipc.toAppError(error), t)));
 
       notify("info", t("job_started"));

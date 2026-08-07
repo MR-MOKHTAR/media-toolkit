@@ -43,7 +43,7 @@ export function HistoryPanel({
 }) {
   const { t, i18n } = useTranslation();
   const language = i18n.language;
-  const { jobs, state, cancel, remove, reveal } = useJobs();
+  const { jobs, state, cancel, remove, reveal, retry } = useJobs();
   const { go } = useNavigation();
   const reduceMotion = useReducedMotion();
 
@@ -140,6 +140,7 @@ export function HistoryPanel({
                       onCancel={(id) => void cancel(id)}
                       onRemove={remove}
                       onReveal={(path) => void reveal(path)}
+                      onRetry={(id) => void retry(id)}
                       onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
                     />
                   ))}

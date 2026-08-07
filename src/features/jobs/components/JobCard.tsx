@@ -6,6 +6,7 @@ import {
   FileText,
   FolderOpen,
   Loader2,
+  RotateCcw,
   Trash2,
   X,
 } from "lucide-react";
@@ -36,6 +37,9 @@ interface JobCardProps {
   onCancel: (id: string) => void;
   onRemove: (id: string) => void;
   onReveal: (path: string) => void;
+  /** Runs an unfinished download again, continuing from what it already got.
+   *  Only offered when the job carries the request that started it. */
+  onRetry: (id: string) => void;
   /** Opens the transcript screen for a finished Whisper job. Optional because
    *  most lists of jobs have nowhere to navigate to. */
   onViewTranscript?: (id: string) => void;
@@ -87,6 +91,7 @@ function JobCardComponent({
   onCancel,
   onRemove,
   onReveal,
+  onRetry,
   onViewTranscript,
 }: JobCardProps) {
   const { t } = useTranslation();
@@ -94,6 +99,13 @@ function JobCardComponent({
   const kind = mediaKindOfJob(job);
   const Icon = MEDIA_KIND_ICON[kind];
   const revealable = job.state === "completed" && job.outputPath;
+  // Everything that ended without a file, including the jobs marked failed at
+  // startup because the app was closed while they were running. Both engines
+  // continue from the part file rather than starting over, so this is usually
+  // a few seconds rather than the whole download again.
+  const retryable = Boolean(
+    job.request && (job.state === "failed" || job.state === "cancelled"),
+  );
   // The card's stretched target still reveals the file, for every kind. Making
   // it mean something different for one of them would contradict reveal_hint,
   // which is on every other card in the same list.
@@ -182,6 +194,17 @@ function JobCardComponent({
             className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
           >
             <FileText size={16} />
+          </button>
+        )}
+        {retryable && (
+          <button
+            type="button"
+            onClick={() => onRetry(job.id)}
+            aria-label={t("retry_download")}
+            title={t("retry_download")}
+            className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
+          >
+            <RotateCcw size={16} />
           </button>
         )}
         {revealable && (

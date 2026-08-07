@@ -14,11 +14,8 @@ import {
   useHistoryPanel,
 } from "./features/jobs/useHistoryPanel";
 import { JobsProvider } from "./features/jobs/useJobs";
-import { CompressScreen } from "./features/media/screens/CompressScreen";
-import { ConvertScreen } from "./features/media/screens/ConvertScreen";
-import { GifScreen } from "./features/media/screens/GifScreen";
-import { ResizeScreen } from "./features/media/screens/ResizeScreen";
-import { TrimScreen } from "./features/media/screens/TrimScreen";
+import { MediaToolScreen } from "./features/media/components/MediaToolScreen";
+import { isMediaToolRoute, MEDIA_TOOLS } from "./features/media/tools";
 import { DragDropProvider } from "./features/media/useDragDrop";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { TranscribeScreen } from "./features/transcribe/TranscribeScreen";
@@ -101,24 +98,15 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
                 notify={notify}
               />
             )}
-            {route.name === "compress" && (
-              <CompressScreen
-                initialFile={route.file}
-                language={language}
-                notify={notify}
-              />
-            )}
-            {route.name === "trim" && (
-              <TrimScreen initialFile={route.file} notify={notify} />
-            )}
-            {route.name === "convert" && (
-              <ConvertScreen initialFile={route.file} notify={notify} />
-            )}
-            {route.name === "resize" && (
-              <ResizeScreen initialFile={route.file} notify={notify} />
-            )}
-            {route.name === "gif" && (
-              <GifScreen
+            {/* Four tools, one screen. The config is the only thing that
+                changes between them -- see features/media/tools. Keyed by
+                tool so switching tabs starts on a clean form instead of
+                carrying the last one's state into a control that means
+                something else. */}
+            {isMediaToolRoute(route) && (
+              <MediaToolScreen
+                key={route.name}
+                config={MEDIA_TOOLS[route.name]}
                 initialFile={route.file}
                 language={language}
                 notify={notify}

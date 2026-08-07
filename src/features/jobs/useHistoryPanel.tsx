@@ -25,14 +25,13 @@ import {
 import { useNavigation } from "../../app/navigation";
 import type { JobKind } from "./types";
 
-/** The seven screens that run jobs. `JobKind` and these route names are the
- *  same seven strings by construction, so this Set is the entire mapping. */
+/** The six screens that run jobs. `JobKind` and these route names are the
+ *  same six strings by construction, so this Set is the entire mapping. */
 const HISTORY_ROUTES = new Set<string>([
   "download",
   "compress",
   "trim",
   "convert",
-  "resize",
   "gif",
   "transcribe",
 ]);

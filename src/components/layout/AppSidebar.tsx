@@ -20,7 +20,7 @@ import { AppIdentity } from "./AppIdentity";
  *
  * This replaces a breadcrumb bar and a home screen that between them did one
  * job: get you to a tool. The breadcrumb spent 36px on every screen telling you
- * where you were, and the home screen was a grid of the same seven tools listed
+ * where you were, and the home screen was a grid of the same tools listed
  * here -- so switching from one tool to another meant going back to a menu
  * first. A sidebar says where you are by highlighting it and gets you anywhere
  * in one click, in the space the breadcrumb was already taking.

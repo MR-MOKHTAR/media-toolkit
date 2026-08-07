@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import i18n from "../i18n";
+import * as ipc from "../lib/ipc";
 
+/** Also read by the bootstrap script in index.html, which has to answer this
+ *  before the bundle exists. Renaming it means renaming it there too. */
 const THEME_STORAGE_KEY = "downloader-theme";
 const LANGUAGE_STORAGE_KEY = "downloader-language";
+
+/** `--color-canvas` in both themes, as literals.
+ *
+ *  They are needed outside CSS: the native window and the webview's base layer
+ *  are painted through Tauri, and a resize repaints from those before a single
+ *  rule applies. Kept beside the same two values in index.html's bootstrap. */
+const CANVAS = { dark: "#0c111a", light: "#f3f5f9" } as const;
 
 export type AppLanguage = "en" | "fa" | "ar";
 
@@ -34,7 +44,17 @@ export function useAppPreferences() {
   const [language, setLanguage] = useState<AppLanguage>(getInitialLanguage);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", darkMode);
+    const root = document.documentElement;
+    const canvas = darkMode ? CANVAS.dark : CANVAS.light;
+
+    root.classList.toggle("dark", darkMode);
+    // The two layers under the document, kept level with it. index.html sets
+    // both for the first paint; this is what carries a *toggle* through to
+    // them, so the next resize does not flash the colour of the theme the user
+    // just left.
+    root.style.background = canvas;
+    root.style.colorScheme = darkMode ? "dark" : "light";
+    void ipc.setWindowBackground(canvas);
 
     try {
       localStorage.setItem(THEME_STORAGE_KEY, darkMode ? "dark" : "light");

@@ -43,10 +43,14 @@ const FALLBACK_FOLDER: &str = "Media Toolkit";
 pub enum Slot {
     Video,
     Audio,
+    /// Anything fetched verbatim that is not video or audio -- an installer, an
+    /// archive, a PDF. Its own shelf because the alternative was filing a zip
+    /// under "Video", which is where it went when a download could only ever be
+    /// one of those two.
+    Files,
     Compressed,
     Trimmed,
     Converted,
-    Resized,
     Gif,
     Transcripts,
 }
@@ -58,10 +62,10 @@ impl Slot {
         match self {
             Self::Video => "Video",
             Self::Audio => "Audio",
+            Self::Files => "Files",
             Self::Compressed => "Compressed",
             Self::Trimmed => "Trimmed",
             Self::Converted => "Converted",
-            Self::Resized => "Resized",
             Self::Gif => "GIF",
             Self::Transcripts => "Transcripts",
         }
@@ -72,10 +76,10 @@ impl Slot {
         [
             Self::Video,
             Self::Audio,
+            Self::Files,
             Self::Compressed,
             Self::Trimmed,
             Self::Converted,
-            Self::Resized,
             Self::Gif,
             Self::Transcripts,
         ]
@@ -292,10 +296,10 @@ mod tests {
             vec![
                 "Video",
                 "Audio",
+                "Files",
                 "Compressed",
                 "Trimmed",
                 "Converted",
-                "Resized",
                 "GIF",
                 "Transcripts",
             ]

@@ -1,5 +1,6 @@
 mod binaries;
 mod commands;
+mod direct;
 mod download;
 mod error;
 mod jobs;
@@ -71,7 +72,6 @@ pub fn run() {
             media::commands::start_compress,
             media::commands::start_trim,
             media::commands::start_convert,
-            media::commands::start_resize,
             media::commands::start_gif,
             transcribe::commands::start_transcribe,
             transcribe::commands::groq_quota,

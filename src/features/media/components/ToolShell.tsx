@@ -21,7 +21,7 @@ import type { MediaInfo } from "../useMediaFile";
  *
  * If a tool needs more than three controls between the preview and the output
  * row, it is too complicated for this app. Keeping the template identical is
- * what makes five tools feel like one product instead of five dialogs.
+ * what makes the tools feel like one product instead of a stack of dialogs.
  */
 export function ToolShell({
   subtitle,
@@ -46,7 +46,7 @@ export function ToolShell({
     // min-h-full + justify-center centres a short form vertically and falls
     // back to top-aligned once the content outgrows the viewport, because a
     // min-height leaves no free space to distribute at that point.
-    <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center gap-3 px-6 py-6 xl:max-w-2xl">
+    <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center gap-4 px-6 py-6 xl:max-w-2xl">
       <p className="px-2 text-center text-sm text-fg-muted">{subtitle}</p>
 
       <FormCard>{children}</FormCard>
@@ -75,7 +75,7 @@ export function FileDropZone({
         type="button"
         onClick={onBrowse}
         className={cn(
-          "flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed px-6 py-7",
+          "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-9",
           "transition-colors duration-[--duration-fast]",
           isDragging
             ? "border-accent bg-accent-soft"
@@ -102,13 +102,13 @@ export function FileDropZone({
   return (
     <div
       className={cn(
-        "flex items-center gap-2.5 rounded-lg border bg-surface p-2.5",
+        "flex items-center gap-3 rounded-lg border bg-surface p-3",
         isDragging ? "border-accent bg-accent-soft" : "border-line",
       )}
     >
       <span
         className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-md",
+          "flex size-10 shrink-0 items-center justify-center rounded-md",
           MEDIA_KIND_TINT[kind],
         )}
       >
@@ -157,7 +157,7 @@ export function OutputFolderRow({
     // the icon on the far side of a path that still ran left to right.
     <div
       dir="ltr"
-      className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2"
+      className="flex items-center gap-3 rounded-md border border-line bg-surface px-3.5 py-2.5"
     >
       <Folder size={16} className="shrink-0 text-fg-muted" />
       <span

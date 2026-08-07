@@ -32,7 +32,6 @@ pub enum JobKind {
     Compress,
     Trim,
     Convert,
-    Resize,
     Gif,
     Transcribe,
 }
@@ -159,7 +158,10 @@ pub struct CancelSignal {
 }
 
 impl CancelSignal {
-    fn cancel(&self) {
+    /// Raised by `Jobs::cancel` in the app. Reachable from the crate so the
+    /// direct downloader's tests can cancel a transfer that is genuinely in
+    /// flight, which is the only way to prove the partial file survives it.
+    pub(crate) fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
     }

@@ -7,6 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -151,6 +152,28 @@ export const testApiKey = () => invoke<void>("test_api_key");
  * test and is dead for every user.
  */
 export const copyText = (text: string) => writeText(text);
+
+/**
+ * Paints the native window and the webview's own base layer in the theme's
+ * canvas colour.
+ *
+ * The webview has a background of its own, underneath the document, and a
+ * resize repaints from that before any CSS applies. On Windows that showed as
+ * a white flash across the whole window on every minimise and maximise in dark
+ * mode -- the one frame where WebView2's default white was all there was to
+ * draw. Setting it once per theme change means the worst case is a frame of
+ * the right colour.
+ *
+ * Failure is ignored: this is cosmetic, and it is unavailable in a plain
+ * browser (`vite dev` without Tauri) and on mobile.
+ */
+export const setWindowBackground = async (color: string) => {
+  try {
+    await getCurrentWindow().setBackgroundColor(color);
+  } catch {
+    // No native window to colour, or a webview that does not support it.
+  }
+};
 
 export const onJobProgress = (
   handler: (payload: JobProgress) => void,

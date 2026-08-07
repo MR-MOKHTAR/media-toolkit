@@ -5,7 +5,6 @@ export type JobKind =
   | "compress"
   | "trim"
   | "convert"
-  | "resize"
   | "gif"
   | "transcribe";
 
@@ -76,6 +75,12 @@ export interface Job {
   /** Input path or source URL. */
   source: string;
   outputPath?: string;
+  /** Everything needed to run this download again, kept so a failed or
+   *  interrupted one has a button rather than a note telling the user to paste
+   *  the link a second time. Downloads only: a media job's input is a file on
+   *  disk that may not be there any more, and re-running one silently is a
+   *  worse offer than re-opening the tool. */
+  request?: DownloadRequest;
   state: JobState;
   stage: JobStage;
   percent: number | null;
@@ -96,6 +101,10 @@ export interface DownloadRequest {
   outputName?: string;
   mediaType: "video" | "audio";
   quality?: string;
+  /** Which engine to use. `auto` -- what every screen sends -- lets the backend
+   *  decide from one HTTP request: a page goes to yt-dlp, a link that already
+   *  points at the file goes to the direct downloader. */
+  mode?: "auto" | "media" | "file";
 }
 
 /** One shelf in the app's library folder. Mirrors `library::Slot` in Rust; a
@@ -104,10 +113,11 @@ export interface DownloadRequest {
 export type LibrarySlot =
   | "video"
   | "audio"
+  /** Anything fetched verbatim that is not video or audio. */
+  | "files"
   | "compressed"
   | "trimmed"
   | "converted"
-  | "resized"
   | "gif"
   | "transcripts";
 
@@ -117,7 +127,6 @@ export const SLOT_FOR_KIND: Record<Exclude<JobKind, "download">, LibrarySlot> = 
   compress: "compressed",
   trim: "trimmed",
   convert: "converted",
-  resize: "resized",
   gif: "gif",
   transcribe: "transcripts",
 };
@@ -134,13 +143,25 @@ export interface LibraryInfo {
   saveNextToInput: boolean;
 }
 
+/** What a pasted link turned out to be. `media` is a page yt-dlp extracts
+ *  from; `file` is a link that already points at the bytes. */
+export type UrlKind = "media" | "file";
+
 export interface UrlInfo {
+  kind: UrlKind;
+  /** The video's title, or the file's name. */
   title: string;
+  /** The channel, or -- for a file -- its content type. */
   uploader: string | null;
   durationSecs: number | null;
   thumbnail: string | null;
   isPlaylist: boolean;
   entryCount: number | null;
+  /** Known ahead of time only for a file. */
+  sizeBytes: number | null;
+  /** Whether an interrupted download of this link continues rather than
+   *  restarts. */
+  resumable: boolean;
 }
 
 export interface ToolStatus {

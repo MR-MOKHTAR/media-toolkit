@@ -20,7 +20,9 @@
         "minHeight": 500,
         "resizable": true,
         "decorations": false,
-        "center": true
+        "center": true,
+        "maximized": true,
+        "backgroundColor": "#0c111a"
       }
     ],
     "security": {

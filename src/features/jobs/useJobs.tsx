@@ -48,9 +48,21 @@ interface JobsContextValue {
   jobs: Job[];
   startDownload: (request: DownloadRequest, meta: JobMeta) => Promise<string>;
   /** For jobs whose command was invoked elsewhere -- the media tools each
-   *  call their own command and hand the resulting id back here. */
-  addExternalJob: (job: JobMeta & { id: string; kind: JobKind }) => void;
+   *  call their own command and hand the resulting id back here.
+   *
+   *  `done` is for work that is already over by the time it is reported: no
+   *  status event is ever coming for it, and a row added as "queued" would sit
+   *  there for good. */
+  addExternalJob: (
+    job: JobMeta & { id: string; kind: JobKind } & (
+        | { done?: false; outputPath?: undefined }
+        | { done: true; outputPath: string }
+      ),
+  ) => void;
   cancel: (id: string) => Promise<void>;
+  /** Starts a finished-badly download over, continuing from whatever it
+   *  already fetched. No-op for a job with no stored request. */
+  retry: (id: string) => Promise<void>;
   remove: (id: string) => void;
   select: (id: string | null) => void;
   clearFinished: () => void;
@@ -155,6 +167,11 @@ export function JobsProvider({
           percent: null,
           detail: meta.detail,
           createdAt: Date.now(),
+          // Kept so the row can offer a button instead of asking the user to
+          // find the link again. It survives a restart with the rest of the
+          // history, which is exactly when it is most needed: everything that
+          // was in flight when the app closed comes back as failed.
+          request,
         },
       });
       return id;
@@ -162,8 +179,46 @@ export function JobsProvider({
     [],
   );
 
+  /**
+   * Runs a failed, cancelled or interrupted download again.
+   *
+   * A new job rather than a revived one -- the backend has forgotten the old
+   * id, and a row that jumps from "failed" back to "downloading" hides the
+   * fact that a second attempt is being made. The old row is removed once the
+   * new one exists, so the list does not grow a copy per attempt.
+   *
+   * Nothing is re-downloaded that does not have to be: both engines continue
+   * from the `.part` file the previous attempt left.
+   */
+  const retry = useCallback(
+    async (id: string) => {
+      const job = stateRef.current.byId[id];
+      if (!job?.request) return;
+      try {
+        await startDownload(job.request, {
+          title: job.title,
+          source: job.source,
+          detail: job.detail,
+        });
+        dispatch({ type: "remove", id });
+      } catch (error) {
+        notify("error", describeAppError(ipc.toAppError(error), t));
+      }
+    },
+    [notify, startDownload, t],
+  );
+
   const addExternalJob = useCallback(
-    (job: JobMeta & { id: string; kind: JobKind }) => {
+    (
+      job: JobMeta & {
+        id: string;
+        kind: JobKind;
+        done?: boolean;
+        outputPath?: string;
+      },
+    ) => {
+      const done = job.done === true;
+      const now = Date.now();
       dispatch({
         type: "added",
         job: {
@@ -171,11 +226,13 @@ export function JobsProvider({
           kind: job.kind,
           title: job.title,
           source: job.source,
-          state: "queued",
-          stage: "queued",
-          percent: null,
+          state: done ? "completed" : "queued",
+          stage: done ? "finalizing" : "queued",
+          percent: done ? 100 : null,
+          outputPath: job.outputPath,
           detail: job.detail,
-          createdAt: Date.now(),
+          createdAt: now,
+          endedAt: done ? now : undefined,
         },
       });
     },
@@ -264,13 +321,14 @@ export function JobsProvider({
       startDownload,
       addExternalJob,
       cancel,
+      retry,
       remove: (id) => dispatch({ type: "remove", id }),
       select: (id) => dispatch({ type: "select", id }),
       clearFinished: () => dispatch({ type: "clearFinished" }),
       reveal,
       open,
     }),
-    [state, startDownload, addExternalJob, cancel, reveal, open],
+    [state, startDownload, addExternalJob, cancel, retry, reveal, open],
   );
 
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;

@@ -28,8 +28,8 @@ export interface MediaInfo {
 /**
  * Holds the file a tool screen is working on, and its probed metadata.
  *
- * Shared by all five tools: the input step is identical everywhere, which is
- * what lets the screens look like one another.
+ * Shared by every tool that takes one: the input step is identical everywhere,
+ * which is what lets the screens look like one another.
  */
 export function useMediaFile(initialPath?: string) {
   const [path, setPath] = useState<string | null>(initialPath ?? null);

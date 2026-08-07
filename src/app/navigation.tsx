@@ -1,7 +1,7 @@
 /**
  * Navigation.
  *
- * A state machine, not a router. There are seven screens, no deep links, no
+ * A state machine, not a router. There are six screens, no deep links, no
  * address bar (the window is undecorated), no SEO and a bundle small enough
  * that code splitting would not pay for itself. react-router would cost about
  * 25 KB and a whole mental model for none of what it is good at.
@@ -20,7 +20,6 @@ export type ToolName =
   | "compress"
   | "trim"
   | "convert"
-  | "resize"
   | "gif"
   | "transcribe";
 

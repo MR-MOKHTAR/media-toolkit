@@ -62,7 +62,7 @@ export function RangeSlider({
       <div className="flex items-center gap-3">
         <TimeField label={t("trim_start")} value={start} onCommit={setStart} />
 
-        <div dir={i18n.dir()} className="relative h-9 min-w-0 flex-1 select-none">
+        <div dir={i18n.dir()} className="relative h-11 min-w-0 flex-1 select-none">
           <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-line" />
           <div
             className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent"
@@ -123,7 +123,7 @@ function RangeInput({
       // events -- otherwise the upper track swallows clicks meant for the
       // lower thumb and one handle becomes unreachable.
       className={cn(
-        "absolute inset-x-0 top-1/2 h-9 w-full -translate-y-1/2 appearance-none bg-transparent",
+        "absolute inset-x-0 top-1/2 h-11 w-full -translate-y-1/2 appearance-none bg-transparent",
         "pointer-events-none focus:outline-none",
         "[&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none",
         "[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:rounded-full",
@@ -170,7 +170,7 @@ function TimeField({
       // ASCII digits, left to right, tabular: Persian digits in an mm:ss field
       // are hard to read and awkward to edit.
       dir="ltr"
-      className="h-9 w-24 shrink-0 text-center tnum"
+      className="w-24 shrink-0 text-center tnum"
       value={text}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}

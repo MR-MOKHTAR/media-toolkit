@@ -31,6 +31,13 @@ export function Card({
  * behind it. It sits lighter than the page instead of being a second, brighter
  * white, and anything sliding underneath -- the history panel, a toast --
  * shows through rather than stopping at a hard edge.
+ *
+ * 20px between controls and 24px of padding, up from 14 and 20. At 14 the rows
+ * were closer to each other than the label inside a row is to its own control,
+ * so a form read as one dense block rather than as a sequence of decisions.
+ * The gap is now clearly larger than any spacing inside a control, which is
+ * what makes the grouping legible. Hints that belong to the control above them
+ * are not spaced by this gap at all -- they sit inside a `ControlGroup`.
  */
 export function FormCard({
   className,
@@ -40,12 +47,33 @@ export function FormCard({
   return (
     <div
       className={cn(
-        "flex flex-col gap-3.5 rounded-xl border border-line p-5",
+        "flex flex-col gap-5 rounded-xl border border-line p-6",
         "bg-surface/70 shadow-(--shadow-card) backdrop-blur-md",
         className,
       )}
       {...props}
     >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A control and the line of text that explains it, as one item of the form.
+ *
+ * The alternative was a negative margin on the hint -- `-mt-2` under a
+ * `gap-3.5` card -- which every screen wrote by hand and which had to be
+ * retuned the moment the card's gap changed. Grouping says the same thing
+ * declaratively: the hint is part of this item, so the form's own gap never
+ * applies between them.
+ */
+export function ControlGroup({
+  className,
+  children,
+  ...props
+}: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div className={cn("flex flex-col gap-1.5", className)} {...props}>
       {children}
     </div>
   );

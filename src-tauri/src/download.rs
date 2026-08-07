@@ -1,11 +1,22 @@
-//! Downloading with yt-dlp.
+//! Downloading: choosing an engine, and driving yt-dlp.
+//!
+//! There are two engines. yt-dlp extracts media out of a *page* -- the roughly
+//! thousand sites it knows, where the link the user has is not the link the
+//! file is at. `direct` fetches a link that already is the file, on eight
+//! connections, and can resume. Which one runs is `choose_engine`, and for a
+//! pasted link the answer is one HTTP request away.
+//!
+//! The split is the whole reason this app can now be given *any* link. Before
+//! it, a URL yt-dlp did not recognise simply failed, which included every
+//! installer, archive, PDF and direct file link anyone tried.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::binaries::{self, Tool};
+use crate::direct::{self, FileInfo};
 use crate::error::{AppError, AppResult};
 use crate::jobs::{Emitters, JobKind, JobProgress, JobStatus, Jobs, Stage};
 use crate::paths;
@@ -39,17 +50,55 @@ pub struct DownloadRequest {
     pub media_type: String,
     /// "best", "2160", "1440", "1080", "720", "480". Ignored for audio.
     pub quality: Option<String>,
+    /// Which engine to use: "auto", "media" (yt-dlp) or "file" (direct).
+    ///
+    /// Absent means auto, which is what every screen sends. The two overrides
+    /// exist for the case the probe gets wrong -- a site that serves its watch
+    /// page as `application/octet-stream`, or a file whose host answers a bare
+    /// GET with a login page.
+    pub mode: Option<String>,
+}
+
+impl DownloadRequest {
+    fn wants_audio(&self) -> bool {
+        self.media_type == "audio"
+    }
+}
+
+/// What a link turned out to be. The download screen shows one or the other:
+/// a title, channel and thumbnail for media; a file name and a size for a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UrlKind {
+    /// A page yt-dlp knows how to extract from.
+    Media,
+    /// A link that already points at the bytes.
+    File,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UrlInfo {
+    pub kind: UrlKind,
     pub title: String,
     pub uploader: Option<String>,
     pub duration_secs: Option<f64>,
     pub thumbnail: Option<String>,
     pub is_playlist: bool,
     pub entry_count: Option<u64>,
+    /// Known ahead of time for a file, never for a media page -- the size there
+    /// depends on the format yt-dlp ends up choosing.
+    pub size_bytes: Option<u64>,
+    /// Whether an interrupted download of this link can be continued rather
+    /// than restarted.
+    pub resumable: bool,
+}
+
+/// Which engine a job runs on.
+enum Engine {
+    /// The link is the file, and the probe already learned its size and name.
+    Direct(Box<FileInfo>),
+    YtDlp,
 }
 
 /// Accepts any http(s) URL and lets yt-dlp decide what it supports.
@@ -95,6 +144,12 @@ fn format_selector(quality: Option<&str>) -> String {
     }
 }
 
+/// Starts a download and reports how it ended.
+///
+/// The engine choice, the status events and the registry bookkeeping live
+/// here. The two engines only have to move bytes and hand back where they
+/// landed, which is what let the second one be added without touching any of
+/// this.
 pub async fn run(
     app: AppHandle,
     jobs: &Jobs,
@@ -103,7 +158,6 @@ pub async fn run(
 ) -> AppResult<()> {
     let url = validate_url(&request.url)?;
     let dir = paths::ensure_dir(&request.output_dir)?;
-    let is_audio = request.media_type == "audio";
 
     let mut emitters = Emitters::new(app.clone());
     emitters.status(&id, JobKind::Download, JobStatus::Queued);
@@ -112,6 +166,117 @@ pub async fn run(
 
     emitters.status(&id, JobKind::Download, JobStatus::Running);
     emitters.progress_now(JobProgress::new(&id, JobKind::Download, Stage::Preparing));
+
+    let outcome = match choose_engine(&url, &request).await {
+        Engine::Direct(info) => {
+            // Nothing to kill: the work is a set of HTTPS requests rather than
+            // a child process, so cancellation arrives through the signal.
+            let cancel = jobs.cancel_signal(&id).await;
+            direct::run(
+                &id,
+                &mut emitters,
+                &cancel,
+                &url,
+                &dir,
+                request.output_name.as_deref(),
+                &info,
+            )
+            .await
+        }
+        Engine::YtDlp => run_ytdlp(&app, jobs, &id, &mut emitters, &url, &dir, &request).await,
+    };
+
+    // The registry entry goes either way. Its recorded partial path is
+    // deliberately *not* acted on any more: an interrupted download leaves its
+    // `.part` behind on purpose now, because that is what the retry button
+    // continues from. Deleting it was the old behaviour and it meant a download
+    // that died at 95% started again at nothing.
+    jobs.finish(&id).await;
+
+    match outcome {
+        Ok(output) => {
+            emitters.progress_now(JobProgress {
+                percent: Some(100.0),
+                ..JobProgress::new(&id, JobKind::Download, Stage::Finalizing)
+            });
+            emitters.status(
+                &id,
+                JobKind::Download,
+                JobStatus::Completed {
+                    output_path: output.to_string_lossy().into_owned(),
+                },
+            );
+            Ok(())
+        }
+        Err(AppError::Cancelled) => {
+            emitters.status(&id, JobKind::Download, JobStatus::Cancelled);
+            Err(AppError::Cancelled)
+        }
+        Err(error) => {
+            emitters.status(
+                &id,
+                JobKind::Download,
+                JobStatus::Failed {
+                    error: error.clone(),
+                },
+            );
+            Err(error)
+        }
+    }
+}
+
+/// Which engine gets this URL.
+///
+/// One HTTP request decides it, and that request is cheap next to the
+/// alternative: booting yt-dlp to find out it has nothing to extract costs two
+/// seconds every time, and used to end in a failure the user could do nothing
+/// about.
+async fn choose_engine(url: &str, request: &DownloadRequest) -> Engine {
+    match request.mode.as_deref() {
+        Some("media") => return Engine::YtDlp,
+        Some("file") => {
+            // Asked for by name, so a probe answering "this is a page" is
+            // overruled -- but its name and size are still worth having.
+            return match direct::probe(url).await {
+                Ok(Some(info)) => Engine::Direct(Box::new(info)),
+                _ => Engine::YtDlp,
+            };
+        }
+        _ => {}
+    }
+
+    match direct::probe(url).await {
+        // Extracting audio means re-encoding, and yt-dlp is the only engine
+        // here that can: fetching the bytes verbatim would hand back the video
+        // the user asked not to have. A link that is not media in the first
+        // place -- an archive, an installer -- is fetched whatever the toggle
+        // says, because there is no audio in it to extract.
+        Ok(Some(info)) if request.wants_audio() && is_media_type(&info) => Engine::YtDlp,
+        Ok(Some(info)) => Engine::Direct(Box::new(info)),
+        // A page, or a host that would not answer a plain GET. Either way
+        // yt-dlp is the one that knows what to do next.
+        _ => Engine::YtDlp,
+    }
+}
+
+fn is_media_type(info: &FileInfo) -> bool {
+    info.content_type
+        .as_deref()
+        .is_some_and(|value| value.starts_with("video/") || value.starts_with("audio/"))
+}
+
+/// The extractor engine: yt-dlp, for the thousand-odd sites where the link the
+/// user has is not the link the file is at.
+async fn run_ytdlp(
+    app: &AppHandle,
+    jobs: &Jobs,
+    id: &str,
+    emitters: &mut Emitters,
+    url: &str,
+    dir: &Path,
+    request: &DownloadRequest,
+) -> AppResult<PathBuf> {
+    let is_audio = request.wants_audio();
 
     // yt-dlp picks the extension itself once it knows the source, so the output
     // template gets `%(ext)s` and the real path is read back afterwards.
@@ -135,6 +300,10 @@ pub async fn run(
         "after_move:__DLPATH__%(filepath)s".into(),
         "-o".into(),
         template.to_string_lossy().into_owned(),
+        // Resume from the `.part` a previous attempt left rather than starting
+        // over. yt-dlp's own default, stated because the app now depends on it:
+        // the retry button is only worth pressing if this holds.
+        "--continue".into(),
         // The single biggest speed lever. YouTube and Instagram serve DASH and
         // HLS, and yt-dlp fetches fragments one at a time by default, so a
         // download that could saturate the line instead trickles.
@@ -181,7 +350,7 @@ pub async fn run(
     // and yt-dlp answers `--ffmpeg-location ""` with "does not exist! Continuing
     // without ffmpeg", which is worse than saying nothing and letting it search
     // PATH itself.
-    if let Ok(ffmpeg) = binaries::resolve(&app, Tool::Ffmpeg) {
+    if let Ok(ffmpeg) = binaries::resolve(app, Tool::Ffmpeg) {
         if let Some(parent) = ffmpeg.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             args.push("--ffmpeg-location".into());
             args.push(parent.to_string_lossy().into_owned());
@@ -189,16 +358,16 @@ pub async fn run(
     }
 
     args.push("--".into());
-    args.push(url);
+    args.push(url.to_string());
 
-    let mut cmd = binaries::command(&app, Tool::YtDlp)?;
+    let mut cmd = binaries::command(app, Tool::YtDlp)?;
     cmd.args(&args);
 
     // The child goes into the registry so `cancel_job` can reach it, while the
     // reader keeps the pipes. Taking stdout and stderr before the handover is
     // what lets cancellation and progress coexist.
     let process::Running { child, mut lines } = process::spawn(cmd, Tool::YtDlp.name())?;
-    jobs.attach_child(&id, child).await;
+    jobs.attach_child(id, child).await;
 
     let mut tail = StderrTail::default();
     let mut final_path: Option<PathBuf> = None;
@@ -211,10 +380,8 @@ pub async fn run(
             Line::Stdout(line) => {
                 if let Some(path) = line.strip_prefix("__DLPATH__") {
                     final_path = Some(PathBuf::from(path.trim()));
-                    let path = final_path.clone().expect("just assigned");
-                    jobs.set_partial_output(&id, path).await;
                 } else if let Some(payload) = line.strip_prefix(MARKER) {
-                    if let Some(progress) = parse_progress(&id, payload, stage) {
+                    if let Some(progress) = parse_progress(id, payload, stage) {
                         emitters.progress(progress);
                     }
                 }
@@ -227,12 +394,12 @@ pub async fn run(
                     stage = Stage::Merging;
                     emitters.progress_now(JobProgress {
                         percent: Some(100.0),
-                        ..JobProgress::new(&id, JobKind::Download, Stage::Merging)
+                        ..JobProgress::new(id, JobKind::Download, Stage::Merging)
                     });
                 } else if line.contains("[ExtractAudio]") {
                     stage = Stage::Finalizing;
                     emitters.progress_now(JobProgress::new(
-                        &id,
+                        id,
                         JobKind::Download,
                         Stage::Finalizing,
                     ));
@@ -243,9 +410,7 @@ pub async fn run(
     }
 
     // A child that is gone from the registry was taken by `cancel`.
-    let Some(mut child) = jobs.take_child(&id).await else {
-        cleanup_partial(jobs, &id).await;
-        emitters.status(&id, JobKind::Download, JobStatus::Cancelled);
+    let Some(mut child) = jobs.take_child(id).await else {
         return Err(AppError::Cancelled);
     };
 
@@ -260,56 +425,21 @@ pub async fn run(
     // where they are rather than cleaned up: they downloaded completely, and
     // guessing which of them is the "partial" one would delete half a video.
     if status.success() && unmerged {
-        let error = AppError::tool_missing(Tool::Ffmpeg.name());
-        jobs.clear_partial_output(&id).await;
-        jobs.finish(&id).await;
-        emitters.status(
-            &id,
-            JobKind::Download,
-            JobStatus::Failed {
-                error: error.clone(),
-            },
-        );
-        return Err(error);
+        return Err(AppError::tool_missing(Tool::Ffmpeg.name()));
     }
 
     if !status.success() {
-        cleanup_partial(jobs, &id).await;
-        let error = AppError::Tool {
+        return Err(AppError::Tool {
             tool: Tool::YtDlp.name().to_string(),
             code: status.code(),
             tail: tail.into_string(),
-        };
-        emitters.status(
-            &id,
-            JobKind::Download,
-            JobStatus::Failed {
-                error: error.clone(),
-            },
-        );
-        return Err(error);
+        });
     }
 
     // `--print after_move:%(filepath)s` gives the real name after every
     // post-processor has run, which is the only reliable way to know it: the
     // extension depends on what the source turned out to be.
-    let output = final_path.unwrap_or_else(|| dir.join(format!("{stem}.{ext}")));
-
-    jobs.clear_partial_output(&id).await;
-    jobs.finish(&id).await;
-
-    emitters.progress_now(JobProgress {
-        percent: Some(100.0),
-        ..JobProgress::new(&id, JobKind::Download, Stage::Finalizing)
-    });
-    emitters.status(
-        &id,
-        JobKind::Download,
-        JobStatus::Completed {
-            output_path: output.to_string_lossy().into_owned(),
-        },
-    );
-    Ok(())
+    Ok(final_path.unwrap_or_else(|| dir.join(format!("{stem}.{ext}"))))
 }
 
 /// Whether yt-dlp has just told us it is giving up on merging.
@@ -324,15 +454,6 @@ pub async fn run(
 /// and shared with the post-processing variant of the same message.
 fn merge_was_skipped(line: &str) -> bool {
     line.contains("ffmpeg is not installed") || line.contains("ffmpeg could not be found")
-}
-
-async fn cleanup_partial(jobs: &Jobs, id: &str) {
-    // A killed download leaves a truncated file behind, which looks like a
-    // usable result in the folder until it is opened.
-    if let Some(path) = jobs.finish(id).await {
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(path.with_extension("part"));
-    }
 }
 
 fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> {
@@ -373,10 +494,32 @@ fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> 
     })
 }
 
-/// Metadata for the download screen's preview: title, channel, duration and
-/// thumbnail, so pasting a link shows what is about to be downloaded.
+/// What the download screen previews after a link is pasted.
+///
+/// Asks the cheap question first. A direct link answers in one request, with
+/// its real name and its exact size, and never has to wake yt-dlp at all --
+/// which is the difference between a preview that appears as you finish
+/// pasting and one that takes two seconds. Only a page falls through to the
+/// extractor, and a page is the only thing the extractor is needed for.
 pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
     let url = validate_url(url)?;
+
+    if let Some(file) = direct::probe(&url).await? {
+        return Ok(UrlInfo {
+            kind: UrlKind::File,
+            title: file.filename,
+            // A file has no channel, no duration and no thumbnail, and inventing
+            // any of them would put a blank line under the name.
+            uploader: file.content_type,
+            duration_secs: None,
+            thumbnail: None,
+            is_playlist: false,
+            entry_count: None,
+            size_bytes: file.size_bytes,
+            resumable: file.resumable,
+        });
+    }
+
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
     cmd.args([
         "-J",
@@ -393,6 +536,7 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
 
     let entries = value.get("entries").and_then(|e| e.as_array());
     Ok(UrlInfo {
+        kind: UrlKind::Media,
         title: value
             .get("title")
             .and_then(|v| v.as_str())
@@ -410,6 +554,11 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
             .map(str::to_string),
         is_playlist: entries.is_some(),
         entry_count: entries.map(|e| e.len() as u64),
+        // yt-dlp cannot say: the size depends on the format it ends up
+        // choosing, which it does not decide until the download starts.
+        size_bytes: None,
+        // yt-dlp writes a `.part` and continues from it, for every site.
+        resumable: true,
     })
 }
 

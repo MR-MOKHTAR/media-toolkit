@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::error::AppResult;
 use crate::jobs::{JobKind, Jobs};
 use crate::media::ops::{
-    self, CompressPreset, CompressRequest, ConvertRequest, GifRequest, ResizeRequest, TrimRequest,
+    self, CompressPreset, CompressRequest, ConvertRequest, GifRequest, TrimRequest,
 };
 use crate::media::probe::MediaInfo;
 use crate::media::runner;
@@ -81,5 +81,4 @@ macro_rules! media_command {
 media_command!(start_compress, CompressRequest, JobKind::Compress, ops::compress);
 media_command!(start_trim, TrimRequest, JobKind::Trim, ops::trim);
 media_command!(start_convert, ConvertRequest, JobKind::Convert, ops::convert);
-media_command!(start_resize, ResizeRequest, JobKind::Resize, ops::resize);
 media_command!(start_gif, GifRequest, JobKind::Gif, ops::gif);

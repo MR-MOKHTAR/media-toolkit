@@ -21,7 +21,7 @@ const FILTERS: { value: JobFilter; labelKey: string; icon: LucideIcon }[] = [
 
 export function JobsScreen({ language }: { language: string }) {
   const { t } = useTranslation();
-  const { jobs, state, cancel, remove, reveal, clearFinished } = useJobs();
+  const { jobs, state, cancel, remove, reveal, retry, clearFinished } = useJobs();
   const { go } = useNavigation();
   const [filter, setFilter] = useState<JobFilter>("all");
 
@@ -69,6 +69,7 @@ export function JobsScreen({ language }: { language: string }) {
                       onCancel={(id) => void cancel(id)}
                       onRemove={remove}
                       onReveal={(path) => void reveal(path)}
+                      onRetry={(id) => void retry(id)}
                       onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
                     />
                   </motion.div>
