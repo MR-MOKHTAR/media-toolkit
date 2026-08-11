@@ -32,7 +32,7 @@ const HISTORY_ROUTES = new Set<string>([
   "compress",
   "trim",
   "convert",
-  "gif",
+  "extractAudio",
   "transcribe",
 ]);
 

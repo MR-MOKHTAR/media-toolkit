@@ -21,7 +21,15 @@ import { FileDropZone, OutputFolderRow, RunButton, ToolShell } from "./ToolShell
 export type MediaToolKind = Exclude<JobKind, "download" | "transcribe">;
 
 /** What the input has to be before the tool can do anything with it. */
-type Requirement = "media" | "video";
+type Requirement = "media" | "video" | "audio";
+
+/** Whether a probed file satisfies each requirement, and -- by sharing its keys
+ *  with the `needs_*` strings -- what to say when it does not. */
+const MEETS: Record<Requirement, (info: MediaInfo) => boolean> = {
+  media: (info) => Boolean(info.video || info.audio),
+  video: (info) => Boolean(info.video),
+  audio: (info) => Boolean(info.audio),
+};
 
 /** Everything a tool's own parts are given. The file and the output folder are
  *  the screen's; `state` is the tool's, and is the only thing that differs
@@ -64,9 +72,9 @@ export interface MediaToolConfig<S> {
 /**
  * A config with its state type erased.
  *
- * The registry holds five different state shapes, and this screen only ever
+ * The registry holds four different state shapes, and this screen only ever
  * carries one of them from `Controls` to `toRequest` -- it never looks inside.
- * A union of the five would not work: `S` appears in both argument and return
+ * A union of the four would not work: `S` appears in both argument and return
  * position, so the union of those signatures accepts nothing.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,11 +122,9 @@ export function MediaToolScreen({ config, initialFile, language, notify }: Props
   };
 
   // ffprobe answered and the answer was usable. Audio-only input is fine for
-  // everything but the two tools that have to have pixels to work on.
+  // every tool that does not need pixels to work on.
   const meetsRequirement = Boolean(
-    config.requires === "video"
-      ? file.info?.video
-      : file.info?.video || file.info?.audio,
+    file.info && MEETS[config.requires](file.info),
   );
 
   const ready = Boolean(
@@ -143,9 +149,7 @@ export function MediaToolScreen({ config, initialFile, language, notify }: Props
           refuse yet, and saying so early made every file selection flash a
           red line before the metadata arrived. */}
       {file.path && !file.loading && !meetsRequirement && (
-        <p className="text-sm text-danger">
-          {t(config.requires === "video" ? "needs_video" : "needs_media")}
-        </p>
+        <p className="text-sm text-danger">{t(`needs_${config.requires}`)}</p>
       )}
 
       {meetsRequirement && <config.Controls {...context} />}

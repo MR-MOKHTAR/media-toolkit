@@ -3,7 +3,8 @@ import { FolderOpen, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
-import { cn } from "../../lib/cn";
+import { CheckRow } from "../../components/ui/CheckRow";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
 import { describe } from "../media/useMediaJob";
@@ -82,17 +83,23 @@ export function StoragePanel({ notify }: Props) {
         >
           {info?.root ?? ""}
         </span>
+        {/* Asks first, because this one moves files. `change` below does not
+            need to: the folder picker it opens is its own confirmation, and
+            cancelling that is how you back out of it. */}
         {info && !info.isDefault && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
+          <ConfirmDialog
+            title={t("library_reset")}
+            description={t("library_reset_confirm")}
+            confirmLabel={t("library_reset")}
+            onConfirm={() =>
               void apply(() => ipc.resetLibraryRoot(), t("library_moved"))
             }
-          >
-            {t("library_reset")}
-          </Button>
+            trigger={
+              <Button variant="ghost" size="sm" disabled={busy}>
+                {t("library_reset")}
+              </Button>
+            }
+          />
         )}
         <Button variant="ghost" size="sm" disabled={!info} onClick={() => void open()}>
           {t("open_folder")}
@@ -103,7 +110,11 @@ export function StoragePanel({ notify }: Props) {
         </Button>
       </div>
 
+      {/* Switches rather than checkboxes: both of these are written to
+          settings.json the moment they move, so neither is waiting on a button
+          to mean anything. */}
       <CheckRow
+        control="switch"
         label={t("library_organize")}
         hint={t("library_organize_hint")}
         checked={info?.organizeByTool ?? true}
@@ -112,6 +123,7 @@ export function StoragePanel({ notify }: Props) {
       />
 
       <CheckRow
+        control="switch"
         label={t("library_next_to_input")}
         hint={t("library_next_to_input_hint")}
         checked={info?.saveNextToInput ?? false}
@@ -119,42 +131,5 @@ export function StoragePanel({ notify }: Props) {
         onChange={(enabled) => void apply(() => ipc.setSaveNextToInput(enabled))}
       />
     </div>
-  );
-}
-
-/** The same label-and-hint checkbox the trim and GIF options use, so a setting
- *  looks like a setting wherever it appears. */
-function CheckRow({
-  label,
-  hint,
-  checked,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  disabled: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex items-start gap-2.5",
-        disabled ? "cursor-default opacity-70" : "cursor-pointer",
-      )}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 size-4 shrink-0 rounded-sm border-line accent-accent"
-      />
-      <span className="flex flex-col">
-        <span className="text-sm text-fg">{label}</span>
-        <span className="text-xs text-fg-muted">{hint}</span>
-      </span>
-    </label>
   );
 }

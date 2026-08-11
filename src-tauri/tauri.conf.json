@@ -35,7 +35,7 @@
     "category": "Video",
     "publisher": "Mokhtar Mohammadi",
     "shortDescription": "Download and edit media, offline",
-    "longDescription": "Download video and audio from the web, then compress, trim, convert, resize, or turn it into a GIF. yt-dlp and FFmpeg are bundled, so nothing else has to be installed.",
+    "longDescription": "Download video and audio from the web, then compress, trim, convert it, or pull the audio track out of it. yt-dlp and FFmpeg are bundled, so nothing else has to be installed.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

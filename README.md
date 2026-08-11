@@ -1,8 +1,8 @@
 # Media Toolkit
 
 A small desktop app for the two things people actually need to do with a video:
-get it, and change it. Download from the web, then compress, trim, convert, or
-turn a clip into a GIF — and turn a sentence into an image worth posting.
+get it, and change it. Download from the web, then compress, trim, convert it,
+pull its audio out, or turn its speech into text.
 
 Built for people who do not want to think about codecs. Every tool is one file
 picker, two or three choices, and a button. There is no bitrate field anywhere.
@@ -17,8 +17,8 @@ installed and everything except downloading works offline.
 | **Download** | Paste a link — any link. A page goes to yt-dlp, which handles the ~1000 sites it supports and shows the title, channel, duration and thumbnail first. A link that already points at a file — an installer, an archive, a PDF, a direct MP4 — is fetched by the app itself on eight connections, with its real name and exact size shown before you commit. Interrupted downloads resume rather than restart. |
 | **Compress** | Three things in one place, because they are the same question: quality (Small / Balanced / High), resolution (Original / 1080p / 720p / 480p, with anything at or above the source disabled), and an optional size to land under. The estimated output size updates as you change either of the first two, so the trade is visible before anything runs. |
 | **Trim** | Drag two handles over a timeline. Cuts losslessly by default, which is instant; *Exact cut* re-encodes when you need the exact frame you asked for. |
-| **Convert** | MP4, MKV, MOV, WebM, MP3, M4A, WAV. Picking an audio format *is* how you extract audio — there is no separate mode for it. When the streams can be copied the app says so and finishes in about a second. |
-| **GIF** | A range plus two presets. Two-pass palette generation, so the result does not look like 1998. |
+| **Convert** | MP4, MKV, MOV, WebM, MP3, M4A, WAV — one grid, whichever the file needs. When the streams can be copied into the new container the app says so and finishes in about a second. |
+| **Extract audio** | The soundtrack of a video, on its own. *Original* copies the track out untouched — instant, and lossless, because the audio inside an MP4 is already a finished AAC file; MP3, M4A and WAV are there for when something downstream insists. The app only offers the lossless option for files whose codec it has a container for. |
 
 Jobs run concurrently and each reports its own progress. FFmpeg work is capped
 by a semaphore, so four compressions cannot make the app itself unresponsive.
@@ -32,7 +32,9 @@ download that died at 95% costs seconds rather than starting over.
 
 Everything the app produces lands in one folder it owns —
 `~/Downloads/Media Toolkit` — sorted into `Video`, `Audio`, `Files`,
-`Compressed`, `Trimmed`, `Converted`, `GIF`, and `Transcripts`.
+`Compressed`, `Trimmed`, `Converted`, and `Transcripts`. Extracted audio joins
+audio downloads on the `Audio` shelf — both are audio files this app made, and
+which tool produced one is not what anybody looks for it under.
 Nothing is written loose into Downloads beside your own files.
 
 Settings moves that folder, flattens it into a single directory, or switches the

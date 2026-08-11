@@ -1,7 +1,7 @@
 import {
+  AudioLines,
   Captions,
   Download,
-  FileVideo2,
   Repeat2,
   Scissors,
   Shrink,
@@ -29,7 +29,7 @@ export const TOOLS: ToolDefinition[] = [
   { route: { name: "compress" }, key: "compress", icon: Shrink },
   { route: { name: "trim" }, key: "trim", icon: Scissors },
   { route: { name: "convert" }, key: "convert", icon: Repeat2 },
-  { route: { name: "gif" }, key: "gif", icon: FileVideo2 },
+  { route: { name: "extractAudio" }, key: "extractAudio", icon: AudioLines },
   // `Captions` rather than `Mic`: a microphone reads as "record", which is the
   // one thing this tool does not do.
   { route: { name: "transcribe" }, key: "transcribe", icon: Captions },

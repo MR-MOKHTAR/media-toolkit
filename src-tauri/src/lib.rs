@@ -23,10 +23,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Jobs::default())
         .setup(|app| {
-            app.manage(transcribe::LedgerState(std::sync::Mutex::new(
-                transcribe::ledger::load(app.handle()),
-            )));
-
             // A transcription killed by a SIGKILL or a power cut leaves its
             // chunk directory behind, and those are large. Nothing else ever
             // cleans them up, so a stale sweep at startup is the only thing
@@ -69,13 +65,12 @@ pub fn run() {
             media::commands::probe_media,
             media::commands::estimate_compressed_size,
             media::commands::can_copy_streams,
+            media::commands::audio_copy_format,
             media::commands::start_compress,
             media::commands::start_trim,
             media::commands::start_convert,
-            media::commands::start_gif,
+            media::commands::start_extract_audio,
             transcribe::commands::start_transcribe,
-            transcribe::commands::groq_quota,
-            transcribe::commands::estimate_transcribe_secs,
             transcribe::commands::read_transcript,
             transcribe::commands::api_key_status,
             transcribe::commands::set_api_key,

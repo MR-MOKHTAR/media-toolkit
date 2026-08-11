@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::error::AppResult;
 use crate::jobs::{JobKind, Jobs};
 use crate::media::ops::{
-    self, CompressPreset, CompressRequest, ConvertRequest, GifRequest, TrimRequest,
+    self, CompressPreset, CompressRequest, ConvertRequest, ExtractAudioRequest, TrimRequest,
 };
 use crate::media::probe::MediaInfo;
 use crate::media::runner;
@@ -39,6 +39,15 @@ pub async fn estimate_compressed_size(
 pub async fn can_copy_streams(app: AppHandle, path: String, format: String) -> AppResult<bool> {
     let info = crate::media::probe(&app, &PathBuf::from(path)).await?;
     Ok(ops::can_stream_copy(&info, &format.to_ascii_lowercase()))
+}
+
+/// The container this file's audio can be lifted into untouched, or `None` when
+/// extracting it means re-encoding. Lets the extract-audio screen offer the
+/// instant, lossless option only for the files that actually have one.
+#[tauri::command]
+pub async fn audio_copy_format(app: AppHandle, path: String) -> AppResult<Option<String>> {
+    let info = crate::media::probe(&app, &PathBuf::from(path)).await?;
+    Ok(ops::copy_audio_ext(&info).map(str::to_string))
 }
 
 /// Shared shape: probe, plan, register, spawn. Written once because every tool
@@ -81,4 +90,9 @@ macro_rules! media_command {
 media_command!(start_compress, CompressRequest, JobKind::Compress, ops::compress);
 media_command!(start_trim, TrimRequest, JobKind::Trim, ops::trim);
 media_command!(start_convert, ConvertRequest, JobKind::Convert, ops::convert);
-media_command!(start_gif, GifRequest, JobKind::Gif, ops::gif);
+media_command!(
+    start_extract_audio,
+    ExtractAudioRequest,
+    JobKind::ExtractAudio,
+    ops::extract_audio
+);

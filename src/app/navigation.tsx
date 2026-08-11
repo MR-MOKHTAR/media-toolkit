@@ -20,7 +20,7 @@ export type ToolName =
   | "compress"
   | "trim"
   | "convert"
-  | "gif"
+  | "extractAudio"
   | "transcribe";
 
 export type Route =

@@ -20,9 +20,7 @@ import type {
   JobStatusEvent,
   LibraryInfo,
   LibrarySlot,
-  Quota,
   ToolStatus,
-  TranscribeModel,
   TranscriptText,
   UpdateResult,
   UrlInfo,
@@ -112,16 +110,6 @@ export async function chooseMediaFile(defaultPath?: string) {
 }
 
 // ------------------------------------------------------------- transcribe
-
-/** Groq's remaining audio-seconds for a model, as best this machine can tell.
- *  See the note in the Rust `ledger`: it can only ever be optimistic, so the
- *  screen warns on it and never blocks. */
-export const groqQuota = (model: TranscribeModel) =>
-  invoke<Quota>("groq_quota", { model });
-
-/** What a file of this length will cost, overlaps included. */
-export const estimateTranscribeSecs = (durationSecs: number) =>
-  invoke<number>("estimate_transcribe_secs", { durationSecs });
 
 /** Reads a finished transcript back for display. Narrow by design -- the
  *  backend checks the extension and the size, because the webview names the

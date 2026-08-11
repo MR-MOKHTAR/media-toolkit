@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
 import { EmptyState } from "../../components/ui/Card";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { cn } from "../../lib/cn";
 import { formatCount } from "../../lib/format";
 import { countJobs, filterJobs, type JobFilter } from "./selectors";
@@ -125,23 +126,34 @@ export function JobsScreen({ language }: { language: string }) {
           })}
         </div>
 
-        {/* Safe as a plain row: this drops finished jobs from the list, it does
-            not touch a file. `mt-auto` pins it to the bottom, apart from the
-            filters -- it acts on the list rather than choosing what is in it. */}
+        {/* It touches no file, but it does empty a list the user cannot get
+            back -- and it sits one row under the filters, which are harmless
+            and look identical. So it asks first. `mt-auto` pins it to the
+            bottom, apart from them: it acts on the list rather than choosing
+            what is in it. */}
         {counts.done > 0 && (
           <div className="mt-auto border-t border-line pt-2">
-            <button
-              type="button"
-              onClick={clearFinished}
-              className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2",
-                "text-start text-base text-fg-muted transition-colors duration-[--duration-fast]",
-                "hover:bg-danger/10 hover:text-danger",
-              )}
-            >
-              <Trash2 size={16} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{t("clear_finished")}</span>
-            </button>
+            <ConfirmDialog
+              title={t("clear_finished")}
+              description={t("clear_finished_confirm")}
+              confirmLabel={t("clear_finished")}
+              onConfirm={clearFinished}
+              trigger={
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2",
+                    "text-start text-base text-fg-muted transition-colors duration-[--duration-fast]",
+                    "hover:bg-danger/10 hover:text-danger",
+                  )}
+                >
+                  <Trash2 size={16} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {t("clear_finished")}
+                  </span>
+                </button>
+              }
+            />
           </div>
         )}
       </aside>

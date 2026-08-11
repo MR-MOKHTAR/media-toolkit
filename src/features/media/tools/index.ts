@@ -12,14 +12,14 @@ import type {
 } from "../components/MediaToolScreen";
 import { compressTool } from "./compress";
 import { convertTool } from "./convert";
-import { gifTool } from "./gif";
+import { extractAudioTool } from "./extractAudio";
 import { trimTool } from "./trim";
 
 export const MEDIA_TOOLS: Record<MediaToolKind, AnyMediaToolConfig> = {
   compress: compressTool,
   trim: trimTool,
   convert: convertTool,
-  gif: gifTool,
+  extractAudio: extractAudioTool,
 };
 
 /** Whether this route is one of them, and carries the dropped file that every

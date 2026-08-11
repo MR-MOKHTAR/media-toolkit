@@ -25,15 +25,15 @@ pub const COMMON_ARGS: &[&str] = &[
     "-nostats",
 ];
 
-/// One ffmpeg invocation. Multi-pass operations (target-size encoding, GIF
-/// palettes) are a list of these.
+/// One ffmpeg invocation. Multi-pass operations -- target-size encoding is the
+/// one this app has -- are a list of these.
 pub struct Pass {
     pub args: Vec<String>,
     /// Media seconds this pass will produce, for the percentage. `None` leaves
     /// progress indeterminate rather than inventing a denominator.
     pub duration_secs: Option<f64>,
-    /// Passes that only analyse (palettegen, two-pass pass 1) produce no
-    /// visible output but still take time, so they still report progress.
+    /// A pass that only analyses (two-pass pass 1) produces no visible output
+    /// but still takes time, so it still reports progress.
     pub label: &'static str,
 }
 

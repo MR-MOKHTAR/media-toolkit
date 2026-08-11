@@ -1,4 +1,5 @@
 import { memo } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -6,6 +7,7 @@ import {
   FileText,
   FolderOpen,
   Loader2,
+  MoreHorizontal,
   RotateCcw,
   Trash2,
   X,
@@ -58,7 +60,9 @@ const AUDIO_DETAILS = new Set(["MP3", "M4A", "WAV"]);
  * state -- see mediaKindOfPath.
  */
 function mediaKindOfJob(job: Job): MediaKind {
-  if (job.kind === "gif") return "gif";
+  // Whatever container it landed in, the result of this tool is audio -- and it
+  // is known before the file exists, which the extension cannot be.
+  if (job.kind === "extractAudio") return "audio";
   // Before the output path is consulted, not after: a finished transcript is a
   // .srt, and mediaKindOfPath's floor is "video", so it would be drawn with a
   // film icon.
@@ -233,18 +237,61 @@ function JobCardComponent({
             <X size={16} />
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => onRemove(job.id)}
-            aria-label={t("remove")}
-            title={t("remove")}
-            className="flex size-8 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-danger/10 hover:text-danger"
-          >
-            <Trash2 size={16} />
-          </button>
+          // Remove sits in a menu rather than inline, and it is the only thing
+          // in there. Inline it was a bare bin icon immediately beside the
+          // folder icon that opens the file -- the most common action on this
+          // card touching the one irreversible one, at 32px each. Behind the
+          // menu it costs a click, gains a word, and stops being something the
+          // hand can find by accident.
+          <RemoveMenu label={t("remove")} onRemove={() => onRemove(job.id)} />
         )}
       </div>
     </li>
+  );
+}
+
+function RemoveMenu({ label, onRemove }: { label: string; onRemove: () => void }) {
+  const { t } = useTranslation();
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        aria-label={t("more_actions")}
+        title={t("more_actions")}
+        className={cn(
+          "flex size-8 items-center justify-center rounded-sm text-fg-muted",
+          "transition-colors duration-[--duration-fast]",
+          "hover:bg-surface-hover hover:text-fg data-[state=open]:bg-surface-hover data-[state=open]:text-fg",
+        )}
+      >
+        <MoreHorizontal size={16} />
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          // end, which is logical: the menu hangs off the trailing edge of the
+          // card in both writing directions rather than reaching back across it.
+          align="end"
+          sideOffset={4}
+          className={cn(
+            "z-50 min-w-36 rounded-lg border border-line bg-surface p-1",
+            "shadow-(--shadow-panel)",
+          )}
+        >
+          <DropdownMenu.Item
+            onSelect={onRemove}
+            className={cn(
+              "flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5",
+              "text-sm text-fg-soft outline-none select-none",
+              "data-highlighted:bg-danger/10 data-highlighted:text-danger",
+            )}
+          >
+            <Trash2 size={14} className="shrink-0" />
+            {label}
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 

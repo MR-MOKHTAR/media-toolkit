@@ -5,7 +5,7 @@ export type JobKind =
   | "compress"
   | "trim"
   | "convert"
-  | "gif"
+  | "extractAudio"
   | "transcribe";
 
 export type JobState =
@@ -112,13 +112,15 @@ export interface DownloadRequest {
  *  here rather than a single "download". */
 export type LibrarySlot =
   | "video"
+  /** Audio the app produced: a download asked for as audio, and a track lifted
+   *  out of a video. Both are audio files, and which tool made one is not what
+   *  anybody looks for it under. */
   | "audio"
   /** Anything fetched verbatim that is not video or audio. */
   | "files"
   | "compressed"
   | "trimmed"
   | "converted"
-  | "gif"
   | "transcripts";
 
 /** Which shelf each tool writes to. Kept beside the type so adding a tool has
@@ -127,7 +129,7 @@ export const SLOT_FOR_KIND: Record<Exclude<JobKind, "download">, LibrarySlot> = 
   compress: "compressed",
   trim: "trimmed",
   convert: "converted",
-  gif: "gif",
+  extractAudio: "audio",
   transcribe: "transcripts",
 };
 
@@ -195,21 +197,6 @@ export interface TranscribeRequest {
   translate: boolean;
   format: TranscriptFormat;
   prompt?: string;
-}
-
-/** Groq meters audio-seconds in two rolling windows, per model. `hourUsed` is
- *  an estimate kept on this machine -- see the note in the Rust `ledger`. */
-export interface Quota {
-  hourUsed: number;
-  hourLimit: number;
-  dayUsed: number;
-  dayLimit: number;
-  /** When the oldest charge falls out of its window. Nothing "resets" in a
-   *  rolling window; capacity dribbles back. */
-  hourFreesInSecs: number;
-  dayFreesInSecs: number;
-  /** Set only when Groq itself told us to stop. */
-  blockedForSecs: number | null;
 }
 
 export interface ApiKeyStatus {

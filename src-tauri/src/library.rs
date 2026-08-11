@@ -1,7 +1,7 @@
 //! Where the app's own files live.
 //!
 //! Everything used to be written straight into the user's Downloads folder,
-//! mixed in with every installer and PDF they have ever saved. A GIF, a
+//! mixed in with every installer and PDF they have ever saved. A clip, a
 //! transcript and a 4K download landed side by side, and nothing in that folder
 //! said which of them this app had produced.
 //!
@@ -42,6 +42,10 @@ const FALLBACK_FOLDER: &str = "Media Toolkit";
 #[serde(rename_all = "camelCase")]
 pub enum Slot {
     Video,
+    /// Audio the app produced: a download the user asked for as audio, and a
+    /// track lifted out of a video. One shelf rather than two, because in both
+    /// cases the result is an audio file and the tool that made it is not what
+    /// anyone is looking for it under.
     Audio,
     /// Anything fetched verbatim that is not video or audio -- an installer, an
     /// archive, a PDF. Its own shelf because the alternative was filing a zip
@@ -51,7 +55,6 @@ pub enum Slot {
     Compressed,
     Trimmed,
     Converted,
-    Gif,
     Transcripts,
 }
 
@@ -66,13 +69,12 @@ impl Slot {
             Self::Compressed => "Compressed",
             Self::Trimmed => "Trimmed",
             Self::Converted => "Converted",
-            Self::Gif => "GIF",
             Self::Transcripts => "Transcripts",
         }
     }
 
     /// Every shelf, for creating the layout up front.
-    pub fn all() -> [Slot; 8] {
+    pub fn all() -> [Slot; 7] {
         [
             Self::Video,
             Self::Audio,
@@ -80,7 +82,6 @@ impl Slot {
             Self::Compressed,
             Self::Trimmed,
             Self::Converted,
-            Self::Gif,
             Self::Transcripts,
         ]
     }
@@ -270,9 +271,9 @@ mod tests {
     fn organizing_puts_each_tool_on_its_own_shelf() {
         let root = Path::new("/home/x/Downloads/Media Toolkit");
         assert_eq!(
-            resolve(root, Slot::Gif, true),
-            root.join("GIF"),
-            "the GIF shelf moved"
+            resolve(root, Slot::Compressed, true),
+            root.join("Compressed"),
+            "the Compressed shelf moved"
         );
         assert_eq!(resolve(root, Slot::Audio, true), root.join("Audio"));
     }
@@ -300,7 +301,6 @@ mod tests {
                 "Compressed",
                 "Trimmed",
                 "Converted",
-                "GIF",
                 "Transcripts",
             ]
         );

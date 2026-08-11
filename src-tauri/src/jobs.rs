@@ -32,7 +32,7 @@ pub enum JobKind {
     Compress,
     Trim,
     Convert,
-    Gif,
+    ExtractAudio,
     Transcribe,
 }
 

@@ -27,8 +27,8 @@ pub const TARGET_CHUNK_SECS: f64 = 600.0;
 /// therefore *sent* with this much extra on each side, while still only being
 /// credited with the span it owns.
 ///
-/// This is billed audio, which is why the quota estimate counts what is sent
-/// rather than the length of the file.
+/// This is billed audio: a chunk is charged for the window that is sent, not
+/// for the span it owns.
 pub const OVERLAP_SECS: f64 = 5.0;
 
 /// A floor on the chunk length, so a pathological bitrate cannot produce
@@ -40,9 +40,6 @@ const MIN_CHUNK_SECS: f64 = 30.0;
 /// mislabelled file -- and launching a hundred billable uploads to discover
 /// that is the wrong way to find out.
 const MAX_CHUNKS: usize = 64;
-
-/// Groq bills in whole seconds with a ten-second minimum per request.
-const MIN_BILLED_SECS: f64 = 10.0;
 
 /// One request's worth of audio.
 ///
@@ -150,46 +147,6 @@ pub fn cut_window(chunk: &ChunkSpec, duration_secs: f64) -> (f64, f64) {
     let start = (chunk.start - OVERLAP_SECS).max(0.0);
     let end = (chunk.end() + OVERLAP_SECS).min(duration_secs);
     (start, end - start)
-}
-
-/// Audio-seconds Groq will bill for this plan.
-///
-/// Counts the overlaps, because Groq bills what it receives, and applies the
-/// ten-second per-request minimum. The difference is not academic: a three-hour
-/// recording sends several minutes more than it contains, and this number is
-/// the only warning before a single file eats a day's budget.
-pub fn billed_secs(chunks: &[ChunkSpec], duration_secs: f64) -> u32 {
-    chunks
-        .iter()
-        .map(|chunk| {
-            let (_, len) = cut_window(chunk, duration_secs);
-            len.max(MIN_BILLED_SECS).ceil() as u32
-        })
-        .sum()
-}
-
-/// What a file of this length will cost, before it has been converted.
-///
-/// The screen needs a number while the user is still deciding, and at that
-/// point there is no FLAC to measure. Assumes the duration-driven chunk length,
-/// which is what an ordinary speech recording gets; a file that turns out to
-/// need smaller chunks bills slightly more than this said.
-pub fn estimate_billed_secs(duration_secs: f64) -> u32 {
-    if !duration_secs.is_finite() || duration_secs <= 0.0 {
-        return 0;
-    }
-    match chunk_plan(duration_secs, estimated_flac_bytes(duration_secs)) {
-        Ok(chunks) => billed_secs(&chunks, duration_secs),
-        // Too long to plan: still worth showing what it would cost, so the
-        // refusal reads as "too long" rather than as "free".
-        Err(_) => duration_secs.ceil() as u32,
-    }
-}
-
-/// 16 kHz mono FLAC of speech, measured across a handful of podcast and lecture
-/// sources, runs about 13 KB/s. Only used for the pre-conversion estimate.
-fn estimated_flac_bytes(duration_secs: f64) -> u64 {
-    (duration_secs * 13_000.0) as u64
 }
 
 /// Puts every chunk's segments back on the source timeline as one transcript.
@@ -583,27 +540,4 @@ mod tests {
         assert_eq!(looped.len(), 1, "a real repeat survived: {looped:?}");
     }
 
-    /// The estimate exists to stop a single file eating a day's budget without
-    /// warning, so it must count the overlaps rather than the file's length.
-    #[test]
-    fn the_estimate_counts_what_is_sent_not_the_files_length() {
-        let duration = 3_600.0;
-        let estimate = estimate_billed_secs(duration);
-        assert!(
-            estimate > duration as u32,
-            "overlaps are billed too: {estimate} vs {duration}"
-        );
-        // But not wildly more -- six seams at ten seconds each.
-        assert!(estimate < duration as u32 + 120, "{estimate}");
-    }
-
-    #[test]
-    fn billing_never_charges_less_than_the_ten_second_minimum() {
-        let chunk = ChunkSpec {
-            index: 0,
-            start: 0.0,
-            len: 3.0,
-        };
-        assert_eq!(billed_secs(&[chunk], 3.0), 10);
-    }
 }

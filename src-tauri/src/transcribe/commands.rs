@@ -12,10 +12,8 @@ use tauri::{AppHandle, Manager, State};
 
 use super::chunks;
 use super::groq::{self, Model};
-use super::ledger::{self, Quota};
 use super::runner;
 use super::subtitles::OutputFormat;
-use super::LedgerState;
 use crate::error::{AppError, AppResult};
 use crate::jobs::{JobKind, Jobs};
 use crate::paths;
@@ -65,16 +63,10 @@ pub async fn start_transcribe(
         return Err(AppError::invalid("input", "this file has no audio"));
     }
 
-    // Refused only when Groq itself paused us. A local estimate that ran out is
-    // a warning on the form, never a block -- see the note in `ledger`.
-    let quota = quota_of(&app, request.model);
-    if let Some(secs) = quota.blocked_for_secs {
-        return Err(AppError::RateLimited {
-            scope: crate::error::RateScope::Hour,
-            retry_after_secs: Some(secs),
-        });
-    }
-
+    // Nothing here checks a budget. The app keeps no count of what has been
+    // spent -- see the note in `mod` -- so a run is always attempted and Groq's
+    // 429 is what stops it, with a message saying which limit was hit.
+    //
     // Fails here rather than as a job that dies a moment later.
     chunks::chunk_plan(info.duration_secs, chunk_size_hint(&info))?;
 
@@ -118,23 +110,6 @@ pub async fn start_transcribe(
 /// is the number that decides the requests.
 fn chunk_size_hint(info: &crate::media::probe::MediaInfo) -> u64 {
     (info.duration_secs * 13_000.0) as u64
-}
-
-#[tauri::command]
-pub fn groq_quota(app: AppHandle, model: Model) -> Quota {
-    quota_of(&app, model)
-}
-
-fn quota_of(app: &AppHandle, model: Model) -> Quota {
-    let state = app.state::<LedgerState>();
-    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    guard.quota(model, ledger::now_unix())
-}
-
-/// What a file of this length will cost, for the hint under the run button.
-#[tauri::command]
-pub fn estimate_transcribe_secs(duration_secs: f64) -> u32 {
-    chunks::estimate_billed_secs(duration_secs)
 }
 
 // ------------------------------------------------------------- the API key
@@ -280,13 +255,4 @@ mod tests {
         assert!(request.output_name.is_none());
     }
 
-    #[test]
-    fn the_quota_crosses_the_bridge_in_camel_case() {
-        let quota = ledger::Ledger::default().quota(Model::Turbo, 1_800_000_000);
-        let json = serde_json::to_value(quota).unwrap();
-        assert!(json.get("hourLimit").is_some(), "{json}");
-        assert!(json.get("hourFreesInSecs").is_some(), "{json}");
-        assert!(json.get("blockedForSecs").is_some(), "{json}");
-        assert!(json.get("hour_limit").is_none(), "{json}");
-    }
 }

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "../../../lib/cn";
+import { CheckRow } from "../../../components/ui/CheckRow";
 import { extensionOf } from "../../../lib/mediaKind";
 import type {
   MediaToolConfig,
@@ -40,23 +40,12 @@ function TrimControls({ info, state, setState }: MediaToolContext<TrimState>) {
       {/* One checkbox, off by default. A stream copy is instant and lossless
           but snaps to the nearest preceding keyframe, so the clip can begin a
           moment early -- said plainly rather than hidden. */}
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={state.exact}
-          onChange={(event) => {
-            const exact = event.target.checked;
-            setState((current) => ({ ...current, exact }));
-          }}
-          className={cn("mt-0.5 size-4 shrink-0 rounded-sm border-line accent-accent")}
-        />
-        <span className="flex flex-col">
-          <span className="text-sm text-fg">{t("trim_exact")}</span>
-          <span className="text-xs text-fg-muted">
-            {state.exact ? t("trim_exact_hint") : t("trim_fast_hint")}
-          </span>
-        </span>
-      </label>
+      <CheckRow
+        label={t("trim_exact")}
+        hint={state.exact ? t("trim_exact_hint") : t("trim_fast_hint")}
+        checked={state.exact}
+        onChange={(exact) => setState((current) => ({ ...current, exact }))}
+      />
     </>
   );
 }

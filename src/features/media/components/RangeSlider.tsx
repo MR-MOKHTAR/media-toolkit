@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as Slider from "@radix-ui/react-slider";
 import { useTranslation } from "react-i18next";
 
 import { TextInput } from "../../../components/ui/TextInput";
@@ -10,8 +11,6 @@ interface RangeSliderProps {
   start: number;
   end: number;
   onChange: (start: number, end: number) => void;
-  /** GIF caps the selection; trim does not. */
-  maxSpanSecs?: number;
 }
 
 /**
@@ -20,10 +19,16 @@ interface RangeSliderProps {
  *
  * The whole control mirrors with the interface language: under `fa`/`ar` zero is
  * on the right, the clip grows leftward, and the start field leads on the right.
- * A native `<input type="range">` already reverses under `dir="rtl"` in WebKit
- * and Chromium -- the two engines this ships on -- so that reversal is leaned on
- * rather than fought, which also keeps the arrow keys honest: under RTL,
- * ArrowLeft advances the time.
+ * That is `dir` on the slider root -- Radix reverses both the geometry and the
+ * arrow keys from it, so under RTL, ArrowLeft advances the time.
+ *
+ * This was two `<input type="range">` stacked on top of each other with
+ * `pointer-events` disabled on everything but their thumbs, because a native
+ * range has one handle and a trim needs two. That trick worked until the handles
+ * met: with both at the same position the upper input's thumb sat over the
+ * lower one, and the handle underneath could not be picked up again. One root
+ * with two thumbs has no upper and lower -- Radix moves whichever thumb is
+ * nearest the press, so the pair can close completely and still come apart.
  *
  * The timecode *text* does not mirror. Digits stay ASCII and left to right
  * inside their boxes, because a mm:ss field written right to left is unreadable
@@ -34,25 +39,17 @@ export function RangeSlider({
   start,
   end,
   onChange,
-  maxSpanSecs,
 }: RangeSliderProps) {
   const { t, i18n } = useTranslation();
   const step = durationSecs > 600 ? 1 : 0.1;
 
   const setStart = (value: number) => {
-    const next = Math.min(Math.max(0, value), end - step);
-    const span = maxSpanSecs ? Math.min(end, next + maxSpanSecs) : end;
-    onChange(next, span);
+    onChange(Math.min(Math.max(0, value), end - step), end);
   };
 
   const setEnd = (value: number) => {
-    const next = Math.max(Math.min(durationSecs, value), start + step);
-    const clamped = maxSpanSecs ? Math.min(next, start + maxSpanSecs) : next;
-    onChange(start, clamped);
+    onChange(start, Math.max(Math.min(durationSecs, value), start + step));
   };
-
-  const startPct = durationSecs > 0 ? (start / durationSecs) * 100 : 0;
-  const endPct = durationSecs > 0 ? (end / durationSecs) * 100 : 100;
 
   return (
     <div className="flex flex-col gap-2">
@@ -62,30 +59,33 @@ export function RangeSlider({
       <div className="flex items-center gap-3">
         <TimeField label={t("trim_start")} value={start} onCommit={setStart} />
 
-        <div dir={i18n.dir()} className="relative h-11 min-w-0 flex-1 select-none">
-          <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-line" />
-          <div
-            className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent"
-            style={{
-              insetInlineStart: `${startPct}%`,
-              width: `${Math.max(0, endPct - startPct)}%`,
-            }}
-          />
-          <RangeInput
-            label={t("trim_start")}
-            value={start}
-            max={durationSecs}
-            step={step}
-            onChange={setStart}
-          />
-          <RangeInput
-            label={t("trim_end")}
-            value={end}
-            max={durationSecs}
-            step={step}
-            onChange={setEnd}
-          />
-        </div>
+        <Slider.Root
+          // Read off i18n rather than inherited, to match the fields either
+          // side of it: those are pinned to ltr, and an inherited direction
+          // would be taken from the nearer of the two.
+          dir={i18n.dir()}
+          // `|| 1`: a zero-length range makes every position NaN. The caller
+          // already refuses to render below a known duration, so this only
+          // covers the frame before one arrives.
+          max={durationSecs || 1}
+          min={0}
+          step={step}
+          value={[start, end]}
+          // The clamps stay here rather than leaning on `minStepsBetweenThumbs`,
+          // because they are also what the typed timecode fields commit
+          // through -- one rule for both ways in.
+          onValueChange={([nextStart, nextEnd]) => {
+            if (nextStart !== start) setStart(nextStart);
+            else if (nextEnd !== end) setEnd(nextEnd);
+          }}
+          className="relative flex h-11 min-w-0 flex-1 touch-none items-center select-none"
+        >
+          <Slider.Track className="relative h-1.5 w-full rounded-full bg-line">
+            <Slider.Range className="absolute h-full rounded-full bg-accent" />
+          </Slider.Track>
+          <SliderThumb label={t("trim_start")} />
+          <SliderThumb label={t("trim_end")} />
+        </Slider.Root>
 
         <TimeField label={t("trim_end")} value={end} onCommit={setEnd} />
       </div>
@@ -97,41 +97,16 @@ export function RangeSlider({
   );
 }
 
-function RangeInput({
-  label,
-  value,
-  max,
-  step,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-}) {
+/** Ringed in the surface colour so the two stay told apart where they overlap,
+ *  which is exactly where the old stacked-input version lost one of them. */
+function SliderThumb({ label }: { label: string }) {
   return (
-    <input
-      type="range"
+    <Slider.Thumb
       aria-label={label}
-      min={0}
-      max={max || 1}
-      step={step}
-      value={value}
-      onChange={(event) => onChange(Number(event.target.value))}
-      // The two inputs are stacked, so only the thumbs may receive pointer
-      // events -- otherwise the upper track swallows clicks meant for the
-      // lower thumb and one handle becomes unreachable.
       className={cn(
-        "absolute inset-x-0 top-1/2 h-11 w-full -translate-y-1/2 appearance-none bg-transparent",
-        "pointer-events-none focus:outline-none",
-        "[&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none",
-        "[&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:rounded-full",
-        "[&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-surface",
-        "[&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:shadow",
-        "[&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:size-4",
-        "[&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2",
-        "[&::-moz-range-thumb]:border-surface [&::-moz-range-thumb]:bg-accent",
+        "block size-4 rounded-full border-2 border-surface bg-accent shadow",
+        "transition-transform duration-[--duration-fast]",
+        "hover:scale-110 focus-visible:scale-110",
       )}
     />
   );
