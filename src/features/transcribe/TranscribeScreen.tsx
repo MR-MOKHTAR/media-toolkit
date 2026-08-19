@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, Settings2 } from "lucide-react";
+import { ChevronDown, Settings2, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
@@ -14,6 +14,7 @@ import {
   FileDropZone,
   FormatGroup,
   OutputFolderRow,
+  PreferenceRow,
   RunButton,
   ToolShell,
 } from "../media/components/ToolShell";
@@ -22,7 +23,7 @@ import { useDragDropState } from "../media/useDragDropState";
 import { defaultOutputName, useMediaJob } from "../media/useMediaJob";
 import { useMediaFile } from "../media/useMediaFile";
 import { SPOKEN_LANGUAGES } from "./languages";
-import { ModelPicker } from "./ModelPicker";
+import { MODEL_IDS } from "./ModelPicker";
 import { formatFor, useTranscribeSettings } from "./useTranscribeSettings";
 
 const FORMATS: TranscriptFormat[] = ["txt", "srt", "vtt"];
@@ -138,13 +139,20 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
       )}
 
       {/* Outside the "has audio" gate, unlike everything below it: which model
-          to run is a standing preference rather than something decided about a
-          particular file, and hiding it until a file was loaded is why it read
-          as a choice the app had already made. */}
-      <ModelPicker
-        value={settings.model}
-        onChange={(model) => update("model", model)}
-        turboDisabled={settings.translate}
+          runs is true of this screen whether or not a file has been picked.
+          It is a row rather than the two-card picker it used to be -- the
+          choice between accuracy and speed is made once and then left alone,
+          so it lives in Settings and this says which way it was made. */}
+      <PreferenceRow
+        icon={<Sparkles size={16} />}
+        label={t("transcribe_model")}
+        value={MODEL_IDS[settings.model]}
+        section="transcription"
+        // Same reason `start` does it below: the entry `back` from Settings
+        // returns to has to know about the file, or the form is empty again.
+        onBeforeLeave={() =>
+          file.path && replace({ name: "transcribe", file: file.path })
+        }
       />
 
       {file.info?.audio && (

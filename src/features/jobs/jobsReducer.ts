@@ -1,3 +1,4 @@
+import { fileNameOf } from "../../lib/format";
 import type { Job, JobProgress, JobStatusEvent } from "./types";
 
 /**
@@ -43,6 +44,12 @@ function patch(state: JobsState, id: string, next: Partial<Job>): JobsState {
   return { ...state, byId: { ...state.byId, [id]: { ...current, ...next } } };
 }
 
+/** Keeps the job's own title unless it is a bare URL, which is never what
+ *  anyone recognises a finished file by. */
+function titleFor(job: Job, outputPath: string): string {
+  return /^https?:\/\//i.test(job.title) ? fileNameOf(outputPath) : job.title;
+}
+
 export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
   switch (action.type) {
     case "hydrate":
@@ -70,8 +77,12 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
         percent,
         speed: speed ?? undefined,
         etaSecs: etaSecs ?? undefined,
-        bytes: bytes ?? undefined,
-        totalBytes: totalBytes ?? undefined,
+        // Sticky, unlike speed and ETA. A byte count is a fact about the file;
+        // an event that omits it is saying "no news", not "zero". yt-dlp's
+        // merge and extract-audio phases each emit one of those, and clearing
+        // on them left the card with no size to show at the end.
+        bytes: bytes ?? current.bytes,
+        totalBytes: totalBytes ?? current.totalBytes,
       });
     }
 
@@ -85,19 +96,28 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
           return { ...patch(state, id, { state: "queued", stage: "queued" }), cancelling };
         case "running":
           return { ...patch(state, id, { state: "running" }), cancelling };
-        case "completed":
+        case "completed": {
+          const { outputPath } = action.payload;
           return {
             ...patch(state, id, {
               state: "completed",
               stage: "finalizing",
               percent: 100,
-              outputPath: action.payload.outputPath,
+              outputPath,
+              // A direct download whose probe had not landed -- or failed -- is
+              // titled with its own URL, because that is all the form knew. The
+              // file now exists and has a name, which is both shorter and what
+              // the user will look for in the folder. This also repairs rows
+              // saved by older versions, which titled every file download that
+              // way.
+              title: titleFor(state.byId[id], outputPath),
               speed: undefined,
               etaSecs: undefined,
               endedAt: Date.now(),
             }),
             cancelling,
           };
+        }
         case "failed":
           return {
             ...patch(state, id, {

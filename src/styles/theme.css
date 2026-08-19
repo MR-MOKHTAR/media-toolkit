@@ -76,15 +76,19 @@
   --radius-xl: 1.5rem;     /* 24 -- dialogs, tool cards */
 
   /* --------------------------------------------------------- color ---
-   * One accent, one neutral ramp, three semantic, and one hue that exists
-   * only to mark audio.
+   * One accent, one neutral ramp, three semantic, and four hues that exist
+   * only to mark what a file is.
    *
-   * That last one was removed once, on the theory that icon shape alone
+   * The audio one was removed once, on the theory that icon shape alone
    * could separate audio from video inside a neutral container. It could
    * not: a grey glyph is the last thing read on a card, so the fastest
-   * signal on the row was also its quietest. Video reuses the accent and
-   * GIF reuses the warning hue, so telling three kinds apart costs exactly
-   * one new colour. */
+   * signal on the row was also its quietest.
+   *
+   * There are four now rather than one because a download is no longer
+   * always media -- an installer, an archive and an image are ordinary
+   * results, and they arrive in a list where the eye is scanning for one
+   * row. Video still reuses the accent, and document and unknown share the
+   * neutral, so seven kinds cost three new colours rather than six. */
   --color-canvas: #f3f5f9;
   --color-surface: #ffffff;
   --color-surface-soft: #f7f9fc;
@@ -110,6 +114,15 @@
   /* Audio. Far enough from the accent blue to read as a different kind at a
      glance, and not close to danger red or success green. */
   --color-media-audio: #7048c9;
+  /* Images. Warmer and deeper than the warning amber it sits closest to --
+     that one only ever appears as text, never as a filled chip, so the two
+     never share a surface. */
+  --color-media-image: #b0620a;
+  /* Archives. The only cool hue left that is not the accent and not success. */
+  --color-media-archive: #0f7f8c;
+  /* Installers and packages. Distinct from danger red: that is a destructive
+     action, this is a kind of file, and they appear on the same card. */
+  --color-media-app: #c0417a;
 
   /* -------------------------------------------------------- motion ---
    * Two durations and one curve. */
@@ -152,6 +165,9 @@
     --color-warning: #f0ac40;
 
     --color-media-audio: #a68bfa;
+    --color-media-image: #e8944a;
+    --color-media-archive: #3fb6c4;
+    --color-media-app: #f07aa8;
 
     --shadow-panel: 0 22px 70px rgba(0, 0, 0, 0.5);
     --shadow-card: 0 12px 34px rgba(0, 0, 0, 0.32);

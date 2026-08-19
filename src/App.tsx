@@ -108,7 +108,13 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
                   scrolled at its own default size. */}
               <main className="min-h-0 flex-1 overflow-y-auto">
                 {route.name === "download" && (
-                  <DownloadScreen isOnline={isOnline} notify={notify} />
+                  <DownloadScreen
+                    // Set only when the form recorded itself on the way to
+                    // Settings, so coming back finds the link still there.
+                    initialUrl={route.link}
+                    isOnline={isOnline}
+                    notify={notify}
+                  />
                 )}
                 {route.name === "jobs" && <JobsScreen language={language} />}
                 {route.name === "settings" && (
@@ -118,6 +124,9 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
                     language={language}
                     onLanguageChange={setLanguage}
                     notify={notify}
+                    // Set when a tool form sent the user here to change one of
+                    // its own defaults, so they land on that panel.
+                    initialSection={route.section}
                   />
                 )}
                 {/* Four tools, one screen. The config is the only thing that

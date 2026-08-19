@@ -23,12 +23,12 @@ import {
   formatRelativeTime,
 } from "../../../lib/format";
 import {
-  extensionOf,
-  MEDIA_KIND_ICON,
-  MEDIA_KIND_TINT,
-  mediaKindOfPath,
-  type MediaKind,
-} from "../../../lib/mediaKind";
+  FILE_KIND_ICON,
+  FILE_KIND_TINT,
+  fileKindOf,
+  formatLabelOf,
+  type FileKind,
+} from "../../../lib/fileKind";
 import { describeAppError } from "../errorText";
 import type { Job } from "../types";
 
@@ -50,27 +50,69 @@ interface JobCardProps {
 /** What a download sets as its detail when the user picked audio. */
 const AUDIO_DETAILS = new Set(["MP3", "M4A", "WAV"]);
 
+/** And when they picked a video quality. Both vocabularies are also what the
+ *  pre-1.0 history was migrated into -- see `migrateLegacy` -- so a row from
+ *  back then still says which of the two it was, long after its file is
+ *  gone. */
+const VIDEO_DETAILS = new Set(["best", "1080", "720", "480"]);
+
 /**
  * Which icon and hue this job earns, from the best evidence available.
  *
  * A running job has no output path yet, so the answer has to degrade: the
  * finished path is exact, the title is nearly always right because every screen
- * but one builds it with an extension, and the detail line is the last resort
- * that still catches an audio download. Video is the floor, not an "unknown"
- * state -- see mediaKindOfPath.
+ * builds it from a file name, and the detail line is the last resort that still
+ * separates a video download from an audio one.
+ *
+ * The floor used to be "video", which was fine while a download could only ever
+ * be video or audio. It is not fine now: the same list holds installers,
+ * archives and PDFs, and drawing one of those with a film icon is a claim about
+ * the file rather than an absence of one. Video is still reached, but only
+ * through evidence -- a quality on the detail line, or a request that asked
+ * yt-dlp for a video -- never as the answer to "no idea".
  */
-function mediaKindOfJob(job: Job): MediaKind {
+function fileKindOfJob(job: Job): FileKind {
   // Whatever container it landed in, the result of this tool is audio -- and it
   // is known before the file exists, which the extension cannot be.
   if (job.kind === "extractAudio") return "audio";
   // Before the output path is consulted, not after: a finished transcript is a
-  // .srt, and mediaKindOfPath's floor is "video", so it would be drawn with a
-  // film icon.
-  if (job.kind === "transcribe") return "text";
-  if (job.outputPath) return mediaKindOfPath(job.outputPath);
-  if (extensionOf(job.title)) return mediaKindOfPath(job.title);
-  if (job.detail && AUDIO_DETAILS.has(job.detail)) return "audio";
-  return "video";
+  // .srt, which is a document, but saying so here keeps the icon right from the
+  // moment the job starts.
+  if (job.kind === "transcribe") return "document";
+
+  if (job.outputPath) return fileKindOf(job.outputPath);
+  const fromTitle = fileKindOf(job.title);
+  if (fromTitle !== "other") return fromTitle;
+  if (job.detail) {
+    if (AUDIO_DETAILS.has(job.detail)) return "audio";
+    if (VIDEO_DETAILS.has(job.detail)) return "video";
+  }
+  // The media tools only ever take media in and only ever give media back.
+  if (job.kind !== "download") return "video";
+  // A download that got this far has told us nothing about the file, but the
+  // request itself said which of the two engines it asked for.
+  if (job.request) return job.request.mediaType === "audio" ? "audio" : "video";
+  return "other";
+}
+
+/**
+ * The format, as a short uppercase token: `MP4`, `EXE`, `ZIP`.
+ *
+ * Derived rather than stored. The output path is the ground truth and it only
+ * exists once the job has finished, so a stored copy would have to be written
+ * twice and migrated through `storage.ts` to say the same thing this says for
+ * free -- and it would still be a guess for the whole time the job was running.
+ */
+function formatOfJob(job: Job): string | null {
+  const source = job.outputPath ?? job.title;
+  const label = formatLabelOf(source);
+  if (!label) return null;
+  // A finished path is a real file name, so whatever extension it carries is a
+  // real one. A title is not: an episode called "Chapter 5.5" would otherwise
+  // wear a chip reading "5" until the download ended.
+  if (!job.outputPath && fileKindOf(source) === "other") return null;
+  // `MP3 · MP3` -- Extract audio already puts the container in `detail`.
+  return label === job.detail ? null : label;
 }
 
 /**
@@ -100,8 +142,9 @@ function JobCardComponent({
 }: JobCardProps) {
   const { t } = useTranslation();
   const active = job.state === "running" || job.state === "queued";
-  const kind = mediaKindOfJob(job);
-  const Icon = MEDIA_KIND_ICON[kind];
+  const kind = fileKindOfJob(job);
+  const Icon = FILE_KIND_ICON[kind];
+  const format = formatOfJob(job);
   const revealable = job.state === "completed" && job.outputPath;
   // Everything that ended without a file, including the jobs marked failed at
   // startup because the app was closed while they were running. Both engines
@@ -129,7 +172,7 @@ function JobCardComponent({
       <span
         className={cn(
           "pointer-events-none relative flex size-9 shrink-0 items-center justify-center rounded-md",
-          MEDIA_KIND_TINT[kind],
+          FILE_KIND_TINT[kind],
         )}
       >
         <Icon size={18} />
@@ -142,6 +185,9 @@ function JobCardComponent({
 
         <p className="flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
           <StatusChip job={job} cancelling={cancelling} />
+          {/* Latin either way -- a container name is not a word in any of the
+              three languages, and mirroring it would only reverse it. */}
+          {format && <span dir="ltr">{format}</span>}
           {job.detail && <span>{job.detail}</span>}
           {job.state === "completed" && job.bytes !== undefined && (
             <span className="tnum" dir="ltr">

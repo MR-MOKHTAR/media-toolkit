@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Folder, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { useNavigation, type SettingsSection } from "../../../app/navigation";
 import { Button } from "../../../components/ui/Button";
 import { FormCard } from "../../../components/ui/Card";
 import { cn } from "../../../lib/cn";
@@ -168,6 +169,72 @@ export function OutputFolderRow({
       </span>
       <Button variant="ghost" size="sm" onClick={onChoose}>
         {t("change")}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * A standing preference, shown on the form that obeys it.
+ *
+ * Some of what these forms used to ask is not a decision about the file in
+ * hand at all -- which video quality to fetch, which Whisper to run. Those are
+ * answered once and then true for months, so they live in Settings now and the
+ * forms are shorter for it. What they must not be is invisible: a form that
+ * silently downloads 720p is worse than one that spends a row saying so.
+ *
+ * Hence a row rather than a removal. It reads as what it is -- a fact about
+ * what is about to happen, with the way to change it attached -- and it holds
+ * the place the control had, so the run button does not move when a probe lands
+ * or a file is picked.
+ */
+export function PreferenceRow({
+  icon,
+  label,
+  value,
+  section,
+  onBeforeLeave,
+}: {
+  icon: ReactNode;
+  label: string;
+  /** Written as it is in Settings, so the two never look like two settings. */
+  value: string;
+  /** The panel this preference lives in; the button opens Settings on it. */
+  section: SettingsSection;
+  /** Run just before leaving, for a form to record what it is holding into its
+   *  own route -- otherwise a look at the setting costs the user the link they
+   *  had pasted or the file they had picked. */
+  onBeforeLeave?: () => void;
+}) {
+  const { t } = useTranslation();
+  const { go } = useNavigation();
+
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-line bg-surface ps-3.5 pe-1.5 py-1.5">
+      <span className="shrink-0 text-fg-muted">{icon}</span>
+      <span className="shrink-0 text-sm text-fg-soft">{label}</span>
+      {/* ltr because the two values this carries -- "720p", a Whisper model id
+          -- are Latin and machine-read, and truncating rather than wrapping
+          keeps the row one line at the 600px window minimum. It sits next to
+          its label rather than against the button, so the pair still reads as
+          one phrase when the row mirrors. */}
+      <span
+        dir="ltr"
+        className="min-w-0 truncate text-sm font-medium text-fg"
+        title={value}
+      >
+        {value}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ms-auto shrink-0"
+        onClick={() => {
+          onBeforeLeave?.();
+          go({ name: "settings", section });
+        }}
+      >
+        {t("settings")}
       </Button>
     </div>
   );

@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   Captions,
+  Download,
   FolderOpen,
   SlidersHorizontal,
   Wrench,
@@ -8,14 +9,18 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import type { SettingsSection } from "../../app/navigation";
 import { FormCard } from "../../components/ui/Card";
 import { cn } from "../../lib/cn";
 import type { AppLanguage } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
 import { ApiKeyPanel } from "./ApiKeyPanel";
+import { DownloadsPanel } from "./DownloadsPanel";
 import { GeneralPanel } from "./GeneralPanel";
 import { StoragePanel } from "./StoragePanel";
 import { ToolsPanel } from "./ToolsPanel";
+import { TranscriptionPanel } from "./TranscriptionPanel";
+import { SETTINGS_SECTIONS, useSettingsSection } from "./useSettingsSection";
 
 interface Props {
   darkMode: boolean;
@@ -23,28 +28,91 @@ interface Props {
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
   notify: (type: ToastType, message: string) => void;
+  /** Which panel to open on. Set when a tool form sent the user here to change
+   *  one particular thing; undefined from the sidebar, which means "wherever
+   *  you were last". */
+  initialSection?: SettingsSection;
 }
 
 interface SectionDefinition {
-  key: string;
   /** An existing string wherever there was already a word for the section, so
    *  the rail and the heading inside the card cannot drift apart. */
   labelKey: string;
+  /** The line under the heading: what this panel is for, in the words someone
+   *  would use when looking for it. It is what makes the rail's one-word labels
+   *  answerable without clicking all five. */
+  noteKey: string;
   icon: LucideIcon;
 }
 
 /**
- * The sections, in the order the rail lists them.
+ * What each section is called, explained and drawn with. A record rather than a
+ * list, so the order lives in exactly one place -- `SETTINGS_SECTIONS` -- and a
+ * panel added to the route type without a label here fails to compile instead of
+ * appearing as a blank tab.
  *
- * General first because theme and language are what people come here to change;
- * bundled tools last because it is a status report, not a setting.
+ * That order is priority order rather than the order the panels were written in.
+ *
+ * General first: theme and language are what people come here for, and they are
+ * the only settings that are about the app rather than about a job it runs.
+ * Storage second, because it is the one answer every tool depends on -- a
+ * download, a compression and a transcript all land in that folder -- and "where
+ * did my file go" is the question Settings is opened to answer most. Downloads
+ * and Transcription follow: the two tools' own standing preferences, in the
+ * order the sidebar lists the tools they belong to. Bundled tools last, because
+ * it is a status report and a repair button, not a setting -- nobody comes to it
+ * except when something has broken.
  */
-const SECTIONS: SectionDefinition[] = [
-  { key: "general", labelKey: "settings_general", icon: SlidersHorizontal },
-  { key: "storage", labelKey: "storage", icon: FolderOpen },
-  { key: "transcription", labelKey: "transcription", icon: Captions },
-  { key: "tools", labelKey: "bundled_tools", icon: Wrench },
-];
+const SECTIONS: Record<SettingsSection, SectionDefinition> = {
+  general: {
+    labelKey: "settings_general",
+    noteKey: "settings_general_note",
+    icon: SlidersHorizontal,
+  },
+  storage: {
+    labelKey: "storage",
+    // The folder note, promoted: it says what the panel is for *and* the one
+    // caveat about it, which is exactly what a description under the heading is.
+    noteKey: "library_note",
+    icon: FolderOpen,
+  },
+  downloads: {
+    labelKey: "settings_downloads",
+    noteKey: "settings_downloads_note",
+    icon: Download,
+  },
+  transcription: {
+    labelKey: "transcription",
+    noteKey: "settings_transcription_note",
+    icon: Captions,
+  },
+  tools: {
+    labelKey: "bundled_tools",
+    noteKey: "tools_bundled_note",
+    icon: Wrench,
+  },
+};
+
+/** The rail, as it is listed and stepped through. */
+const RAIL = SETTINGS_SECTIONS.map((key) => ({ key, ...SECTIONS[key] }));
+
+/** Whether the rail is a column beside the panel or a bar above it. Read here
+ *  rather than left to CSS because the two forms take different arrow keys and
+ *  announce a different orientation. Matches the `sm:` breakpoint below. */
+function useVerticalRail() {
+  const [vertical, setVertical] = useState(
+    () => window.matchMedia("(min-width: 640px)").matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 640px)");
+    const onChange = (event: MediaQueryListEvent) => setVertical(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  return vertical;
+}
 
 /**
  * Settings, as a second sidebar and a panel.
@@ -66,6 +134,12 @@ const SECTIONS: SectionDefinition[] = [
  * instead: at the 600px minimum window width there is not room for both a column
  * of labels and a form, and the panel is the half that has to keep its width.
  * Either way the list sits against an edge, never in open canvas.
+ *
+ * These are tabs and are built as tabs -- one stop in the tab order for the
+ * whole rail, arrows to move between panels -- rather than as five buttons that
+ * each have to be tabbed past to reach the form. That is the pattern the
+ * preferences windows this borrows its shape from all use, and it is the
+ * difference between reaching the storage folder in two keys and in six.
  */
 export function SettingsScreen({
   darkMode,
@@ -73,15 +147,49 @@ export function SettingsScreen({
   language,
   onLanguageChange,
   notify,
+  initialSection,
 }: Props) {
   const { t } = useTranslation();
-  const [active, setActive] = useState(SECTIONS[0].key);
-  const section = SECTIONS.find((item) => item.key === active) ?? SECTIONS[0];
+  const { section: active, select } = useSettingsSection(initialSection);
+  const definition = SECTIONS[active];
+  const vertical = useVerticalRail();
+  const tabs = useRef(new Map<SettingsSection, HTMLButtonElement>());
 
-  // Each section is its panel plus the sentence that explains it. The notes stay
-  // here rather than inside the panels because a panel is also used on its own --
-  // ApiKeyPanel appears on the transcribe screen, where the note is not wanted.
-  const body: Record<string, ReactNode> = {
+  // Moving the selection *is* moving the focus, which is what makes a tablist a
+  // tablist: the panel follows the arrow key rather than waiting for a second
+  // keystroke to confirm. Wraps at both ends, so holding one arrow cycles.
+  const step = (delta: number) => {
+    const count = SETTINGS_SECTIONS.length;
+    const index = SETTINGS_SECTIONS.indexOf(active);
+    const next = SETTINGS_SECTIONS[(index + delta + count) % count];
+    select(next);
+    tabs.current.get(next)?.focus();
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    // In the column form it is up and down; in the tab bar it is left and
+    // right, mirrored under Persian and Arabic, where "next" is to the left.
+    const rtl = document.documentElement.dir === "rtl";
+    const forward = vertical ? "ArrowDown" : rtl ? "ArrowLeft" : "ArrowRight";
+    const backward = vertical ? "ArrowUp" : rtl ? "ArrowRight" : "ArrowLeft";
+
+    const index = SETTINGS_SECTIONS.indexOf(active);
+    if (event.key === forward) step(1);
+    else if (event.key === backward) step(-1);
+    else if (event.key === "Home") step(-index);
+    else if (event.key === "End") step(SETTINGS_SECTIONS.length - 1 - index);
+    else return;
+
+    // The rail owns these keys once focus is inside it: the arrows would
+    // otherwise scroll the panel, and Alt+Left is the app's Back.
+    event.preventDefault();
+  };
+
+  // Each section is its panel and nothing else. The line that explains it is a
+  // property of the section, rendered once under the heading below -- panels are
+  // also used on their own, ApiKeyPanel on the transcribe screen, where a note
+  // about the Settings section it usually sits in would make no sense.
+  const body: Record<SettingsSection, ReactNode> = {
     general: (
       <GeneralPanel
         darkMode={darkMode}
@@ -90,14 +198,11 @@ export function SettingsScreen({
         onLanguageChange={onLanguageChange}
       />
     ),
-    storage: (
-      <>
-        <StoragePanel notify={notify} />
-        <p className="text-xs text-fg-muted">{t("library_note")}</p>
-      </>
-    ),
+    storage: <StoragePanel notify={notify} />,
+    downloads: <DownloadsPanel />,
     transcription: (
       <>
+        <TranscriptionPanel />
         <ApiKeyPanel notify={notify} />
         <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
       </>
@@ -105,7 +210,6 @@ export function SettingsScreen({
     tools: (
       <>
         <ToolsPanel notify={notify} />
-        <p className="text-xs text-fg-muted">{t("tools_bundled_note")}</p>
         <p className="text-xs text-fg-muted">{t("ytdlp_update_note")}</p>
       </>
     ),
@@ -118,12 +222,15 @@ export function SettingsScreen({
     // content's. The panel then carries the scrolling, which also means changing
     // section never scrolls the rail out of reach.
     <div className="flex h-full min-h-0 flex-col sm:flex-row">
-      <nav
+      <div
+        role="tablist"
         aria-label={t("settings_sections")}
+        aria-orientation={vertical ? "vertical" : "horizontal"}
+        onKeyDown={onKeyDown}
         className={cn(
           "flex shrink-0 gap-1 border-line bg-surface-soft",
           // Narrow: a tab bar across the top. It wraps rather than scrolls --
-          // four labels do not fit 600px of window in any of the three
+          // five labels do not fit 600px of window in any of the three
           // languages, and a tab that has to be scrolled into view is a tab
           // nobody finds.
           "flex-wrap border-b p-2",
@@ -131,14 +238,24 @@ export function SettingsScreen({
           "sm:w-48 sm:flex-col sm:flex-nowrap sm:overflow-y-auto sm:border-b-0 sm:border-e sm:p-2 lg:w-56",
         )}
       >
-        {SECTIONS.map(({ key, labelKey, icon: Icon }) => {
-          const selected = key === section.key;
+        {RAIL.map(({ key, labelKey, icon: Icon }) => {
+          const selected = key === active;
           return (
             <button
               key={key}
+              ref={(node) => {
+                if (node) tabs.current.set(key, node);
+                else tabs.current.delete(key);
+              }}
               type="button"
-              onClick={() => setActive(key)}
-              aria-current={selected ? "page" : undefined}
+              role="tab"
+              id={`settings-tab-${key}`}
+              aria-selected={selected}
+              aria-controls={`settings-panel-${key}`}
+              // Roving: the rail is one Tab stop, and Tab from it lands on the
+              // first control of the panel rather than on the next section.
+              tabIndex={selected ? 0 : -1}
+              onClick={() => select(key)}
               className={cn(
                 "flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-sm text-start",
                 "transition-colors duration-[--duration-fast]",
@@ -156,15 +273,26 @@ export function SettingsScreen({
             </button>
           );
         })}
-      </nav>
+      </div>
 
       {/* The panel scrolls, not the window: the rail beside it is fixed
           furniture. `min-w-0` so a long path inside can truncate rather than
           widening the row past the window. */}
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-6">
-        <FormCard className="mx-auto w-full max-w-2xl">
-          <h2 className="text-base font-medium text-fg">{t(section.labelKey)}</h2>
-          {body[section.key]}
+        <FormCard
+          key={active}
+          role="tabpanel"
+          id={`settings-panel-${active}`}
+          aria-labelledby={`settings-tab-${active}`}
+          className="mx-auto w-full max-w-2xl"
+        >
+          {/* Heading and the line under it are one item, not two spaced by the
+              form's gap: the sentence belongs to the title it explains. */}
+          <div className="flex flex-col gap-1">
+            <h2 className="text-base font-medium text-fg">{t(definition.labelKey)}</h2>
+            <p className="text-sm text-fg-muted">{t(definition.noteKey)}</p>
+          </div>
+          {body[active]}
         </FormCard>
       </div>
     </div>

@@ -6,40 +6,36 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { AUDIO_EXTENSIONS, extensionOf } from "./fileKind";
+
 /**
- * What kind of thing a file is, and how it should look.
+ * What kind of *media* a file is, and how it should look.
  *
  * This lives in one place because two very different parts of the UI answer the
- * same question -- the file picker deciding what to offer, and the job card
+ * same question -- the file picker deciding what to offer, and the media tools
  * deciding which icon to draw. When those two disagreed, an `.opus` file was
  * selectable as audio and then drawn with a video icon.
+ *
+ * Deliberately narrower than `fileKind.ts`, and not merged into it: everything
+ * that reaches this module has already been through the picker's filters or
+ * ffprobe, so the video floor below is a good guess here and a bad one there.
+ * The extension tables now live in `fileKind.ts` and are re-exported from here
+ * so the picker's idea of "audio" and the job card's cannot drift apart.
  */
 export type MediaKind = "video" | "audio" | "gif" | "text";
 
-export const VIDEO_EXTENSIONS = [
-  "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "flv", "wmv", "mpg", "mpeg",
-];
-
-export const AUDIO_EXTENSIONS = [
-  "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma",
-];
+export { AUDIO_EXTENSIONS, extensionOf, VIDEO_EXTENSIONS } from "./fileKind";
 
 const AUDIO_SET = new Set(AUDIO_EXTENSIONS);
-
-/** Lowercased extension, or null for a path that has none. */
-export function extensionOf(path: string): string | null {
-  const name = path.split(/[\\/]/).pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  // A leading dot is a hidden file, not an extension.
-  if (dot <= 0 || dot === name.length - 1) return null;
-  return name.slice(dot + 1).toLowerCase();
-}
 
 /**
  * Video is the fallback, not a third "unknown" state. Every path reaching this
  * has already been through the picker's filters or ffprobe, so an extension
  * that is neither audio nor gif is video far more often than it is a mistake --
  * and a wrong icon is a smaller lie than a question mark.
+ *
+ * A download is the one thing that must not use this. It can be handed any
+ * link at all; `fileKindOf` is the answer there.
  */
 export function mediaKindOfPath(path: string): MediaKind {
   const ext = extensionOf(path);

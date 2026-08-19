@@ -891,28 +891,54 @@ fn split_name(raw: &str) -> (String, Option<String>) {
 
 /// Only the types worth naming. Everything else keeps whatever the URL had, or
 /// ends up as `.bin` -- which is honest about not knowing.
+///
+/// The list grew past media once the app started accepting any link: the
+/// extension this returns is what the UI reads the file's kind back out of, so
+/// a package or a document arriving without one in its URL used to be filed and
+/// drawn as an anonymous blob.
 fn extension_for_type(content_type: &str) -> Option<&'static str> {
     Some(match content_type {
         "video/mp4" => "mp4",
         "video/webm" => "webm",
         "video/x-matroska" => "mkv",
         "video/quicktime" => "mov",
+        "video/x-msvideo" => "avi",
         "audio/mpeg" => "mp3",
         "audio/mp4" | "audio/x-m4a" => "m4a",
         "audio/ogg" => "ogg",
         "audio/wav" | "audio/x-wav" => "wav",
+        "audio/flac" | "audio/x-flac" => "flac",
         "image/jpeg" => "jpg",
         "image/png" => "png",
         "image/gif" => "gif",
         "image/webp" => "webp",
+        "image/svg+xml" => "svg",
         "application/pdf" => "pdf",
         "application/zip" => "zip",
         "application/x-7z-compressed" => "7z",
         "application/x-rar-compressed" | "application/vnd.rar" => "rar",
         "application/gzip" | "application/x-gzip" => "gz",
+        "application/x-tar" => "tar",
+        "application/x-bzip2" => "bz2",
+        "application/x-xz" => "xz",
+        "application/zstd" => "zst",
+        "application/x-iso9660-image" => "iso",
         "application/x-msdownload" | "application/vnd.microsoft.portable-executable" => "exe",
+        "application/x-msi" | "application/x-ms-installer" => "msi",
         "application/x-apple-diskimage" => "dmg",
         "application/vnd.debian.binary-package" => "deb",
+        "application/x-rpm" | "application/x-redhat-package-manager" => "rpm",
+        "application/vnd.android.package-archive" => "apk",
+        "application/json" => "json",
+        "application/xml" => "xml",
+        "application/epub+zip" => "epub",
+        "application/msword" => "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.ms-powerpoint" => "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        "text/csv" => "csv",
         "text/plain" => "txt",
         _ => return None,
     })
@@ -1380,6 +1406,30 @@ mod tests {
             file_name_for(&headers(&[]), &url, Some("video/mp4")),
             "9f8a7b.mp4"
         );
+    }
+
+    #[test]
+    fn names_the_types_a_download_is_now_allowed_to_be() {
+        // The extension is not just what the file is saved as any more -- it is
+        // what the download card reads the kind back out of, so a package that
+        // arrives without one in its URL must still be recognisable.
+        for (content_type, want) in [
+            ("application/vnd.android.package-archive", "apk"),
+            ("application/x-msi", "msi"),
+            ("application/x-iso9660-image", "iso"),
+            ("application/x-tar", "tar"),
+            ("application/x-rpm", "rpm"),
+            ("text/csv", "csv"),
+            (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "xlsx",
+            ),
+        ] {
+            assert_eq!(extension_for_type(content_type), Some(want), "{content_type}");
+        }
+
+        // Still declines to guess, so these keep falling through to `.bin`.
+        assert_eq!(extension_for_type("application/octet-stream"), None);
     }
 
     #[test]

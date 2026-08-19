@@ -23,10 +23,26 @@ export type ToolName =
   | "extractAudio"
   | "transcribe";
 
+/** The panels in Settings. Named here rather than inside the screen because a
+ *  route can point at one: the tool forms send you to the panel that holds the
+ *  choice you were looking at, not to the top of Settings to find it yourself.
+ *
+ *  The order the rail lists them in is `SETTINGS_SECTIONS`, in
+ *  features/settings/useSettingsSection -- a route is a name, not a position. */
+export type SettingsSection =
+  | "general"
+  | "storage"
+  | "downloads"
+  | "transcription"
+  | "tools";
+
 export type Route =
-  | { name: "download" }
+  /** `link` is the half-filled field, kept across a trip to Settings and back:
+   *  the quality row sends people there mid-paste, and coming back to an empty
+   *  box is the price of a setting they went to look at. */
+  | { name: "download"; link?: string }
   | { name: "jobs" }
-  | { name: "settings" }
+  | { name: "settings"; section?: SettingsSection }
   /** One finished or running transcription. The only screen that is about a
    *  single job rather than about a tool, which is why it carries an id: it is
    *  reached both by starting a transcription and by reopening one from the

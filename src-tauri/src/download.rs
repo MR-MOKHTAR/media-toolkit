@@ -195,8 +195,18 @@ pub async fn run(
 
     match outcome {
         Ok(output) => {
+            // Measured, not accumulated. This tick used to carry no byte count
+            // at all, and being the last one it wiped whatever the engine had
+            // reported -- which is why a finished download never showed its
+            // size. Counting the bytes that went by would not have been right
+            // either: yt-dlp reports them per stream, so the final figure for a
+            // DASH video is the size of its audio track. The file exists now,
+            // so it can simply be measured.
+            let bytes = tokio::fs::metadata(&output).await.ok().map(|meta| meta.len());
             emitters.progress_now(JobProgress {
                 percent: Some(100.0),
+                bytes,
+                total_bytes: bytes,
                 ..JobProgress::new(&id, JobKind::Download, Stage::Finalizing)
             });
             emitters.status(
