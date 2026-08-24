@@ -6,6 +6,7 @@ import { useNavigation } from "../../app/navigation";
 import { CheckRow } from "../../components/ui/CheckRow";
 import { Select } from "../../components/ui/Select";
 import { TextInput } from "../../components/ui/TextInput";
+import { Card, Field } from "../../components/ui/Card";
 import { cn } from "../../lib/cn";
 import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
@@ -125,7 +126,7 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
   );
 
   return (
-    <ToolShell subtitle={t("tool_transcribe_about")}>
+    <ToolShell title={t("tool_transcribe")} subtitle={t("tool_transcribe_about")}>
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -161,13 +162,7 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
               spending a full line on a control a third of that wide. Stacks
               below sm, because the window minimum is 600px. */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <label
-                htmlFor="spoken-language"
-                className="text-sm font-medium text-fg-soft"
-              >
-                {t("transcribe_language")}
-              </label>
+            <Field label={t("transcribe_language")} htmlFor="spoken-language">
               {/* The one dropdown in this app. Every other choice here is
                   between three or four options and lies flat as a Segmented; a
                   hundred languages cannot, and cutting the list down to the
@@ -179,7 +174,7 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
                 onChange={(value) => update("language", value)}
                 options={languageOptions}
               />
-            </div>
+            </Field>
 
             <FormatGroup
               title={t("transcribe_format")}
@@ -201,14 +196,14 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
               <ChevronDown
                 size={14}
                 className={cn(
-                  "transition-transform duration-[--duration-fast]",
+                  "transition-transform duration-(--duration-fast)",
                   advanced && "rotate-180",
                 )}
               />
             </button>
 
             {advanced && (
-              <div className="flex flex-col gap-4 rounded-lg border border-line bg-surface-soft p-3">
+              <Card padding="sm" className="flex flex-col gap-4 bg-surface-soft">
                 <CheckRow
                   label={t("transcribe_translate")}
                   hint={t("transcribe_translate_hint")}
@@ -216,10 +211,14 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
                   onChange={(translate) => update("translate", translate)}
                 />
 
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="transcribe-prompt" className="text-sm text-fg-soft">
-                    {t("transcribe_prompt")}
-                  </label>
+                {/* A `Field`, like the language row above it. Hand-rolled, this
+                    one had dropped `font-medium` from its label, so the two
+                    labels on one screen sat at two different weights. */}
+                <Field
+                  label={t("transcribe_prompt")}
+                  htmlFor="transcribe-prompt"
+                  hint={t("transcribe_prompt_hint")}
+                >
                   {/* Not dir="ltr": this holds Persian and Arabic names at
                       least as often as English ones, so it takes its direction
                       from what is typed into it. */}
@@ -231,9 +230,8 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
                     placeholder={t("transcribe_prompt_placeholder")}
                     onChange={(event) => setPrompt(event.target.value)}
                   />
-                  <p className="text-xs text-fg-muted">{t("transcribe_prompt_hint")}</p>
-                </div>
-              </div>
+                </Field>
+              </Card>
             )}
           </div>
         </div>

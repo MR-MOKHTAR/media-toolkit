@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigation } from "../../app/navigation";
 import { EmptyState } from "../../components/ui/Card";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
+import { NAV_ROW_MARKER, navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
 import { formatCount } from "../../lib/format";
 import { countJobs, filterJobs, type JobFilter } from "./selectors";
@@ -55,7 +56,7 @@ export function JobsScreen({ language }: { language: string }) {
             <ul className="flex flex-col gap-2 pb-2">
               <AnimatePresence initial={false}>
                 {visible.map((job) => (
-                  <motion.div
+                  <motion.li
                     key={job.id}
                     layout
                     initial={{ opacity: 0, y: -6 }}
@@ -73,7 +74,7 @@ export function JobsScreen({ language }: { language: string }) {
                       onRetry={(id) => void retry(id)}
                       onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
                     />
-                  </motion.div>
+                  </motion.li>
                 ))}
               </AnimatePresence>
             </ul>
@@ -88,7 +89,7 @@ export function JobsScreen({ language }: { language: string }) {
           the top bar was spending goes back to the jobs. */}
       <aside
         aria-label={t("nav_jobs")}
-        className="flex w-52 shrink-0 flex-col gap-1 border-s border-line bg-surface-soft p-2"
+        className="flex w-48 shrink-0 flex-col gap-1 border-s border-line bg-surface-soft p-2 lg:w-56"
       >
         <div role="radiogroup" aria-label={t("nav_jobs")} className="flex flex-col gap-1">
           {FILTERS.map(({ value, labelKey, icon: Icon }) => {
@@ -100,15 +101,15 @@ export function JobsScreen({ language }: { language: string }) {
                 role="radio"
                 aria-checked={selected}
                 onClick={() => setFilter(value)}
-                className={cn(
-                  "flex w-full items-center gap-2.5 rounded-md border-e-2 px-2.5 py-2",
-                  "text-start text-base transition-colors duration-[--duration-fast]",
+                className={navRow(
+                  selected ? "active" : "idle",
                   // The accent bar sits on the rail's own outer edge, mirroring
-                  // the app sidebar's. Transparent rather than absent when
-                  // inactive, so choosing a filter moves nothing sideways.
-                  selected
-                    ? "border-accent bg-accent-soft font-medium text-accent"
-                    : "border-transparent text-fg-soft hover:bg-surface-hover hover:text-fg",
+                  // the app sidebar's -- this rail is docked on the trailing
+                  // side, so the bar is on `e` where the sidebar's is on `s`.
+                  cn(
+                    "border-e-2",
+                    NAV_ROW_MARKER[selected ? "active" : "idle"],
+                  ),
                 )}
               >
                 <Icon size={17} className="shrink-0" />
@@ -141,10 +142,12 @@ export function JobsScreen({ language }: { language: string }) {
               trigger={
                 <button
                   type="button"
-                  className={cn(
-                    "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2",
-                    "text-start text-base text-fg-muted transition-colors duration-[--duration-fast]",
-                    "hover:bg-danger/10 hover:text-danger",
+                  className={navRow(
+                    "idle",
+                    // The one row here that is not a filter, so it is the one
+                    // row that does not carry the accent marker -- and it turns
+                    // red on hover rather than neutral, because it destroys.
+                    "text-fg-muted hover:bg-danger/10 hover:text-danger",
                   )}
                 >
                   <Trash2 size={16} className="shrink-0" />

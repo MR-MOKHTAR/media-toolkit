@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { Check, Gauge, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { SectionLabel } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
 import { cn } from "../../lib/cn";
 import type { TranscribeModel } from "../jobs/types";
 
@@ -48,7 +50,7 @@ export function ModelPicker({ value, onChange, turboDisabled }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm font-medium text-fg-soft">{t("transcribe_model")}</p>
+      <SectionLabel>{t("transcribe_model")}</SectionLabel>
       <div
         role="radiogroup"
         aria-label={t("transcribe_model")}
@@ -108,8 +110,8 @@ function ModelCard({
       onClick={onSelect}
       className={cn(
         "flex flex-col gap-1.5 rounded-lg border p-3 text-start",
-        "transition-colors duration-[--duration-fast]",
-        "disabled:cursor-not-allowed disabled:opacity-50",
+        "transition-colors duration-(--duration-fast)",
+        "disabled:cursor-not-allowed disabled:opacity-disabled",
         selected
           ? "border-accent-line bg-accent-soft"
           : "border-line bg-surface hover:enabled:border-line-strong hover:enabled:bg-surface-hover",
@@ -137,16 +139,11 @@ function ModelCard({
       </span>
 
       <span className="flex flex-wrap items-center gap-1.5">
-        <span
-          className={cn(
-            // Outlined rather than filled: a tinted pill on the selected
-            // card's own tint is a pill nobody can see.
-            "rounded-full border px-1.5 py-0.5 text-[11px] leading-none",
-            selected ? "border-accent-line text-accent" : "border-line text-fg-muted",
-          )}
-        >
+        {/* Outlined rather than filled: a tinted pill on the selected card's
+            own tint is a pill nobody can see. */}
+        <Badge variant="outline" tone={selected ? "accent" : "neutral"}>
           {badge}
-        </span>
+        </Badge>
         <span className="text-xs text-fg-muted">{disabledReason ?? hint}</span>
       </span>
     </button>

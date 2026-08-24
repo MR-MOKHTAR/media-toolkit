@@ -89,7 +89,7 @@ export function AppTitleBar({
           <IconButton
             label={t("close")}
             onClick={onClose}
-            className="hover:bg-danger hover:text-white"
+            className="hover:bg-danger hover:text-on-accent"
           >
             <X size={17} />
           </IconButton>

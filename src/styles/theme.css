@@ -100,6 +100,16 @@
 
   --color-line: #dfe4ec;
   --color-line-strong: #cfd6e2;
+  /* The hairline on a translucent surface. This existed as `border-line/60`
+     in six places before it had a name, which meant the glass panels were
+     bordered by an undeclared sixth line colour that no dark override could
+     reach. Solid rather than an alpha of --color-line: a hairline that blends
+     with whatever happens to slide underneath a glass panel is not a hairline. */
+  --color-line-soft: #e4e9f0;
+
+  /* The tint behind a modal or an overlay panel. Was `bg-fg/20` in one place
+     and `bg-fg/25` in another, for the same job. */
+  --color-scrim: rgba(23, 32, 51, 0.25);
 
   --color-accent: #1769e0;
   --color-accent-hover: #0e59c4;
@@ -134,6 +144,45 @@
   /* The form card. Far lighter than the panel shadow above: a card that sits
      in the middle of the canvas needs to lift off it, not float over it. */
   --shadow-card: 0 10px 30px rgba(31, 43, 68, 0.07);
+  /* Hover. Every lift in the app used Tailwind's own `shadow-md`, which is
+     pure black at 10% -- invisible against the #111824 surface dark mode
+     paints cards on, so the interaction simply vanished in one theme. A token
+     gets the dark override the defaults can never have. */
+  --shadow-raise: 0 6px 18px rgba(31, 43, 68, 0.1);
+
+  /* ------------------------------------------------------- modern ---
+   * Gradients, glows and glass for the modernisation pass. Every token
+   * here is consumed only by the components that were updated; nothing
+   * in the base layer depends on them, so the old look is still the
+   * fallback if a class is missing. */
+  --gradient-accent: linear-gradient(135deg, #1769e0, #2b87f0);
+  --gradient-accent-hover: linear-gradient(135deg, #0e59c4, #1c7ae8);
+  --shadow-glow: 0 0 20px rgba(23, 105, 224, 0.15);
+  --shadow-glow-accent: 0 4px 24px rgba(23, 105, 224, 0.25);
+
+  /* The ring on a focused text field. A token because it was written out in
+     full in three places, and because a focus ring is exactly the kind of
+     thing that must be identical everywhere or it reads as a rendering bug.
+     The controls that are not typed into keep the global :focus-visible
+     outline instead -- one idiom for entry, one for everything else. */
+  --shadow-focus: 0 0 0 3px var(--color-accent-soft), var(--shadow-glow);
+
+  --color-surface-glass: rgba(255, 255, 255, 0.55);
+  /* A length, not `blur(16px)`, and named into Tailwind's --blur-* namespace
+     so it generates `backdrop-blur-glass`. As a full filter function it had no
+     working utility form at all: the seven `backdrop-[var(...)]` sites this
+     replaces compiled to nothing, because `backdrop` in v4 is the ::backdrop
+     variant rather than a utility, so no surface in the app was ever blurred.
+     `backdrop-blur-(--glass-blur)` would not have fixed it either -- that
+     expands to blur(blur(16px)). */
+  --blur-glass: 16px;
+
+  /* ------------------------------------------------------- states ---
+   * One disabled treatment. There were four: 40 on the segmented options,
+   * 45 on the buttons, 50 on the model picker and 70 on the check rows,
+   * so the same dead control faded by a different amount depending on
+   * which screen it was on. */
+  --opacity-disabled: 45%;
 }
 
 /* Dark is a token override, not a second stylesheet. `data-theme` wins in
@@ -153,6 +202,8 @@
 
     --color-line: #263244;
     --color-line-strong: #344258;
+    --color-line-soft: #1e2837;
+    --color-scrim: rgba(0, 0, 0, 0.5);
 
     --color-accent: #4c8df6;
     --color-accent-hover: #67a0fb;
@@ -171,6 +222,14 @@
 
     --shadow-panel: 0 22px 70px rgba(0, 0, 0, 0.5);
     --shadow-card: 0 12px 34px rgba(0, 0, 0, 0.32);
+    --shadow-raise: 0 6px 20px rgba(0, 0, 0, 0.42);
+
+    --gradient-accent: linear-gradient(135deg, #4c8df6, #6fa8ff);
+    --gradient-accent-hover: linear-gradient(135deg, #3a7de8, #5a96f7);
+    --shadow-glow: 0 0 24px rgba(76, 141, 246, 0.18);
+    --shadow-glow-accent: 0 4px 28px rgba(76, 141, 246, 0.3);
+    --color-surface-glass: rgba(17, 24, 36, 0.6);
+    --blur-glass: 20px;
   }
 }
 
@@ -229,10 +288,13 @@
     padding: 0;
   }
 
+  /* No border-radius here. It was setting --radius-sm on *any* focused
+     element, so a focused card, dialog or nav row silently lost its own
+     corner the moment it was tabbed to. The outline follows the element's
+     real radius on its own. */
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-    border-radius: var(--radius-sm);
   }
 
   /* Numbers that are read as quantities line up in columns and do not jitter
@@ -292,5 +354,59 @@
     /* margin-inline-start, not left: the sweep has to travel with the
        writing direction or it runs backwards in Persian and Arabic. */
     margin-inline-start: 100%;
+  }
+}
+
+/* Shimmer that sweeps across the progress bar fill to give it life. */
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+/* The dialog's entrance.
+ *
+ * These replace `animate-in` and `fade-in-0`, which are `tailwindcss-animate`
+ * classes -- a plugin this project does not install, so both compiled to
+ * nothing and the confirm dialog appeared with no transition at all. Written
+ * as keyframes rather than by adding the plugin for one class pair, because
+ * everything else in the app already animates with framer-motion or with the
+ * keyframes below, and because the reduced-motion block above covers these.
+ *
+ * scale-in carries the centring translate: the dialog is positioned with
+ * -translate-x-1/2 -translate-y-1/2, and an animation touching `transform`
+ * would otherwise drop it into the corner for the length of the animation. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* A gentle scale pulse for drag-over icons. */
+@keyframes subtle-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.85;
   }
 }

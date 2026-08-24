@@ -3,8 +3,9 @@ import { Folder, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation, type SettingsSection } from "../../../app/navigation";
+import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
-import { FormCard } from "../../../components/ui/Card";
+import { FormCard, SectionLabel } from "../../../components/ui/Card";
 import { cn } from "../../../lib/cn";
 import { fileNameOf, formatBytes, formatDuration } from "../../../lib/format";
 import {
@@ -25,9 +26,12 @@ import type { MediaInfo } from "../useMediaFile";
  * what makes the tools feel like one product instead of a stack of dialogs.
  */
 export function ToolShell({
+  title,
   subtitle,
   children,
 }: {
+  /** The tool's own name, as the sidebar lists it. */
+  title: string;
   subtitle: string;
   children: ReactNode;
 }) {
@@ -48,7 +52,21 @@ export function ToolShell({
     // back to top-aligned once the content outgrows the viewport, because a
     // min-height leaves no free space to distribute at that point.
     <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center gap-4 px-6 py-6 xl:max-w-2xl">
-      <p className="px-2 text-center text-sm text-fg-muted">{subtitle}</p>
+      {/* A title, then the line explaining it.
+
+          The screen opened with the grey subtitle alone, floating above nothing:
+          22px of name over 14px of explanation is the difference between a
+          form that has a subject and a form that starts mid-sentence. The name
+          is the sidebar's own word for the tool, so the highlighted row and
+          the heading it leads to cannot drift apart.
+
+          `text-xl` and `text-2xl` were declared in the type scale and used by
+          nothing at all -- the largest type in the app was 17px, and screen
+          titles sat at 15px, the same size as body text. */}
+      <div className="flex flex-col items-center gap-1 px-2 text-center">
+        <h1 className="text-xl font-medium text-fg">{title}</h1>
+        <p className="text-sm text-fg-muted">{subtitle}</p>
+      </div>
 
       <FormCard>{children}</FormCard>
     </div>
@@ -76,14 +94,24 @@ export function FileDropZone({
         type="button"
         onClick={onBrowse}
         className={cn(
-          "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-9",
-          "transition-colors duration-[--duration-fast]",
+          "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-8",
+          "transition-[border-color,background-color,box-shadow] duration-(--duration-base)",
+          // No scale. A drop zone is the largest target on the screen and it
+          // already says "drag-over" three ways -- border, fill and glow. The
+          // 1.01 here nudged the whole form, and the 1.005 on hover was a
+          // sub-pixel change on a 400px box, i.e. nothing at all.
           isDragging
-            ? "border-accent bg-accent-soft"
+            ? "border-accent bg-accent-soft shadow-(--shadow-glow-accent)"
             : "border-line bg-surface-soft hover:border-line-strong hover:bg-surface-hover",
         )}
       >
-        <Upload size={19} className="text-fg-muted" />
+        <Upload
+          size={19}
+          className={cn(
+            "text-fg-muted transition-all duration-(--duration-base)",
+            isDragging && "text-accent animate-[subtle-pulse_1.5s_ease-in-out_infinite]",
+          )}
+        />
         <span className="text-sm font-medium text-fg">{t("drop_file")}</span>
         <span className="text-xs text-fg-muted">{t("or_browse")}</span>
       </button>
@@ -142,6 +170,18 @@ export function FileDropZone({
   );
 }
 
+/**
+ * The output row and the preference row, at one height.
+ *
+ * These two sit directly above each other on every tool form and each ends in
+ * the same ghost `size="sm"` button, so their edges are compared whether or not
+ * anyone means to compare them. They were `px-3.5 py-2.5` and
+ * `ps-3.5 pe-1.5 py-1.5` -- a 54px row stacked on a 46px one, with the button
+ * inset differently in each.
+ */
+const ROW =
+  "flex items-center gap-3 rounded-md border border-line bg-surface ps-3.5 pe-1.5 py-1.5";
+
 export function OutputFolderRow({
   folder,
   onChoose,
@@ -156,10 +196,7 @@ export function OutputFolderRow({
     // the path, then the button that changes it -- identical in all three
     // languages. Letting it mirror moved the change button to the left and put
     // the icon on the far side of a path that still ran left to right.
-    <div
-      dir="ltr"
-      className="flex items-center gap-3 rounded-md border border-line bg-surface px-3.5 py-2.5"
-    >
+    <div dir="ltr" className={ROW}>
       <Folder size={16} className="shrink-0 text-fg-muted" />
       <span
         className="min-w-0 flex-1 truncate text-sm text-fg-soft"
@@ -210,7 +247,7 @@ export function PreferenceRow({
   const { go } = useNavigation();
 
   return (
-    <div className="flex items-center gap-3 rounded-md border border-line bg-surface ps-3.5 pe-1.5 py-1.5">
+    <div className={ROW}>
       <span className="shrink-0 text-fg-muted">{icon}</span>
       <span className="shrink-0 text-sm text-fg-soft">{label}</span>
       {/* ltr because the two values this carries -- "720p", a Whisper model id
@@ -287,14 +324,14 @@ export function FormatGroup({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm font-medium text-fg-soft">
+      <SectionLabel>
         {title}
         {disabled && disabledHint && (
           <span className="ms-2 text-xs font-normal text-fg-muted">
             {disabledHint}
           </span>
         )}
-      </p>
+      </SectionLabel>
       <div className="flex flex-wrap gap-2">
         {formats.map((format) => (
           <button
@@ -303,11 +340,15 @@ export function FormatGroup({
             disabled={disabled}
             onClick={() => onChange(format)}
             className={cn(
-              "rounded-sm border px-3 py-1.5 text-sm uppercase transition-colors duration-[--duration-fast]",
-              "disabled:cursor-not-allowed disabled:opacity-40",
+              // Radius, padding and glow all match Segmented now. The two
+              // components stay separate for the reason above, but a format
+              // chip and a segmented option sit on the same form and were
+              // drifting apart on every value that decides how they look.
+              "rounded-md border px-3 py-2 text-sm uppercase transition-all duration-(--duration-fast)",
+              "disabled:cursor-not-allowed disabled:opacity-disabled",
               value === format
-                ? "border-accent-line bg-accent-soft font-medium text-accent"
-                : "border-line bg-surface text-fg-soft hover:enabled:bg-surface-hover",
+                ? "border-accent-line bg-accent-soft font-medium text-accent shadow-(--shadow-glow)"
+                : "border-line bg-surface text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
             )}
           >
             {format}
@@ -321,9 +362,5 @@ export function FormatGroup({
 /** Green badge for the cases where a job is a stream copy: instant, lossless,
  *  and worth telling the user before they wait for nothing. */
 export function InstantBadge({ text }: { text: string }) {
-  return (
-    <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-success/10 px-2 py-1 text-xs font-medium text-success">
-      {text}
-    </span>
-  );
+  return <Badge tone="success">{text}</Badge>;
 }

@@ -61,7 +61,7 @@
 /* colour -- the entire palette, and nothing else */
 @source inline("{bg,text,border}-{canvas,surface,surface-soft,surface-hover}");
 @source inline("{bg,text,border}-{fg,fg-soft,fg-muted}");
-@source inline("{bg,text,border}-{line,line-strong}");
+@source inline("{bg,text,border}-{line,line-strong,line-soft}");
 @source inline("{bg,text,border}-{accent,accent-hover,accent-soft,accent-line,on-accent}");
 @source inline("{bg,text,border}-{success,danger,warning,media-audio}");
 @source inline("bg-transparent text-transparent border-transparent");
@@ -69,8 +69,16 @@
 /* borders / radius / elevation */
 @source inline("border border-{0,2,4} border-{t,b,s,e} border-{t,b,s,e}-2");
 @source inline("rounded-{none,sm,md,lg,xl,full}");
-@source inline("shadow-(--shadow-panel) opacity-{0,40,45,60,80,100}");
+@source inline("shadow-(--shadow-panel) opacity-{0,60,80,100} opacity-disabled");
 
 /* overflow + motion */
 @source inline("overflow-{hidden,auto,y-auto,x-auto} cursor-{pointer,not-allowed}");
-@source inline("transition-{colors,opacity,all} duration-[--duration-fast] duration-[--duration-base]");
+/* Parens, never square brackets. The bracket form emits the custom property's
+   bare *name* as the value -- and a name is not a <time>, so the declaration is
+   dropped and the transition falls back to 0s. Every transition in the app was
+   instant because of it. */
+@source inline("transition-{colors,opacity,shadow,transform,all} duration-(--duration-fast) duration-(--duration-base) ease-out-quart");
+
+/* glass + elevation */
+@source inline("backdrop-blur-glass bg-surface-glass bg-scrim border-line-soft");
+@source inline("shadow-(--shadow-card) shadow-(--shadow-raise) shadow-(--shadow-glow) shadow-(--shadow-glow-accent)");

@@ -58,11 +58,11 @@ export function Segmented<T extends string>({
             onClick={() => onChange(option.value)}
             className={cn(
               "flex flex-col items-center justify-center gap-0.5 rounded-md border px-3 py-2",
-              "text-center transition-colors duration-[--duration-fast]",
-              "disabled:cursor-not-allowed disabled:opacity-40",
+              "text-center transition-all duration-(--duration-fast)",
+              "disabled:cursor-not-allowed disabled:opacity-disabled",
               selected
-                ? "border-accent-line bg-accent-soft text-accent"
-                : "border-line bg-surface text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover",
+                ? "border-accent-line bg-accent-soft text-accent shadow-(--shadow-glow)"
+                : "border-line bg-surface text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
             )}
           >
             {option.icon}

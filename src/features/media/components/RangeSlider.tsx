@@ -104,9 +104,14 @@ function SliderThumb({ label }: { label: string }) {
     <Slider.Thumb
       aria-label={label}
       className={cn(
-        "block size-4 rounded-full border-2 border-surface bg-accent shadow",
-        "transition-transform duration-[--duration-fast]",
-        "hover:scale-110 focus-visible:scale-110",
+        "block size-4 rounded-full border-2 border-surface bg-accent shadow-(--shadow-raise)",
+        "transition-[transform,box-shadow] duration-(--duration-fast) ease-out-quart",
+        // The glow was an arbitrary shadow ending in a slash-opacity applied
+        // around a var() -- which is not a colour, so the whole box-shadow was
+        // invalid and the thumb grew with no glow behind it. No focus-visible
+        // variant either: the global outline already marks focus, and drawing
+        // both put two rings on one 16px handle.
+        "hover:scale-110 hover:shadow-(--shadow-glow-accent)",
       )}
     />
   );

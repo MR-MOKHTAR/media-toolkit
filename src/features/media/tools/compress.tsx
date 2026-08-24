@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 
 import { ControlGroup } from "../../../components/ui/Card";
+import { Checkbox } from "../../../components/ui/CheckRow";
 import { Segmented } from "../../../components/ui/Segmented";
 import { TextInput } from "../../../components/ui/TextInput";
 import { cn } from "../../../lib/cn";
@@ -165,16 +166,14 @@ function CompressControls({
       )}
 
       <label className="flex cursor-pointer items-center gap-2.5">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={sized}
-          onChange={(event) =>
+          onChange={(next) =>
             setState((current) => ({
               ...current,
-              target: event.target.checked ? "25" : null,
+              target: next ? "25" : null,
             }))
           }
-          className={cn("size-4 shrink-0 rounded-sm border-line accent-accent")}
         />
         <span className="text-sm text-fg">{t("compress_target_size")}</span>
         {sized && (
@@ -187,7 +186,8 @@ function CompressControls({
             }
             onClick={(event) => event.stopPropagation()}
             aria-label={t("compress_target_size")}
-            className="h-9 w-24 px-2.5 text-center tnum"
+            size="sm"
+            className="w-24 text-center tnum"
           />
         )}
       </label>

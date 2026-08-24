@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 
 import type { SettingsSection } from "../../app/navigation";
 import { FormCard } from "../../components/ui/Card";
+import { navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
 import type { AppLanguage } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
@@ -256,16 +257,18 @@ export function SettingsScreen({
               // first control of the panel rather than on the next section.
               tabIndex={selected ? 0 : -1}
               onClick={() => select(key)}
-              className={cn(
-                "flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-sm text-start",
-                "transition-colors duration-[--duration-fast]",
-                // The marker the app sidebar uses for the screen you are on,
-                // borrowed only in the column form -- on a row of tabs a bar
-                // down the leading edge points at nothing.
-                "sm:w-full sm:border-s-2 sm:ps-2.5",
-                selected
-                  ? "bg-accent-soft font-medium text-accent sm:border-accent"
-                  : "text-fg-soft hover:bg-surface-hover hover:text-fg sm:border-transparent",
+              className={navRow(
+                selected ? "active" : "idle",
+                cn(
+                  // Narrow, this is one tab in a wrapping row, so it sizes to
+                  // its label instead of filling the rail.
+                  "w-auto shrink-0",
+                  // The marker the app sidebar uses for the screen you are on,
+                  // borrowed only in the column form -- on a row of tabs a bar
+                  // down the leading edge points at nothing.
+                  "sm:w-full sm:border-s-2",
+                  selected ? "sm:border-accent" : "sm:border-transparent",
+                ),
               )}
             >
               <Icon size={16} className="shrink-0" />
@@ -284,12 +287,12 @@ export function SettingsScreen({
           role="tabpanel"
           id={`settings-panel-${active}`}
           aria-labelledby={`settings-tab-${active}`}
-          className="mx-auto w-full max-w-2xl"
+          className="mx-auto w-full max-w-xl xl:max-w-2xl"
         >
           {/* Heading and the line under it are one item, not two spaced by the
               form's gap: the sentence belongs to the title it explains. */}
           <div className="flex flex-col gap-1">
-            <h2 className="text-base font-medium text-fg">{t(definition.labelKey)}</h2>
+            <h2 className="text-lg font-medium text-fg">{t(definition.labelKey)}</h2>
             <p className="text-sm text-fg-muted">{t(definition.noteKey)}</p>
           </div>
           {body[active]}

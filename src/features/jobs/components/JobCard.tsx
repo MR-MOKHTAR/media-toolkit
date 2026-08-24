@@ -14,6 +14,9 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { Badge } from "../../../components/ui/Badge";
+import { Card } from "../../../components/ui/Card";
+import { IconButton } from "../../../components/ui/Button";
 import { ProgressBar } from "../../../components/ui/ProgressBar";
 import { cn } from "../../../lib/cn";
 import {
@@ -159,12 +162,16 @@ function JobCardComponent({
   const viewable = revealable && job.kind === "transcribe" && onViewTranscript;
 
   return (
-    <li className="relative flex items-start gap-3 rounded-lg border border-line bg-surface p-3">
+    // A `Card`, not a hand-written copy of its class string -- and a div, not
+    // an <li>. The list item belongs to whoever is building the list: the Tasks
+    // screen animates each row, and its motion wrapper sat between the <ul> and
+    // this <li>, so the item was not a child of its own list.
+    <Card padding="sm" interactive className="relative flex items-start gap-3">
       {revealable && (
         <button
           type="button"
           onClick={() => onReveal(job.outputPath!)}
-          className="absolute inset-0 rounded-lg transition-colors duration-[--duration-fast] hover:bg-surface-hover"
+          className="absolute inset-0 rounded-lg transition-colors duration-(--duration-fast) hover:bg-surface-hover"
           aria-label={t("reveal_hint")}
         />
       )}
@@ -178,7 +185,9 @@ function JobCardComponent({
         <Icon size={18} />
       </span>
 
-      <div className="pointer-events-none relative min-w-0 flex-1 flex-col gap-1">
+      {/* `flex` was missing here, so `flex-col gap-1` did nothing and the two
+          blocks below spaced themselves with hand-tuned top margins instead. */}
+      <div className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-1">
         <p className="truncate text-base text-fg" title={job.title}>
           {job.title}
         </p>
@@ -198,7 +207,7 @@ function JobCardComponent({
         </p>
 
         {active && (
-          <div className="mt-1.5 flex flex-col gap-1">
+          <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
               <ProgressBar percent={job.percent} label={job.title} className="flex-1" />
               {/* Nothing at all when the percentage is unknown, rather than a
@@ -226,7 +235,7 @@ function JobCardComponent({
 
         {job.state === "failed" && job.error && (
           <p
-            className="mt-1 line-clamp-2 text-xs text-danger"
+            className="line-clamp-2 text-xs text-danger"
             title={describeAppError(job.error, t, language)}
           >
             {describeAppError(job.error, t, language)}
@@ -236,52 +245,41 @@ function JobCardComponent({
 
       <div className="relative flex shrink-0 items-center gap-1">
         {viewable && (
-          <button
-            type="button"
+          <IconButton
+            variant="accent"
+            label={t("transcript_view")}
             onClick={() => onViewTranscript(job.id)}
-            aria-label={t("transcript_view")}
-            title={t("transcript_view")}
-            className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
           >
             <FileText size={16} />
-          </button>
+          </IconButton>
         )}
         {retryable && (
-          <button
-            type="button"
+          <IconButton
+            variant="accent"
+            label={t("retry_download")}
             onClick={() => onRetry(job.id)}
-            aria-label={t("retry_download")}
-            title={t("retry_download")}
-            className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
           >
             <RotateCcw size={16} />
-          </button>
+          </IconButton>
         )}
         {revealable && (
-          <button
-            type="button"
+          <IconButton
+            variant="accent"
+            label={t("open_folder")}
             onClick={() => onReveal(job.outputPath!)}
-            aria-label={t("open_folder")}
-            title={t("open_folder")}
-            // Tinted rather than muted grey: it sits next to a delete button,
-            // and the one that opens your file should not look like the one
-            // that throws it away.
-            className="flex size-8 items-center justify-center rounded-sm text-accent transition-colors hover:bg-accent-soft"
           >
             <FolderOpen size={16} />
-          </button>
+          </IconButton>
         )}
         {active ? (
-          <button
-            type="button"
-            onClick={() => onCancel(job.id)}
+          <IconButton
+            variant="dangerGhost"
+            label={t("cancel_button")}
             disabled={cancelling}
-            aria-label={t("cancel_button")}
-            title={t("cancel_button")}
-            className="flex size-8 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+            onClick={() => onCancel(job.id)}
           >
             <X size={16} />
-          </button>
+          </IconButton>
         ) : (
           // Remove sits in a menu rather than inline, and it is the only thing
           // in there. Inline it was a bare bin icon immediately beside the
@@ -292,7 +290,7 @@ function JobCardComponent({
           <RemoveMenu label={t("remove")} onRemove={() => onRemove(job.id)} />
         )}
       </div>
-    </li>
+    </Card>
   );
 }
 
@@ -301,16 +299,13 @@ function RemoveMenu({ label, onRemove }: { label: string; onRemove: () => void }
 
   return (
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        aria-label={t("more_actions")}
-        title={t("more_actions")}
-        className={cn(
-          "flex size-8 items-center justify-center rounded-sm text-fg-muted",
-          "transition-colors duration-[--duration-fast]",
-          "hover:bg-surface-hover hover:text-fg data-[state=open]:bg-surface-hover data-[state=open]:text-fg",
-        )}
-      >
-        <MoreHorizontal size={16} />
+      <DropdownMenu.Trigger asChild>
+        <IconButton
+          label={t("more_actions")}
+          className="data-[state=open]:bg-surface-hover data-[state=open]:text-fg"
+        >
+          <MoreHorizontal size={16} />
+        </IconButton>
       </DropdownMenu.Trigger>
 
       <DropdownMenu.Portal>
@@ -320,7 +315,8 @@ function RemoveMenu({ label, onRemove }: { label: string; onRemove: () => void }
           align="end"
           sideOffset={4}
           className={cn(
-            "z-50 min-w-36 rounded-lg border border-line bg-surface p-1",
+            "z-50 min-w-36 rounded-lg border border-line-soft p-1",
+            "bg-surface-glass backdrop-blur-glass",
             "shadow-(--shadow-panel)",
           )}
         >
@@ -344,50 +340,24 @@ function RemoveMenu({ label, onRemove }: { label: string; onRemove: () => void }
 function StatusChip({ job, cancelling }: { job: Job; cancelling: boolean }) {
   const { t } = useTranslation();
 
-  if (cancelling) return <Chip icon={<Loader2 size={12} className="animate-spin" />} text={t("cancelling")} />;
+  if (cancelling) return <Badge icon={<Loader2 size={12} className="animate-spin" />}>{t("cancelling")}</Badge>;
 
   switch (job.state) {
     case "queued":
-      return <Chip icon={<Clock3 size={12} />} text={t("status_queued")} />;
+      return <Badge icon={<Clock3 size={12} />}>{t("status_queued")}</Badge>;
     case "running":
       return (
-        <Chip
-          icon={<Loader2 size={12} className="animate-spin" />}
-          text={t(`stage_${job.stage}`)}
-          tone="accent"
-        />
+        <Badge icon={<Loader2 size={12} className="animate-spin" />} tone="accent">
+          {t(`stage_${job.stage}`)}
+        </Badge>
       );
     case "completed":
-      return <Chip icon={<CheckCircle2 size={12} />} text={t("status_completed")} tone="success" />;
+      return <Badge icon={<CheckCircle2 size={12} />} tone="success">{t("status_completed")}</Badge>;
     case "failed":
-      return <Chip icon={<AlertTriangle size={12} />} text={t("status_failed")} tone="danger" />;
+      return <Badge icon={<AlertTriangle size={12} />} tone="danger">{t("status_failed")}</Badge>;
     case "cancelled":
-      return <Chip icon={<X size={12} />} text={t("status_cancelled")} />;
+      return <Badge icon={<X size={12} />}>{t("status_cancelled")}</Badge>;
   }
-}
-
-function Chip({
-  icon,
-  text,
-  tone = "muted",
-}: {
-  icon: React.ReactNode;
-  text: string;
-  tone?: "muted" | "accent" | "success" | "danger";
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1",
-        tone === "accent" && "text-accent",
-        tone === "success" && "text-success",
-        tone === "danger" && "text-danger",
-      )}
-    >
-      {icon}
-      {text}
-    </span>
-  );
 }
 
 export const JobCard = memo(JobCardComponent);

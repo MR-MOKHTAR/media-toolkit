@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "../../components/ui/Button";
 import { CheckRow } from "../../components/ui/CheckRow";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
+import { Card } from "../../components/ui/Card";
 import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
 import { describe } from "../media/useMediaJob";
@@ -71,7 +72,7 @@ export function StoragePanel({ notify }: Props) {
   };
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-3">
+    <Card padding="sm" className="flex flex-col gap-3">
       {/* Pinned to ltr for the same reason the tool screens' folder row is: a
           path reads one way in every language, and mirroring the row put the
           buttons on the far side of text that still ran left to right. */}
@@ -130,6 +131,6 @@ export function StoragePanel({ notify }: Props) {
         disabled={!info || busy}
         onChange={(enabled) => void apply(() => ipc.setSaveNextToInput(enabled))}
       />
-    </div>
+    </Card>
   );
 }

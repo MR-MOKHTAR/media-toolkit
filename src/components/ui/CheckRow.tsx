@@ -54,7 +54,7 @@ export function CheckRow({
     <div
       className={cn(
         "flex items-start gap-2.5",
-        disabled && "opacity-70",
+        disabled && "opacity-disabled",
         // The switch's label sits opposite it, because a switch reads as the
         // state of the thing named to its left rather than as a marker before
         // it. `flex-row-reverse` and not `order`, so the DOM keeps control
@@ -72,9 +72,12 @@ export function CheckRow({
             // flex, not just relative: the knob is 16px inside an 18px track
             // interior, so it needs centring rather than sitting against the
             // top border.
-            "mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full border border-line bg-surface-hover",
-            "transition-colors duration-[--duration-fast]",
-            "data-[state=checked]:border-accent data-[state=checked]:bg-accent",
+            // border-line-strong, matching the checkbox below. Both are small
+            // controls whose resting edge is the only thing that says they are
+            // there, and --color-line is too faint at 16-20px to do that.
+            "mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full border border-line-strong bg-surface-hover",
+            "transition-all duration-(--duration-fast)",
+            "data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]:shadow-(--shadow-glow)",
             "disabled:cursor-not-allowed",
           )}
         >
@@ -83,29 +86,20 @@ export function CheckRow({
               track. */}
           <RadixSwitch.Thumb
             className={cn(
-              "block size-4 rounded-full bg-surface shadow",
-              "transition-[margin] duration-[--duration-fast] ease-out-quart",
+              "block size-4 rounded-full bg-surface shadow-(--shadow-raise)",
+              "transition-[margin] duration-(--duration-fast) ease-out-quart",
               "ms-0.5 data-[state=checked]:ms-4",
             )}
           />
         </RadixSwitch.Root>
       ) : (
-        <RadixCheckbox.Root
+        <Checkbox
           id={id}
           checked={checked}
           disabled={disabled}
-          onCheckedChange={(state) => onChange(state === true)}
-          className={cn(
-            "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-sm border border-line-strong bg-surface",
-            "transition-colors duration-[--duration-fast]",
-            "data-[state=checked]:border-accent data-[state=checked]:bg-accent",
-            "disabled:cursor-not-allowed",
-          )}
-        >
-          <RadixCheckbox.Indicator className="text-on-accent">
-            <Check size={12} strokeWidth={3} />
-          </RadixCheckbox.Indicator>
-        </RadixCheckbox.Root>
+          onChange={onChange}
+          className="mt-0.5"
+        />
       )}
 
       <label
@@ -119,5 +113,53 @@ export function CheckRow({
         <span className="text-xs text-fg-muted">{hint}</span>
       </label>
     </div>
+  );
+}
+
+/**
+ * The box on its own, for the rows that are not a `CheckRow`.
+ *
+ * `CheckRow` is a label over a hint, which is the shape a setting takes. The
+ * compress form has one that is not that shape -- a checkbox, a label, and a
+ * number field on the same line -- and it was a raw `<input type="checkbox">`,
+ * the only one left in the app. A native box cannot be styled past its accent
+ * colour and cannot carry a focus ring matching anything else here, so that one
+ * row rendered an OS checkbox beside Radix ones on every neighbouring screen.
+ */
+export function Checkbox({
+  id,
+  checked,
+  disabled = false,
+  onChange,
+  label,
+  className,
+}: {
+  id?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+  /** Only needed when no `<label>` points at this box. */
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <RadixCheckbox.Root
+      id={id}
+      checked={checked}
+      disabled={disabled}
+      aria-label={label}
+      onCheckedChange={(state) => onChange(state === true)}
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center rounded-sm border border-line-strong bg-surface",
+        "transition-colors duration-(--duration-fast)",
+        "data-[state=checked]:border-accent data-[state=checked]:bg-accent",
+        "disabled:cursor-not-allowed disabled:opacity-disabled",
+        className,
+      )}
+    >
+      <RadixCheckbox.Indicator className="text-on-accent">
+        <Check size={12} strokeWidth={3} />
+      </RadixCheckbox.Indicator>
+    </RadixCheckbox.Root>
   );
 }

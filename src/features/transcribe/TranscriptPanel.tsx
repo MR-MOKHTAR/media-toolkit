@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 
+import { Card } from "../../components/ui/Card";
 import { cn } from "../../lib/cn";
 import type { TranscriptFormat } from "../jobs/types";
 
@@ -30,7 +31,7 @@ export function TranscriptPanel({
   const cues = format === "txt" ? null : parseCues(text);
 
   return (
-    <div className="min-h-40 min-w-0 overflow-y-auto rounded-lg border border-line bg-surface p-4">
+    <Card className="min-h-40 min-w-0 overflow-y-auto">
       {text.trim() === "" ? (
         <p className="text-base text-fg-muted">{t("transcript_empty")}</p>
       ) : cues ? (
@@ -40,12 +41,12 @@ export function TranscriptPanel({
               key={index}
               className={cn(
                 "flex gap-4 rounded-sm px-2 py-1.5",
-                "transition-colors duration-[--duration-fast] hover:bg-surface-hover",
+                "transition-colors duration-(--duration-fast) hover:bg-surface-hover",
                 // A hairline between cues rather than a gap: at a hundred rows
                 // a gap reads as a list of cards, and a rule reads as a
                 // transcript. Not on the first, so the box does not appear to
                 // start with a divider.
-                index > 0 && "border-t border-line/60",
+                index > 0 && "border-t border-line-soft",
               )}
             >
               {/* Timecodes never mirror and never localize their digits -- the
@@ -59,8 +60,7 @@ export function TranscriptPanel({
               </span>
               <span
                 dir="auto"
-                className="min-w-0 flex-1 text-start text-lg leading-relaxed text-fg"
-                style={{ overflowWrap: "anywhere" }}
+                className="min-w-0 flex-1 text-start text-lg leading-relaxed text-fg wrap-anywhere"
               >
                 {cue.text}
               </span>
@@ -81,15 +81,14 @@ export function TranscriptPanel({
               <p
                 key={index}
                 dir="auto"
-                className="text-start text-lg leading-relaxed text-fg"
-                style={{ overflowWrap: "anywhere" }}
+                className="text-start text-lg leading-relaxed text-fg wrap-anywhere"
               >
                 {line}
               </p>
             ))}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 

@@ -3,7 +3,7 @@ import { Gauge, Link2, RotateCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
-import { ControlGroup, Field } from "../../components/ui/Card";
+import { Card, ControlGroup, Field } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
 import { TextInput } from "../../components/ui/TextInput";
 import { cn } from "../../lib/cn";
@@ -133,7 +133,7 @@ export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
   };
 
   return (
-    <ToolShell subtitle={t("tool_download_about")}>
+    <ToolShell title={t("tool_download")} subtitle={t("tool_download_about")}>
       {/* Labelled, like every other control in the app.
           It was a bare box sitting straight against the top of the card, with
           only a placeholder to say what it was -- which is what made it read as
@@ -147,8 +147,7 @@ export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
         <div className="relative">
           <Link2
             size={17}
-            className="pointer-events-none absolute top-1/2 -translate-y-1/2 text-fg-muted"
-            style={{ insetInlineStart: "0.875rem" }}
+            className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-fg-muted"
           />
           {/* 48px, not the shared 44. This is the app's first screen and the
               one box anything is ever typed into -- it carries the same weight
@@ -265,7 +264,7 @@ function LinkPreview({
   const Icon = kind ? FILE_KIND_ICON[kind] : null;
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-line bg-surface p-3">
+    <Card padding="sm" className="flex items-center gap-3">
       {kind && Icon ? (
         <span
           className={cn(
@@ -316,7 +315,7 @@ function LinkPreview({
           </>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 

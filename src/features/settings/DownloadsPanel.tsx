@@ -1,6 +1,7 @@
 import { Music2, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { SectionLabel } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
 import {
   QUALITIES,
@@ -33,7 +34,7 @@ export function DownloadsPanel() {
   return (
     <>
       <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-fg-soft">{t("download_as")}</h3>
+        <SectionLabel>{t("download_as")}</SectionLabel>
         <Segmented
           label={t("download_as")}
           value={settings.mediaType}
@@ -54,7 +55,7 @@ export function DownloadsPanel() {
       </section>
 
       <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-fg-soft">{t("video_quality")}</h3>
+        <SectionLabel>{t("video_quality")}</SectionLabel>
         <Segmented
           label={t("video_quality")}
           value={settings.quality}

@@ -1,6 +1,7 @@
 import { Moon, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { SectionLabel } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
 import type { AppLanguage } from "../../hooks/useAppPreferences";
 
@@ -30,7 +31,7 @@ export function GeneralPanel({
   return (
     <>
       <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-fg-soft">{t("appearance")}</h3>
+        <SectionLabel>{t("appearance")}</SectionLabel>
         <Segmented
           label={t("appearance")}
           value={darkMode ? "dark" : "light"}
@@ -45,7 +46,7 @@ export function GeneralPanel({
       </section>
 
       <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-fg-soft">{t("language")}</h3>
+        <SectionLabel>{t("language")}</SectionLabel>
         <Segmented
           label={t("language")}
           value={language}

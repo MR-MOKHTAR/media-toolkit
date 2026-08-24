@@ -58,7 +58,8 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
           aria-hidden
           className={cn(
             "pointer-events-none z-50 whitespace-nowrap",
-            "rounded-sm border border-line bg-surface px-2 py-1 text-xs text-fg",
+            "rounded-sm border border-line-soft px-2 py-1 text-xs text-fg",
+            "bg-surface-glass backdrop-blur-glass",
             "shadow-(--shadow-panel)",
           )}
         >

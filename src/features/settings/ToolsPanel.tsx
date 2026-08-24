@@ -3,6 +3,7 @@ import { CheckCircle2, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
+import { Card } from "../../components/ui/Card";
 import { cn } from "../../lib/cn";
 import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
@@ -52,7 +53,7 @@ export function ToolsPanel({ notify }: Props) {
   };
 
   return (
-    <div className="flex flex-col divide-y divide-line rounded-lg border border-line bg-surface">
+    <Card padding="none" className="flex flex-col divide-y divide-line">
       {BUNDLED.map((tool) => {
         // Three states, not two. Defaulting the unknown one to false meant every
         // tool flashed a red "not installed" before the answer arrived -- a claim
@@ -112,6 +113,6 @@ export function ToolsPanel({ notify }: Props) {
           </div>
         );
       })}
-    </div>
+    </Card>
   );
 }

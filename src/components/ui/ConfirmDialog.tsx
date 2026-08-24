@@ -45,13 +45,31 @@ export function ConfirmDialog({
       <AlertDialog.Trigger asChild>{trigger}</AlertDialog.Trigger>
 
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-50 bg-fg/25" />
+        {/* fade-in/scale-in are this project's own keyframes. The classes here
+            before were `animate-in` and `fade-in-0` from tailwindcss-animate,
+            which is not a dependency, so both compiled to nothing and the
+            dialog appeared instantly. */}
+        <AlertDialog.Overlay
+          className={cn(
+            "fixed inset-0 z-50 bg-scrim backdrop-blur-sm",
+            "data-[state=open]:animate-[fade-in_var(--duration-base)_var(--ease-out-quart)]",
+          )}
+        />
 
         <AlertDialog.Content
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(26rem,calc(100vw-2rem))]",
             "-translate-x-1/2 -translate-y-1/2",
-            "rounded-xl border border-line bg-surface p-5 shadow-(--shadow-panel)",
+            "rounded-xl border border-line-soft p-5 shadow-(--shadow-panel)",
+            "bg-surface-glass backdrop-blur-glass",
+            // scale-in carries the centring translate itself -- animating
+            // `transform` here would otherwise drop the dialog into the corner
+            // for the length of the animation.
+            "data-[state=open]:animate-[scale-in_var(--duration-base)_var(--ease-out-quart)]",
+            /* Gradient top accent, same as FormCard. */
+            "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",
+            "before:bg-(image:--gradient-accent) before:opacity-40 before:rounded-t-xl",
+            "relative overflow-hidden",
             "focus:outline-none",
           )}
         >

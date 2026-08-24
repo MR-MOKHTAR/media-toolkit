@@ -4,6 +4,7 @@ import { History, Inbox, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../../app/navigation";
+import { IconButton } from "../../../components/ui/Button";
 import { EmptyState } from "../../../components/ui/Card";
 import { cn } from "../../../lib/cn";
 import { jobsOfKind } from "../selectors";
@@ -85,7 +86,7 @@ export function HistoryPanel({
             exit={{ opacity: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.18 }}
             onClick={onClose}
-            className="absolute inset-0 z-30 bg-fg/20 xl:hidden"
+            className="absolute inset-0 z-30 bg-scrim xl:hidden"
             aria-hidden
           />
 
@@ -97,27 +98,20 @@ export function HistoryPanel({
             transition={{ duration: reduceMotion ? 0 : 0.18 }}
             aria-label={t("history")}
             className={cn(
-              "absolute inset-y-0 end-0 z-40 flex w-full max-w-105 flex-col",
-              "border-s border-line bg-surface shadow-(--shadow-panel)",
+              "absolute inset-y-0 inset-e-0 z-40 flex w-full max-w-105 flex-col",
+              "border-s border-line-soft bg-surface-glass shadow-(--shadow-panel) backdrop-blur-glass",
               // static puts it back in the flex row, so the form keeps the rest
               // of the width instead of being covered by it.
-              "xl:static xl:z-auto xl:w-100 xl:max-w-none xl:shadow-none",
+              "xl:static xl:z-auto xl:w-100 xl:max-w-none xl:bg-surface xl:shadow-none xl:backdrop-blur-none",
             )}
           >
             <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3">
-              <h2 className="flex-1 text-sm font-medium text-fg">{t("history")}</h2>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label={t("close")}
-                title={t("close")}
-                className={cn(
-                  "flex size-7 shrink-0 items-center justify-center rounded-sm text-fg-muted",
-                  "transition-colors duration-[--duration-fast] hover:bg-surface-hover hover:text-fg",
-                )}
-              >
-                <X size={15} />
-              </button>
+              <h2 className="flex-1 text-lg font-medium text-fg">
+                {t("history")}
+              </h2>
+              <IconButton label={t("close")} onClick={onClose}>
+                <X size={16} />
+              </IconButton>
             </header>
 
             {/* The panel's own scroll. min-h-0 is what lets a flex child shrink
@@ -132,17 +126,20 @@ export function HistoryPanel({
               ) : (
                 <ul className="flex flex-col gap-2">
                   {recent.map((job) => (
-                    <JobCard
-                      key={job.id}
-                      job={job}
-                      language={language}
-                      cancelling={cancelling.has(job.id)}
-                      onCancel={(id) => void cancel(id)}
-                      onRemove={remove}
-                      onReveal={(path) => void reveal(path)}
-                      onRetry={(id) => void retry(id)}
-                      onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
-                    />
+                    <li key={job.id}>
+                      <JobCard
+                        job={job}
+                        language={language}
+                        cancelling={cancelling.has(job.id)}
+                        onCancel={(id) => void cancel(id)}
+                        onRemove={remove}
+                        onReveal={(path) => void reveal(path)}
+                        onRetry={(id) => void retry(id)}
+                        onViewTranscript={(id) =>
+                          go({ name: "transcript", jobId: id })
+                        }
+                      />
+                    </li>
                   ))}
                 </ul>
               )}
@@ -182,24 +179,22 @@ export function HistoryToggle({
   const count = useMemo(() => jobsOfKind(jobs, kind).length, [jobs, kind]);
 
   return (
-    <button
-      type="button"
+    // An IconButton, not a hand-built copy of one. This renders into the title
+    // bar's action slot directly beside three real IconButtons, and it was
+    // size-7 next to their size-8 -- the mismatch was visible in the one place
+    // the two could be compared.
+    <IconButton
+      label={t("history")}
       onClick={onToggle}
       disabled={count === 0}
       aria-expanded={open}
       aria-controls={PANEL_ID}
-      aria-label={t("history")}
-      title={t("history")}
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-sm",
-        "transition-colors duration-[--duration-fast]",
-        "disabled:cursor-not-allowed disabled:opacity-45",
-        open
-          ? "bg-accent-soft text-accent"
-          : "text-fg-soft hover:bg-surface-hover hover:text-fg",
+        open &&
+          "bg-accent-soft text-accent hover:bg-accent-soft hover:text-accent",
       )}
     >
       <History size={16} />
-    </button>
+    </IconButton>
   );
 }

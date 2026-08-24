@@ -54,9 +54,10 @@ export function Select<T extends string>({
           // this sits beside a format group, and the row reads as one band only
           // while both halves are the same height.
           "group flex h-9 w-full items-center justify-between gap-2 rounded-md border border-line bg-surface px-3",
-          "text-sm text-fg transition-colors duration-[--duration-fast]",
+          "text-sm text-fg transition-all duration-(--duration-fast)",
           "hover:border-line-strong focus:border-accent focus:outline-none",
-          "data-[state=open]:border-accent",
+          "focus:shadow-(--shadow-focus)",
+          "data-[state=open]:border-accent data-[state=open]:shadow-(--shadow-focus)",
           className,
         )}
       >
@@ -68,7 +69,7 @@ export function Select<T extends string>({
         <RadixSelect.Icon asChild>
           <ChevronDown
             size={16}
-            className="shrink-0 text-fg-muted transition-transform duration-[--duration-fast] group-data-[state=open]:rotate-180"
+            className="shrink-0 text-fg-muted transition-transform duration-(--duration-fast) group-data-[state=open]:rotate-180"
           />
         </RadixSelect.Icon>
       </RadixSelect.Trigger>
@@ -82,7 +83,8 @@ export function Select<T extends string>({
           position="popper"
           sideOffset={4}
           className={cn(
-            "z-50 overflow-hidden rounded-lg border border-line bg-surface shadow-(--shadow-panel)",
+            "z-50 overflow-hidden rounded-lg border border-line-soft shadow-(--shadow-panel)",
+            "bg-surface-glass backdrop-blur-glass",
             // Matched to the trigger so the menu reads as the field opening
             // rather than as a panel arriving over it, and capped at whatever
             // room the window actually has left below it.
@@ -102,6 +104,7 @@ export function Select<T extends string>({
                 className={cn(
                   "flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5",
                   "text-sm text-fg-soft outline-none select-none",
+                  "transition-colors duration-(--duration-fast)",
                   // Highlight follows the keyboard as well as the pointer --
                   // Radix sets it for both, which is the half a `:hover` rule
                   // would have missed.
