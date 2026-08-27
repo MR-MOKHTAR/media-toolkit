@@ -157,6 +157,19 @@
    * fallback if a class is missing. */
   --gradient-accent: linear-gradient(135deg, #1769e0, #2b87f0);
   --gradient-accent-hover: linear-gradient(135deg, #0e59c4, #1c7ae8);
+  /* The halo that turns behind a tool's mark. Conic rather than linear because
+     it is rotated: a linear gradient spun around its centre reverses direction
+     twice a turn and reads as a wobble, while a conic one has no seam to catch
+     the eye. It is always drawn blurred, so the two stops are the whole
+     definition -- an accent arc and the violet the app already uses for audio,
+     over a transparent remainder that becomes the gap in the ring. */
+  --gradient-halo: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    #2b87f0 90deg,
+    #7048c9 190deg,
+    transparent 300deg
+  );
   --shadow-glow: 0 0 20px rgba(23, 105, 224, 0.15);
   --shadow-glow-accent: 0 4px 24px rgba(23, 105, 224, 0.25);
 
@@ -226,6 +239,13 @@
 
     --gradient-accent: linear-gradient(135deg, #4c8df6, #6fa8ff);
     --gradient-accent-hover: linear-gradient(135deg, #3a7de8, #5a96f7);
+    --gradient-halo: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      #4c8df6 90deg,
+      #a68bfa 190deg,
+      transparent 300deg
+    );
     --shadow-glow: 0 0 24px rgba(76, 141, 246, 0.18);
     --shadow-glow-accent: 0 4px 28px rgba(76, 141, 246, 0.3);
     --color-surface-glass: rgba(17, 24, 36, 0.6);
@@ -396,6 +416,38 @@
   to {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* The halo behind a tool's mark, turning.
+ *
+ * Its own keyframes rather than Tailwind's `spin`: v4 only emits the keyframes
+ * for an animation it can see used through a theme value, and this is an
+ * arbitrary `animate-[...]` with a nine-second duration, so `@keyframes spin`
+ * would never be generated and the halo would sit still. */
+@keyframes halo-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The glow under a tool's mark, breathing.
+ *
+ * Scale and opacity only, on an element that is already blurred and sits behind
+ * an opaque tile -- so nothing here can move a pixel of text or an edge the eye
+ * is trying to hold still. Four seconds is deliberately slower than anything
+ * else in the app: this is the one thing on the screen that moves while the
+ * user is doing nothing, and at two seconds it read as a control asking to be
+ * clicked rather than as the surface being alive. */
+@keyframes aura-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.8;
   }
 }
 

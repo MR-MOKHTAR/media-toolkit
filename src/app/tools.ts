@@ -34,3 +34,15 @@ export const TOOLS: ToolDefinition[] = [
   // one thing this tool does not do.
   { route: { name: "transcribe" }, key: "transcribe", icon: Captions },
 ];
+
+/**
+ * A tool's icon, by the same key its name and its description are stored under.
+ *
+ * The sidebar walks `TOOLS` in order; a tool screen knows only which tool it is
+ * and needs the one icon. Deriving the lookup from the list rather than writing
+ * it out again is what keeps the mark at the top of a screen and the row that
+ * led there from ever being two different glyphs.
+ */
+export const TOOL_ICON: Record<string, LucideIcon> = Object.fromEntries(
+  TOOLS.map((tool) => [tool.key, tool.icon]),
+);

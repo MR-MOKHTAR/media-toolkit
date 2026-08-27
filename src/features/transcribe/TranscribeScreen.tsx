@@ -126,7 +126,7 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
   );
 
   return (
-    <ToolShell title={t("tool_transcribe")} subtitle={t("tool_transcribe_about")}>
+    <ToolShell tool="transcribe">
       <FileDropZone
         path={file.path}
         info={file.info}

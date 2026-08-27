@@ -136,10 +136,7 @@ export function MediaToolScreen({ config, initialFile, language, notify }: Props
   );
 
   return (
-    <ToolShell
-      title={t(`tool_${config.kind}`)}
-      subtitle={t(`tool_${config.kind}_about`)}
-    >
+    <ToolShell tool={config.kind}>
       <FileDropZone
         path={file.path}
         info={file.info}

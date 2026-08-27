@@ -133,7 +133,7 @@ export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
   };
 
   return (
-    <ToolShell title={t("tool_download")} subtitle={t("tool_download_about")}>
+    <ToolShell tool="download">
       {/* Labelled, like every other control in the app.
           It was a bare box sitting straight against the top of the card, with
           only a placeholder to say what it was -- which is what made it read as
