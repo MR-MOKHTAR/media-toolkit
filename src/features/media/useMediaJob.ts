@@ -7,7 +7,6 @@ import { fileNameOf } from "../../lib/format";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import type { JobKind } from "../jobs/types";
-import { useHistoryPanel } from "../jobs/useHistoryPanel";
 import { useJobs } from "../jobs/useJobs";
 import { useOutputFolder } from "./useOutputFolder";
 
@@ -22,21 +21,9 @@ export function useMediaJob(
   kind: Exclude<JobKind, "download">,
   command: string,
   notify: (type: ToastType, message: string) => void,
-  /**
-   * Whether starting the job opens this tool's history panel.
-   *
-   * True for every tool that produces a file: the form has nothing more to show,
-   * and the panel is where the progress bar for what was just started appears.
-   * The screen itself stays put -- it used to navigate to Tasks instead, which
-   * threw away the loaded file and the chosen settings to show a list of every
-   * tool's work. Transcribe passes false: its result is text, and it shows that
-   * text in place.
-   */
-  { openHistoryOnStart = true }: { openHistoryOnStart?: boolean } = {},
 ) {
   const { t } = useTranslation();
   const { addExternalJob } = useJobs();
-  const { openPanel } = useHistoryPanel();
   const folder = useOutputFolder(kind, notify);
   const [busy, setBusy] = useState(false);
   const { outputDir } = folder;
@@ -56,7 +43,6 @@ export function useMediaJob(
           detail,
         });
         notify("info", t("job_started"));
-        if (openHistoryOnStart) openPanel();
         return id;
       } catch (raw) {
         // The typed error carries the real reason -- an unreadable file, a
@@ -68,16 +54,7 @@ export function useMediaJob(
         setBusy(false);
       }
     },
-    [
-      addExternalJob,
-      command,
-      kind,
-      notify,
-      openHistoryOnStart,
-      openPanel,
-      outputDir,
-      t,
-    ],
+    [addExternalJob, command, kind, notify, outputDir, t],
   );
 
   return { ...folder, run, busy };

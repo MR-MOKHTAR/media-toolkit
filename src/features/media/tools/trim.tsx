@@ -6,7 +6,7 @@ import { extensionOf } from "../../../lib/mediaKind";
 import type {
   MediaToolConfig,
   MediaToolContext,
-} from "../components/MediaToolScreen";
+} from "../components/MediaToolForm";
 import { RangeSlider } from "../components/RangeSlider";
 import { defaultOutputName } from "../useMediaJob";
 

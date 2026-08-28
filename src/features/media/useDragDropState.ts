@@ -1,5 +1,7 @@
 import { useFileDrop } from "./useDragDrop";
 
 /** Named separately so tool screens read as one call, not two concepts. */
-export const useDragDropState = (onDrop: (paths: string[]) => void) =>
-  useFileDrop(onDrop);
+export const useDragDropState = (
+  onDrop: (paths: string[]) => void,
+  enabled?: boolean,
+) => useFileDrop(onDrop, enabled);

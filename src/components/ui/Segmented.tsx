@@ -18,6 +18,16 @@ interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
   label: string;
   className?: string;
+  /**
+   * How many across. Defaults to all of them on one row, which is what a
+   * three- or four-way choice wants.
+   *
+   * It exists for the one control that outgrew a row: the quality picker offers
+   * six heights, and six equal columns inside the settings panel of a 600px
+   * window leaves about 48px each -- narrower than the word "2160p" they have
+   * to hold. Two rows of three is the same control, legible.
+   */
+  columns?: number;
 }
 
 /**
@@ -37,13 +47,16 @@ export function Segmented<T extends string>({
   onChange,
   label,
   className,
+  columns,
 }: SegmentedProps<T>) {
   return (
     <div
       role="radiogroup"
       aria-label={label}
       className={cn("grid gap-2", className)}
-      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+      style={{
+        gridTemplateColumns: `repeat(${columns ?? options.length}, minmax(0, 1fr))`,
+      }}
     >
       {options.map((option) => {
         const selected = option.value === value;

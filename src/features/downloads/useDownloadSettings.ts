@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "media-toolkit-download-v1";
 
-export const QUALITIES = ["best", "1080", "720", "480"] as const;
+/** The heights offered, largest first after "best".
+ *
+ * 1440 and 2160 are here because the backend has always accepted them -- the
+ * selector is built from whatever number arrives -- and the list simply never
+ * offered them, so a 4K monitor's only route to 4K was "best", which on a phone
+ * recording means something else entirely. */
+export const QUALITIES = ["best", "2160", "1440", "1080", "720", "480"] as const;
 
 export type DownloadQuality = (typeof QUALITIES)[number];
 
@@ -11,6 +17,11 @@ export interface DownloadSettings {
   /** Video or MP3, for the links where that is a question at all. A direct file
    *  is fetched as whatever it is, so this has nothing to say about one. */
   mediaType: "video" | "audio";
+  /** Fetch a video's streams on many connections instead of letting yt-dlp
+   *  fetch them on one. On by default, and the reason downloads are fast; the
+   *  switch exists so a site that objects to it can be worked around without
+   *  waiting for a release. */
+  parallel: boolean;
 }
 
 /**
@@ -22,7 +33,11 @@ export interface DownloadSettings {
  * wants the full thing sets it once in Settings and never thinks about it
  * again.
  */
-const DEFAULTS: DownloadSettings = { quality: "720", mediaType: "video" };
+const DEFAULTS: DownloadSettings = {
+  quality: "720",
+  mediaType: "video",
+  parallel: true,
+};
 
 function load(): DownloadSettings {
   try {

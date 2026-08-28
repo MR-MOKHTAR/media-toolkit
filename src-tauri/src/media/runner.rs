@@ -143,7 +143,7 @@ async fn run_passes(
                             // so a two-pass encode does not run 0-100 twice.
                             percent: fraction
                                 .map(|f| ((index as f64 + f) / total_passes * 100.0).clamp(0.0, 99.9)),
-                            speed: update.speed.clone(),
+                            encode_rate: update.speed,
                             eta_secs: update.eta_secs(pass.duration_secs),
                             bytes: update.total_size,
                             ..JobProgress::new(id, kind, Stage::Encoding)
@@ -187,7 +187,7 @@ async fn cleanup(jobs: &Jobs, id: &str) {
 pub struct ProgressBlock {
     out_time_us: Option<u64>,
     total_size: Option<u64>,
-    speed: Option<String>,
+    speed: Option<f64>,
     ended: bool,
 }
 
@@ -195,7 +195,10 @@ pub struct ProgressBlock {
 pub struct ProgressUpdate {
     pub out_time_secs: f64,
     pub total_size: Option<u64>,
-    pub speed: Option<String>,
+    /// ffmpeg's realtime multiplier, already parsed out of `2.0x`. It was kept
+    /// as the raw string and re-parsed inside `eta_secs`, which meant the one
+    /// place that needed it as a number did the work and the UI got the `x`.
+    pub speed: Option<f64>,
     pub ended: bool,
 }
 
@@ -209,7 +212,7 @@ impl ProgressUpdate {
 
     pub fn eta_secs(&self, duration_secs: Option<f64>) -> Option<u64> {
         let duration = duration_secs.filter(|d| *d > 0.0)?;
-        let speed: f64 = self.speed.as_deref()?.trim_end_matches('x').parse().ok()?;
+        let speed = self.speed?;
         if speed <= 0.0 {
             return None;
         }
@@ -236,9 +239,8 @@ impl ProgressBlock {
             }
             "total_size" => self.total_size = value.parse().ok(),
             "speed" => {
-                // "N/A" until the first frames are through.
-                self.speed = (value != "N/A" && !value.is_empty())
-                    .then(|| value.trim().to_string());
+                // "N/A" until the first frames are through, and "2.05x" after.
+                self.speed = value.trim().trim_end_matches('x').parse().ok();
             }
             "progress" => {
                 self.ended = value == "end";

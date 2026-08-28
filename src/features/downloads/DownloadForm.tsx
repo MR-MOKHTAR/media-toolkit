@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Gauge, Link2, RotateCw } from "lucide-react";
+import { Gauge, Link2, ListVideo, RotateCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
@@ -21,19 +21,21 @@ import type { ToastType } from "../../types/feedback";
 import {
   OutputFolderRow,
   RunButton,
-  ToolShell,
-} from "../media/components/ToolShell";
+} from "../media/components/ToolFormParts";
+import { ToolDialog } from "../tools/ToolDialog";
 import type { UrlInfo } from "../jobs/types";
-import { useHistoryPanel } from "../jobs/useHistoryPanel";
 import { useDownloadForm } from "./useDownloadForm";
 import { qualityLabel, useDownloadSettings } from "./useDownloadSettings";
 
 interface Props {
-  /** What was in the field when this screen was last left, if it was left for
+  /** What was in the field when this form was last left, if it was left for
    *  Settings. Empty on a normal arrival. */
   initialUrl?: string;
   isOnline: boolean;
   notify: (type: ToastType, message: string) => void;
+  /** Closes the dialog. Called once the download has actually started -- the
+   *  new row is already on the list behind it by then. */
+  onDone: () => void;
 }
 
 /**
@@ -53,10 +55,9 @@ interface Props {
  * Both used to sit on the form permanently: two large cards and a bordered row,
  * above an empty field, describing a download nobody had asked for yet.
  */
-export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
+export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   const { t } = useTranslation();
   const { go, replace } = useNavigation();
-  const { openPanel } = useHistoryPanel();
   const [url, setUrl] = useState(initialUrl ?? "");
   // Read on mount, which is every time this screen is opened -- so a quality
   // changed in Settings applies to the next link without anything to sync.
@@ -123,17 +124,36 @@ export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
 
   const submit = () => {
     void start(
-      { url, mediaType, quality: settings.quality, link: info },
+      {
+        url,
+        mediaType,
+        quality: settings.quality,
+        parallel: settings.parallel,
+        link: info,
+      },
       () => setUrl(""),
     ).then(
-      // The form clears itself and stays, ready for the next link; the history
-      // beside it opens so the download that just started is visible.
-      (ok) => ok && openPanel(),
+      // The dialog closes on success and the download is already the top row of
+      // the list behind it. Nothing to clear and nowhere to go: the form is
+      // unmounted, and the next link opens a fresh one.
+      (ok) => ok && onDone(),
     );
   };
 
   return (
-    <ToolShell tool="download">
+    <ToolDialog
+      tool="download"
+      onClose={onDone}
+      footer={
+        <RunButton
+          label={t("start_download")}
+          disabled={
+            !trimmed || !savePath || !isOnline || starting || (!toolsReady && !isFile)
+          }
+          onClick={submit}
+        />
+      }
+    >
       {/* Labelled, like every other control in the app.
           It was a bare box sitting straight against the top of the card, with
           only a placeholder to say what it was -- which is what made it read as
@@ -210,10 +230,11 @@ export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
             {mediaType === "video" ? (
               <QualityHint
                 quality={qualityLabel(settings.quality, t("quality_best"))}
-                // The link survives the trip: this entry is what `back` from
-                // Settings returns to, so it has to carry the field with it.
+                // The link and the open form both survive the trip: this entry
+                // is what `back` from Settings returns to, so it has to carry
+                // the field and the fact that the dialog was open with it.
                 onOpenSettings={() => {
-                  replace({ name: "download", link: url });
+                  replace({ name: "download", link: url, composing: true });
                   go({ name: "settings", section: "downloads" });
                 }}
               />
@@ -232,15 +253,7 @@ export function DownloadScreen({ initialUrl, isOnline, notify }: Props) {
       {!toolsReady && !isFile && (
         <p className="text-sm text-warning">{t("ytdlp_not_found")}</p>
       )}
-
-      <RunButton
-        label={t("start_download")}
-        disabled={
-          !trimmed || !savePath || !isOnline || starting || (!toolsReady && !isFile)
-        }
-        onClick={submit}
-      />
-    </ToolShell>
+    </ToolDialog>
   );
 }
 
@@ -312,6 +325,30 @@ function LinkPreview({
                     .filter(Boolean)
                     .join(" · ")}
             </p>
+
+            {/* A link to a playlist downloads its first video and nothing else
+                -- `--no-playlist` is passed on every call, deliberately, because
+                queueing forty videos off one paste is not what anyone meant by
+                pressing Download once. The backend has been reporting that this
+                is a playlist, and how long it is, to nobody: the form looked
+                exactly the same as for a single video and the other thirty-nine
+                simply never arrived, with no line anywhere saying so. */}
+            {info?.isPlaylist && (
+              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-warning">
+                <ListVideo size={12} className="shrink-0" />
+                {/* Two keys rather than i18next's `count`, which switches on a
+                    plural rule and would need one key per form -- two in
+                    English, six in Arabic -- and the locale checker requires
+                    every bundle to carry the same key set. The length is worth
+                    saying when it is known and not worth inventing when it is
+                    not. */}
+                <span className="truncate">
+                  {info.entryCount
+                    ? t("playlist_first_only_of", { total: info.entryCount })
+                    : t("playlist_first_only")}
+                </span>
+              </p>
+            )}
           </>
         )}
       </div>

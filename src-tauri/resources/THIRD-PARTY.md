@@ -1,6 +1,6 @@
 # Third-party software bundled with this application
 
-This app ships three external programs inside its installer. It does not
+This app ships four external programs inside its installer. It does not
 modify them; it runs them as separate processes.
 
 ## FFmpeg / ffprobe — GPL-3.0-or-later
@@ -34,6 +34,19 @@ Used to download media from the web.
 - Source: <https://github.com/yt-dlp/yt-dlp>
 - The standalone build is bundled so the app does not require a system Python
   installation.
+
+## Deno — MIT
+
+The JavaScript runtime yt-dlp uses to answer YouTube's player challenge.
+Without it yt-dlp warns that "YouTube extraction without a JS runtime has been
+deprecated, and some formats may be missing", and falls back to clients that
+carry a shorter format list — so a request for 1080p can quietly come back at a
+lower resolution.
+
+- Source: <https://github.com/denoland/deno>
+- Run only as a sandboxed subprocess of yt-dlp, via `--js-runtimes`. Nothing in
+  this app executes JavaScript through it directly.
+- MIT is permissive and imposes no condition on the rest of this distribution.
 
 ## Bundled fonts — SIL Open Font License 1.1
 

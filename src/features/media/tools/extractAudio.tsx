@@ -8,8 +8,8 @@ import { formatBytes } from "../../../lib/format";
 import type {
   MediaToolConfig,
   MediaToolContext,
-} from "../components/MediaToolScreen";
-import { InstantBadge } from "../components/ToolShell";
+} from "../components/MediaToolForm";
+import { InstantBadge } from "../components/ToolFormParts";
 import { defaultOutputName } from "../useMediaJob";
 
 /** The one value that is not a format: the file decides what comes out. */

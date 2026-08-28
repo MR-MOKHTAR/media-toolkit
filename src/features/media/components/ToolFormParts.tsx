@@ -1,13 +1,11 @@
 import type { ReactNode } from "react";
-import { motion, useReducedMotion } from "framer-motion";
-import { Folder, Upload, type LucideIcon } from "lucide-react";
+import { Folder, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation, type SettingsSection } from "../../../app/navigation";
-import { TOOL_ICON } from "../../../app/tools";
 import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
-import { FormCard, SectionLabel } from "../../../components/ui/Card";
+import { SectionLabel } from "../../../components/ui/Card";
 import { cn } from "../../../lib/cn";
 import { fileNameOf, formatBytes, formatDuration } from "../../../lib/format";
 import {
@@ -19,145 +17,20 @@ import {
 import type { MediaInfo } from "../useMediaFile";
 
 /**
- * The one layout every tool screen uses:
+ * The parts every tool form is built from:
  *
  *   file  ->  preview  ->  two or three controls  ->  output folder  ->  run
  *
  * If a tool needs more than three controls between the preview and the output
- * row, it is too complicated for this app. Keeping the template identical is
+ * row, it is too complicated for this app. Keeping the sequence identical is
  * what makes the tools feel like one product instead of a stack of dialogs.
+ *
+ * The box these used to sit in -- a centred column with a 56px animated mark, a
+ * 26px heading and a `FormCard` -- is gone. The form is a dialog now, and
+ * `ToolDialog` draws its own header out of the same tool key; a screen-sized
+ * heading inside a 576px dialog was the same word said twice, once at twice the
+ * size it needed.
  */
-export function ToolShell({
-  tool,
-  children,
-}: {
-  /** Which tool this is -- the key the sidebar, the icon map and the two
-   *  strings `tool_${key}` and `tool_${key}_about` all share. Passing the key
-   *  rather than the finished title and subtitle is what stops a screen from
-   *  heading itself with one word while the row that led to it says another. */
-  tool: string;
-  children: ReactNode;
-}) {
-  const { t } = useTranslation();
-  const Icon = TOOL_ICON[tool];
-
-  return (
-    // One width step, and only above xl. At the 600px window minimum and in the
-    // default 1100px window the form stays xl-wide, which is where a form reads
-    // best -- past that the label drifts away from the control it labels. The
-    // extra 96px on a wide screen exists for one reason: the trim range needs
-    // a timecode field on each side of its track without squeezing it.
-    //
-    // 576px, not the 672 this replaces. Every control in here is full width, so
-    // the container's width *is* the control's width, and at 2xl a single-line
-    // URL field was a 670px box holding a 40px cursor. A form is easier to read
-    // when the eye does not have to travel the window to get from a label to
-    // its input.
-    //
-    // min-h-full + justify-center centres a short form vertically and falls
-    // back to top-aligned once the content outgrows the viewport, because a
-    // min-height leaves no free space to distribute at that point.
-    // gap-6, up from gap-4. The header is now three stacked parts of its own at
-    // 12px and 6px, and the space separating that whole block from the form has
-    // to be larger than any space inside it or the subtitle reads as the card's
-    // first line rather than the heading's last.
-    <div className="mx-auto flex min-h-full w-full max-w-xl flex-col justify-center gap-6 px-6 py-6 xl:max-w-2xl">
-      {/* The mark, the title, then the line explaining it.
-
-          The screen opened with the grey subtitle alone, floating above nothing:
-          26px of name over 14px of explanation is the difference between a
-          form that has a subject and a form that starts mid-sentence. The name
-          is the sidebar's own word for the tool, so the highlighted row and
-          the heading it leads to cannot drift apart.
-
-          `text-xl` and `text-2xl` were declared in the type scale and used by
-          nothing at all -- the largest type in the app was 17px, and screen
-          titles sat at 15px, the same size as body text. The title takes 2xl:
-          it was written into the scale for a home screen that no longer
-          exists, and this heading is now the largest thing the app ever says.
-
-          The subtitle is capped at 34em and balanced. Every one of these lines
-          is short enough to fit one line in a wide window, and `text-balance`
-          is what keeps the wrap from leaving a single orphaned word under a
-          centred heading when the window is narrow. */}
-      <header className="flex flex-col items-center gap-3 px-2 text-center">
-        <ToolMark icon={Icon} />
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-2xl font-semibold tracking-tight text-fg">
-            {t(`tool_${tool}`)}
-          </h1>
-          <p className="max-w-[34em] text-sm text-balance text-fg-muted">
-            {t(`tool_${tool}_about`)}
-          </p>
-        </div>
-      </header>
-
-      <FormCard>{children}</FormCard>
-    </div>
-  );
-}
-
-/**
- * The tool's own icon, once more at size, with the screen's only idle motion
- * behind it.
- *
- * A heading that is nothing but a word is the same heading on all six screens
- * -- the eye has to read it to know where it is. The glyph is already the thing
- * that identifies a tool in the sidebar, so promoting it to the top of the
- * screen means arrival is recognised before a word is read, and it costs
- * nothing new: it is `TOOL_ICON[tool]`, the sidebar's own icon.
- *
- * Three layers, and each does one job:
- *
- *   - the halo, a blurred conic gradient turning once every nine seconds. Slow
- *     enough that it is a shift in light rather than a spinner -- a spinner at
- *     the top of a form would say the form is busy.
- *   - the aura, the accent gradient blurred under the tile, breathing on the
- *     4s cycle in `aura-breathe`.
- *   - the tile itself, opaque, sharp, holding the icon still. Nothing moves
- *     inside it. Both moving layers are `aria-hidden` and sit behind, so what
- *     a screen reader gets is the heading and nothing else.
- *
- * All of it is decorative, which is why it is safe for the reduced-motion rule
- * in theme.css to stop both keyframes dead: what remains is a gradient tile
- * with a glow, i.e. the design without the movement. Only the entrance is
- * checked in JS, because framer-motion does not read that media query.
- */
-function ToolMark({ icon: Icon }: { icon?: LucideIcon }) {
-  const reduceMotion = useReducedMotion();
-
-  // A tool with no icon in the map is a typo in the key, not a reason to draw
-  // an empty 56px hole above the heading.
-  if (!Icon) return null;
-
-  return (
-    <motion.div
-      // The mark arrives; the title and the form under it do not. One thing
-      // moving on entry marks the change of screen, and six things moving on
-      // entry is a transition the user has to sit through six times an hour.
-      initial={reduceMotion ? false : { opacity: 0, scale: 0.72 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ type: "spring", stiffness: 340, damping: 24 }}
-      className="relative flex size-14 items-center justify-center"
-    >
-      <span
-        aria-hidden
-        className="absolute -inset-2.5 rounded-full bg-(image:--gradient-halo) opacity-40 blur-lg animate-[halo-turn_9s_linear_infinite]"
-      />
-      <span
-        aria-hidden
-        className="absolute inset-1 rounded-xl bg-(image:--gradient-accent) blur-md animate-[aura-breathe_4s_ease-in-out_infinite]"
-      />
-      {/* rounded-xl at 56px: the same 24px corner the dialogs and the form card
-          use, which at this size is a squircle rather than a circle -- an app
-          icon, matching the shape of the card it introduces. */}
-      <span className="relative flex size-14 items-center justify-center rounded-xl bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow-accent)">
-        <Icon size={26} strokeWidth={1.75} />
-      </span>
-    </motion.div>
-  );
-}
-
 export function FileDropZone({
   path,
   info,
@@ -178,6 +51,9 @@ export function FileDropZone({
       <button
         type="button"
         onClick={onBrowse}
+        // The first thing to do on a form that has no text field of its own, so
+        // it is what the dialog opens focused on -- see `Modal`.
+        data-autofocus
         className={cn(
           "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-8",
           "transition-[border-color,background-color,box-shadow] duration-(--duration-base)",

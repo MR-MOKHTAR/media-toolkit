@@ -15,7 +15,10 @@
 
 /** Intl formatters are expensive to construct and get called per render. */
 const numberFormatters = new Map<string, Intl.NumberFormat>();
+/** Dates inside the current year; see `formatDate`. */
 const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+/** And the ones that have to name their year. */
+const datedYearFormatters = new Map<string, Intl.DateTimeFormat>();
 
 function numberFormatter(language: string, digits: number) {
   const key = `${language}:${digits}`;
@@ -62,6 +65,38 @@ export function formatBytes(bytes: number | undefined, language: string): string
   }
   const digits = unit === 0 || value >= 100 ? 0 : 1;
   return `${numberFormatter(language, digits).format(value)} ${units[unit]}`;
+}
+
+/**
+ * Rule 2 again: a transfer rate, from bytes per second.
+ *
+ * The single place either download engine's speed is written. It used to be two
+ * places -- yt-dlp's own `_speed_str` produced "3.36MiB/s" and the direct
+ * downloader formatted "3.4 MB/s" in Rust -- and the two appeared on adjacent
+ * rows of the same list, in different units, with Latin digits in a Persian
+ * interface. Both now send a number and this writes it.
+ */
+export function formatSpeed(
+  bytesPerSecond: number | undefined,
+  language: string,
+): string {
+  if (bytesPerSecond === undefined || bytesPerSecond <= 0) return "";
+  return `${formatBytes(bytesPerSecond, language)}/s`;
+}
+
+/**
+ * ffmpeg's realtime multiplier, as "2.0×".
+ *
+ * Not a transfer rate and not interchangeable with one: it says how many
+ * seconds of media are processed per second of wall clock. The multiplication
+ * sign is U+00D7 rather than the letter x.
+ */
+export function formatRate(
+  rate: number | undefined,
+  language: string,
+): string {
+  if (rate === undefined || rate <= 0) return "";
+  return `${numberFormatter(language, rate >= 10 ? 0 : 1).format(rate)}×`;
 }
 
 /** Rule 3: ASCII, always, and zero-padded so the width does not jump. */
@@ -123,16 +158,61 @@ export function formatRelativeTime(timestamp: number, language: string): string 
   return formatDate(timestamp, language);
 }
 
+/**
+ * A past date, at the length a metadata line can afford.
+ *
+ * `dateStyle: "medium"` with `timeStyle: "short"` spells out both the year and
+ * the minute on every row -- "Aug 1, 2026, 10:05 AM" is 21 characters, wider in
+ * the history panel than the status, the format and the quality put together,
+ * so the metadata line wrapped and the card grew a third row. Both halves of
+ * that string are the parts nobody reads:
+ *
+ *   - the year, because this list is newest-first and the rows old enough to
+ *     reach this formatter at all are overwhelmingly from the year in progress.
+ *     It is spelled only when it differs, which is exactly where it informs.
+ *   - the time of day, because anything inside a week is still relative here
+ *     ("3 days ago"). By the time a row falls through to a date, the minute it
+ *     started is not what anyone is scanning for -- the day is.
+ *
+ * What is left is "Aug 1", a third of the width, which is what lets the whole
+ * metadata line hold one row at the panel's 400px.
+ */
 export function formatDate(timestamp: number, language: string): string {
-  let formatter = dateFormatters.get(language);
+  const sameYear =
+    new Date(timestamp).getFullYear() === new Date().getFullYear();
+  const cache = sameYear ? dateFormatters : datedYearFormatters;
+
+  let formatter = cache.get(language);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat(language, {
-      dateStyle: "medium",
-      timeStyle: "short",
+      month: "short",
+      day: "numeric",
+      ...(sameYear ? {} : { year: "numeric" }),
     });
-    dateFormatters.set(language, formatter);
+    cache.set(language, formatter);
   }
   return formatter.format(timestamp);
+}
+
+/**
+ * A job's title, as something worth reading in the width a card gives it.
+ *
+ * Almost every job is titled with a file name and needs nothing done to it.
+ * The exception is a download whose probe never answered: `startDownload`
+ * falls back to `title: url`, and a raw link truncated to fit a 250px column
+ * shows `https://www.youtube.com/liv…` -- twenty characters of which nineteen
+ * are shared by every YouTube link ever pasted. The scheme and the `www.` are
+ * the two pieces of a URL that identify nothing, so dropping them hands those
+ * characters back to the part that does. A trailing slash goes with them for
+ * the same reason.
+ *
+ * Only ever for display: the full link stays in the `title` attribute, and the
+ * job's own `title` is untouched, because that is what the retry request and
+ * the file on disk are named after.
+ */
+export function displayTitleOf(title: string): string {
+  if (!/^https?:\/\//i.test(title)) return title;
+  return title.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/+$/, "");
 }
 
 export const fileNameOf = (path: string) => path.split(/[/\\]/).pop() ?? path;

@@ -10,10 +10,11 @@ import type { TFunction } from "i18next";
 
 import type { ToastType } from "../../../types/feedback";
 import type { JobKind } from "../../jobs/types";
+import { ToolDialog } from "../../tools/ToolDialog";
 import { useDragDropState } from "../useDragDropState";
 import { useMediaFile, type MediaInfo } from "../useMediaFile";
 import { useMediaJob } from "../useMediaJob";
-import { FileDropZone, OutputFolderRow, RunButton, ToolShell } from "./ToolShell";
+import { FileDropZone, OutputFolderRow, RunButton } from "./ToolFormParts";
 
 /** The tools that are a file in, a file out. Download has no input file and
  *  transcribe has a whole second screen for its result, so neither of the two
@@ -85,10 +86,12 @@ interface Props {
   initialFile?: string;
   language: string;
   notify: (type: ToastType, message: string) => void;
+  /** Closes the dialog, once the job is running and its row is on the list. */
+  onDone: () => void;
 }
 
 /**
- * The tool screen. Singular.
+ * The tool form. Singular.
  *
  * Every one of these tools is the same form -- file, preview, two or three
  * controls, output folder, run -- and each used to be written out again in its
@@ -101,10 +104,17 @@ interface Props {
  * is its controls, its readiness, and the request it builds; the box around
  * them is this file, once.
  *
- * Keyed by tool in App, so switching tabs starts with a clean form rather than
- * carrying the previous tool's state into a control that means something else.
+ * Mounted only while its tool's route says `composing`, so each job starts on a
+ * clean form rather than carrying the last one's state into a control that
+ * means something else.
  */
-export function MediaToolScreen({ config, initialFile, language, notify }: Props) {
+export function MediaToolForm({
+  config,
+  initialFile,
+  language,
+  notify,
+  onDone,
+}: Props) {
   const { t } = useTranslation();
   const file = useMediaFile(initialFile);
   const job = useMediaJob(config.kind, config.command, notify);
@@ -136,7 +146,20 @@ export function MediaToolScreen({ config, initialFile, language, notify }: Props
   );
 
   return (
-    <ToolShell tool={config.kind}>
+    <ToolDialog
+      tool={config.kind}
+      onClose={onDone}
+      footer={
+        <RunButton
+          label={t(`tool_${config.kind}`)}
+          disabled={!ready}
+          onClick={() => {
+            const { args, title, detail } = config.toRequest({ ...context, t });
+            void job.run(args, title, detail).then((id) => id && onDone());
+          }}
+        />
+      }
+    >
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -158,15 +181,6 @@ export function MediaToolScreen({ config, initialFile, language, notify }: Props
         folder={job.outputDir}
         onChoose={() => void job.chooseFolder()}
       />
-
-      <RunButton
-        label={t(`tool_${config.kind}`)}
-        disabled={!ready}
-        onClick={() => {
-          const { args, title, detail } = config.toRequest({ ...context, t });
-          void job.run(args, title, detail);
-        }}
-      />
-    </ToolShell>
+    </ToolDialog>
   );
 }

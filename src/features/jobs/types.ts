@@ -53,10 +53,26 @@ export interface JobProgress {
   /** null means indeterminate; show a spinner, not a number. */
   percent: number | null;
   stage: JobStage;
-  speed: string | null;
+  /** Bytes per second. A number, not a formatted string: both download engines
+   *  report one and `formatSpeed` writes it, so they cannot disagree about
+   *  units on two rows of the same list. */
+  speed: number | null;
+  /** ffmpeg's realtime multiplier -- 2 means "twice as fast as playback". A
+   *  different quantity from `speed` and written differently ("2.0×"), which is
+   *  why it is a separate field rather than more overloading of one. */
+  encodeRate: number | null;
   etaSecs: number | null;
   bytes: number | null;
   totalBytes: number | null;
+}
+
+/** A job the backend is still running. Mirrors Rust's `JobSummary`; it is all
+ *  the registry knows about a job, which is enough to draw a row for one the
+ *  webview lost track of. */
+export interface JobSummary {
+  id: string;
+  kind: JobKind;
+  title: string;
 }
 
 export type JobStatusEvent = { id: string; kind: JobKind } & (
@@ -84,7 +100,10 @@ export interface Job {
   state: JobState;
   stage: JobStage;
   percent: number | null;
-  speed?: string;
+  /** Bytes per second, for downloads. */
+  speed?: number;
+  /** ffmpeg's realtime multiplier, for the encoding tools. */
+  encodeRate?: number;
   etaSecs?: number;
   bytes?: number;
   totalBytes?: number;
@@ -105,6 +124,11 @@ export interface DownloadRequest {
    *  decide from one HTTP request: a page goes to yt-dlp, a link that already
    *  points at the file goes to the direct downloader. */
   mode?: "auto" | "media" | "file";
+  /** Whether a video page's streams may be fetched on many connections rather
+   *  than by yt-dlp on one. Absent means yes. Stored with the download
+   *  preferences and carried on the request so a retry runs the way the
+   *  original did. */
+  parallel?: boolean;
 }
 
 /** One shelf in the app's library folder. Mirrors `library::Slot` in Rust; a
@@ -170,6 +194,11 @@ export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
+  /** The JavaScript runtime yt-dlp runs YouTube's player challenge in. Without
+   *  it yt-dlp falls back to the clients that skip the challenge, which carry a
+   *  shorter format list -- so a request for 1080p can quietly come back as
+   *  720p. */
+  deno: boolean;
   /** What yt-dlp reports, or null if it will not run. */
   ytdlpVersion: string | null;
 }

@@ -57,14 +57,20 @@ export function ConfirmDialog({
         />
 
         <AlertDialog.Content
+          // Escape closes this dialog and must not also navigate back.
+          // NavigationProvider listens on `window` and reads the key as `back`;
+          // Radix's listener is on `document` in the capture phase, so stopping
+          // propagation here happens before anything reaches window.
+          onEscapeKeyDown={(event) => event.stopPropagation()}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(26rem,calc(100vw-2rem))]",
             "-translate-x-1/2 -translate-y-1/2",
             "rounded-xl border border-line-soft p-5 shadow-(--shadow-panel)",
             "bg-surface-glass backdrop-blur-glass",
-            // scale-in carries the centring translate itself -- animating
-            // `transform` here would otherwise drop the dialog into the corner
-            // for the length of the animation.
+            // scale-in animates `scale`, not `transform`: the two centring
+            // utilities above compile to the `translate` property, and a
+            // transform in the keyframe would be added to them rather than
+            // replace them -- see theme.css.
             "data-[state=open]:animate-[scale-in_var(--duration-base)_var(--ease-out-quart)]",
             /* Gradient top accent, same as FormCard. */
             "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",

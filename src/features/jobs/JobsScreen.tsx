@@ -1,16 +1,14 @@
 import { useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, ListChecks, Loader, Trash2, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useNavigation } from "../../app/navigation";
 import { EmptyState } from "../../components/ui/Card";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { NAV_ROW_MARKER, navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
 import { formatCount } from "../../lib/format";
 import { countJobs, filterJobs, type JobFilter } from "./selectors";
-import { JobCard } from "./components/JobCard";
+import { JobList } from "./components/JobList";
 import { useJobs } from "./useJobs";
 
 const FILTERS: { value: JobFilter; labelKey: string; icon: LucideIcon }[] = [
@@ -23,8 +21,7 @@ const FILTERS: { value: JobFilter; labelKey: string; icon: LucideIcon }[] = [
 
 export function JobsScreen({ language }: { language: string }) {
   const { t } = useTranslation();
-  const { jobs, state, cancel, remove, reveal, retry, clearFinished } = useJobs();
-  const { go } = useNavigation();
+  const { jobs, clearFinished } = useJobs();
   const [filter, setFilter] = useState<JobFilter>("all");
 
   const counts = useMemo(() => countJobs(jobs), [jobs]);
@@ -34,7 +31,6 @@ export function JobsScreen({ language }: { language: string }) {
     () => filterJobs(jobs, filter, "", language),
     [jobs, filter, language],
   );
-  const cancelling = useMemo(() => new Set(state.cancelling), [state.cancelling]);
 
   return (
     // The rail is last in the row and carries no `dir`, so it takes the trailing
@@ -46,39 +42,17 @@ export function JobsScreen({ language }: { language: string }) {
         {/* No heading. The sidebar already says Tasks and the rail names the
             subset -- a centred title between them repeated both. */}
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-6 py-6 lg:max-w-4xl xl:max-w-5xl">
-          {visible.length === 0 ? (
-            <EmptyState
-              icon={<ListChecks size={22} />}
-              title={t("no_jobs_title")}
-              description={t("no_jobs_description")}
-            />
-          ) : (
-            <ul className="flex flex-col gap-2 pb-2">
-              <AnimatePresence initial={false}>
-                {visible.map((job) => (
-                  <motion.li
-                    key={job.id}
-                    layout
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.16 }}
-                  >
-                    <JobCard
-                      job={job}
-                      language={language}
-                      cancelling={cancelling.has(job.id)}
-                      onCancel={(id) => void cancel(id)}
-                      onRemove={remove}
-                      onReveal={(path) => void reveal(path)}
-                      onRetry={(id) => void retry(id)}
-                      onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
-                    />
-                  </motion.li>
-                ))}
-              </AnimatePresence>
-            </ul>
-          )}
+          <JobList
+            jobs={visible}
+            language={language}
+            empty={
+              <EmptyState
+                icon={<ListChecks size={22} />}
+                title={t("no_jobs_title")}
+                description={t("no_jobs_description")}
+              />
+            }
+          />
         </div>
       </div>
 

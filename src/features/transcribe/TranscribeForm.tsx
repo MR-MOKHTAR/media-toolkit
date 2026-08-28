@@ -17,8 +17,8 @@ import {
   OutputFolderRow,
   PreferenceRow,
   RunButton,
-  ToolShell,
-} from "../media/components/ToolShell";
+} from "../media/components/ToolFormParts";
+import { ToolDialog } from "../tools/ToolDialog";
 import { ApiKeyPanel } from "../settings/ApiKeyPanel";
 import { useDragDropState } from "../media/useDragDropState";
 import { defaultOutputName, useMediaJob } from "../media/useMediaJob";
@@ -37,6 +37,10 @@ interface Props {
   initialFile?: string;
   isOnline: boolean;
   notify: (type: ToastType, message: string) => void;
+  /** Closes the dialog. This tool calls it on the way to the transcript screen
+   *  rather than back to its own list, so `back` from there lands on the list
+   *  with the new job on it instead of on a reopened form. */
+  onDone: () => void;
 }
 
 /**
@@ -47,17 +51,12 @@ interface Props {
  * happened yet, and leaving it on screen beside a running job made it describe
  * nothing.
  */
-export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
+export function TranscribeForm({ initialFile, isOnline, notify, onDone }: Props) {
   const { go, replace } = useNavigation();
   const { t } = useTranslation();
 
   const file = useMediaFile(initialFile);
-  // Does not open the history panel: this tool goes to its own result screen,
-  // which shows the same progress plus the thing history cannot show -- the
-  // text.
-  const job = useMediaJob("transcribe", "start_transcribe", notify, {
-    openHistoryOnStart: false,
-  });
+  const job = useMediaJob("transcribe", "start_transcribe", notify);
   const isDragging = useDragDropState(file.acceptDrop);
 
   // Outlive this screen, so coming back from the result route finds the form as
@@ -114,10 +113,12 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
     );
     if (!id) return;
 
-    // Record the file into this screen's own route *before* pushing the next
-    // one, so the entry `back` returns to still has it and the form is not
-    // empty when the user comes back to run another.
-    if (file.path) replace({ name: "transcribe", file: file.path });
+    // Record the file into this tool's own route *before* pushing the next one,
+    // and close the form while doing it: the entry `back` returns to is the
+    // list with this job at the top of it, not the form that started it. The
+    // file is kept so that opening the form again begins where this one left
+    // off rather than empty.
+    replace({ name: "transcribe", file: file.path ?? undefined, composing: false });
     go({ name: "transcript", jobId: id });
   }, [file.path, format, go, job, prompt, replace, settings]);
 
@@ -126,7 +127,17 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
   );
 
   return (
-    <ToolShell tool="transcribe">
+    <ToolDialog
+      tool="transcribe"
+      onClose={onDone}
+      footer={
+        <RunButton
+          label={t("transcribe_start")}
+          disabled={!ready}
+          onClick={() => void start()}
+        />
+      }
+    >
       <FileDropZone
         path={file.path}
         info={file.info}
@@ -152,7 +163,11 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
         // Same reason `start` does it below: the entry `back` from Settings
         // returns to has to know about the file, or the form is empty again.
         onBeforeLeave={() =>
-          file.path && replace({ name: "transcribe", file: file.path })
+          replace({
+            name: "transcribe",
+            file: file.path ?? undefined,
+            composing: true,
+          })
         }
       />
 
@@ -256,12 +271,6 @@ export function TranscribeScreen({ initialFile, isOnline, notify }: Props) {
       {!isOnline && (
         <p className="text-sm text-warning">{t("transcribe_needs_internet")}</p>
       )}
-
-      <RunButton
-        label={t("transcribe_start")}
-        disabled={!ready}
-        onClick={() => void start()}
-      />
-    </ToolShell>
+    </ToolDialog>
   );
 }

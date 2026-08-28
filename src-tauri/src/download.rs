@@ -1,14 +1,22 @@
 //! Downloading: choosing an engine, and driving yt-dlp.
 //!
-//! There are two engines. yt-dlp extracts media out of a *page* -- the roughly
-//! thousand sites it knows, where the link the user has is not the link the
-//! file is at. `direct` fetches a link that already is the file, on eight
-//! connections, and can resume. Which one runs is `choose_engine`, and for a
-//! pasted link the answer is one HTTP request away.
+//! There are three engines.
 //!
-//! The split is the whole reason this app can now be given *any* link. Before
-//! it, a URL yt-dlp did not recognise simply failed, which included every
-//! installer, archive, PDF and direct file link anyone tried.
+//!   - `direct` fetches a link that already *is* the file, on eight
+//!     connections, and can resume. Which links those are is one HTTP request
+//!     away, and it is the whole reason this app can be given any link at all:
+//!     before it, a URL yt-dlp did not recognise simply failed, which included
+//!     every installer, archive and PDF anyone tried.
+//!   - `muxed` handles a *page* whose streams turn out to be plain ranged HTTP,
+//!     which is what YouTube and most video sites serve. yt-dlp resolves the
+//!     page, `direct` moves the bytes on eight connections, ffmpeg merges. This
+//!     is the fast path, and the measurements behind it are in `muxed`.
+//!   - `run_ytdlp` is yt-dlp doing the whole job itself. Everything the second
+//!     engine declines -- fragmented streams, live, unmeasured lengths, and the
+//!     long tail of the thousand sites -- lands here, exactly as before.
+//!
+//! `choose_engine` picks between the first and the rest; `muxed::triage` picks
+//! between the last two, and errs towards yt-dlp whenever it is not certain.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +27,7 @@ use crate::binaries::{self, Tool};
 use crate::direct::{self, FileInfo};
 use crate::error::{AppError, AppResult};
 use crate::jobs::{Emitters, JobKind, JobProgress, JobStatus, Jobs, Stage};
+use crate::muxed;
 use crate::paths;
 use crate::process::{self, Line, StderrTail};
 
@@ -32,12 +41,47 @@ const MARKER: &str = "__DLPROGRESS__";
 /// nothing useful about the right number. Eight against the four-download
 /// network lane is at most 32 sockets, which a modern home connection handles
 /// and which the user opted into by starting four downloads.
+///
+/// This applies to *fragmented* formats only -- HLS and DASH, where the video
+/// arrives as hundreds of segment URLs. It was described here as the single
+/// biggest speed lever, which was wrong in the case that matters most: a normal
+/// YouTube format has `protocol: https` and no fragments, so yt-dlp fetches it
+/// on one socket and this flag does nothing at all. That case is what `muxed`
+/// exists for. The flag still earns its place for everything muxed declines,
+/// which is exactly the fragmented sources it does apply to.
 const CONCURRENT_FRAGMENTS: u8 = 8;
 
+/// Below this, yt-dlp gives up on a stream and re-extracts rather than crawling.
+///
+/// 100K was too eager. It is a floor on *this* transfer's throughput, and a
+/// connection that genuinely runs at 80 KB/s -- which is an ordinary evening in
+/// plenty of places this app is used -- would trip it on every attempt and spend
+/// the download re-extracting instead of downloading. 50K still catches the
+/// pathological case it was added for (a throttled stream sitting at 40 KB/s
+/// for an hour) while leaving a slow-but-working line alone.
+const THROTTLED_RATE: &str = "50K";
+
+/// The five fields the job card reads, in one line, marked so they cannot be
+/// confused with yt-dlp's own output.
+///
+/// Two of them are written as alternates -- `%(a,b)s` takes the first that is
+/// present:
+///
+///   - `total_bytes` is literally `NA` for every fragmented source: HLS, DASH
+///     manifests, and so most of Instagram, X, and YouTube's m3u8 variants.
+///     `total_bytes_estimate` is what carries the number there, and asking only
+///     for the exact one is why those downloads showed no size at all.
+///   - `speed` rather than `_speed_str`, so what crosses the bridge is bytes per
+///     second and not the string "3.36MiB/s". The direct engine reports a
+///     number, and two engines formatting their own units put "3.36MiB/s" and
+///     "3.4 MB/s" on adjacent rows of the same list.
 const PROGRESS_TEMPLATE: &str = concat!(
     "download:__DLPROGRESS__",
-    "%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
-    "|%(progress._speed_str)s|%(progress.eta)s"
+    "%(progress._percent_str)s",
+    "|%(progress.downloaded_bytes)s",
+    "|%(progress.total_bytes,progress.total_bytes_estimate)s",
+    "|%(progress.speed)s",
+    "|%(progress.eta)s"
 );
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +101,15 @@ pub struct DownloadRequest {
     /// page as `application/octet-stream`, or a file whose host answers a bare
     /// GET with a login page.
     pub mode: Option<String>,
+    /// Whether a media page may be fetched on many connections rather than by
+    /// yt-dlp itself. See `muxed`.
+    ///
+    /// Absent means yes. It is a switch rather than an unconditional behaviour
+    /// because it is the one path here that talks to a CDN in a way yt-dlp did
+    /// not: a site that objects to eight ranged requests, or hands out URLs that
+    /// expire faster than the transfer takes, needs a way back to the old
+    /// behaviour that does not require a new release.
+    pub parallel: Option<bool>,
 }
 
 impl DownloadRequest {
@@ -131,17 +184,48 @@ fn validate_url(url: &str) -> AppResult<String> {
 /// 1920x1084 source or a DASH variant that is a pixel off, and then falls
 /// through to a lower-quality branch. The bare `/best` tail matters for
 /// single-file and audio-only sources that have no separate video stream.
+///
+/// The codec branch comes first because the output has to *play*.
+///
+/// Left to "best", YouTube hands back VP9 or AV1 video and Opus audio, and
+/// `--merge-output-format mp4` dutifully puts them in an `.mp4`. That file is
+/// valid and it does not play in Windows Media Player, QuickTime, or most
+/// televisions -- the user gets something that looks like it worked and opens to
+/// a black screen or silence.
+///
+/// Filtering on the codec and not on `ext`, which was the first attempt and is
+/// not enough: YouTube publishes AV1 *inside* mp4, so `bestvideo[ext=mp4]`
+/// picked format 399 (`av01.0.09M.08`) and landed straight back in the same
+/// problem. `vcodec^=avc1` and `acodec^=mp4a` are H.264 and AAC by name, which
+/// is what every device made in the last fifteen years decodes.
+///
+/// It costs size -- on the video measured while writing this, H.264 1080p60 is
+/// 246 MB against AV1's 119 MB for the same footage. That is the right way
+/// round for this app: a file twice as large is an inconvenience, and a file
+/// that will not open is a failure. Anyone who wants the small modern codec is
+/// served by the fallbacks, which is where sources that have nothing else land
+/// anyway.
 fn format_selector(quality: Option<&str>) -> String {
-    match quality.unwrap_or("best") {
-        "best" => "bestvideo+bestaudio/best".to_string(),
-        height => {
-            let height: u32 = height.trim_end_matches('p').parse().unwrap_or(720);
-            format!(
-                "bestvideo[height<={h}]+bestaudio/best[height<={h}]/best",
-                h = height
-            )
-        }
-    }
+    let height = match quality.unwrap_or("best") {
+        "best" => None,
+        height => Some(height.trim_end_matches('p').parse::<u32>().unwrap_or(720)),
+    };
+    // `[height<=N]` on every video branch, or nothing at all for "best".
+    let cap = height.map(|h| format!("[height<={h}]")).unwrap_or_default();
+
+    // Four branches, in order of preference:
+    //   1. H.264 + AAC -- plays everywhere.
+    //   2. Whatever else the mp4 container holds natively.
+    //   3. Whatever the site does have, in any container.
+    //   4. A single already-muxed file, for sources with no separate streams.
+    [
+        format!("bestvideo[vcodec^=avc1]{cap}+bestaudio[acodec^=mp4a]"),
+        format!("bestvideo[ext=mp4]{cap}+bestaudio[ext=m4a]"),
+        format!("bestvideo{cap}+bestaudio"),
+        format!("best{cap}"),
+        "best".to_string(),
+    ]
+    .join("/")
 }
 
 /// Starts a download and reports how it ended.
@@ -183,7 +267,9 @@ pub async fn run(
             )
             .await
         }
-        Engine::YtDlp => run_ytdlp(&app, jobs, &id, &mut emitters, &url, &dir, &request).await,
+        Engine::YtDlp => {
+            run_media(&app, jobs, &id, &mut emitters, &url, &dir, &request).await
+        }
     };
 
     // The registry entry goes either way. Its recorded partial path is
@@ -275,6 +361,88 @@ fn is_media_type(info: &FileInfo) -> bool {
         .is_some_and(|value| value.starts_with("video/") || value.starts_with("audio/"))
 }
 
+/// A media page, on whichever of the two engines can have it.
+///
+/// The fast path is tried first and is allowed to decline for any reason -- an
+/// unreadable extraction, a fragmented stream, a live broadcast -- because
+/// declining costs one `-J` call that `run_ytdlp` would have made a version of
+/// anyway, and the alternative is the engine that has always worked.
+///
+/// A *failure* inside the fast path also falls back, once. The likeliest cause
+/// is a signed URL that expired between the resolve and the transfer, or a host
+/// that stopped honouring ranges partway through; both are things yt-dlp
+/// negotiates for itself. What is deliberately not retried is cancellation --
+/// the user asked for it to stop, and starting it again on another engine is
+/// the opposite of that.
+async fn run_media(
+    app: &AppHandle,
+    jobs: &Jobs,
+    id: &str,
+    emitters: &mut Emitters,
+    url: &str,
+    dir: &Path,
+    request: &DownloadRequest,
+) -> AppResult<PathBuf> {
+    // Audio is a transcode, not a transfer: `-x --audio-format mp3` is
+    // yt-dlp's post-processor, the stream is a tenth the size of the video, and
+    // the download is not the slow part. Nothing to gain and a whole second
+    // path to get wrong.
+    let eligible = !request.wants_audio()
+        && request.parallel.unwrap_or(true)
+        // Merging is ffmpeg's, so without ffmpeg this path cannot finish what
+        // it starts. `run_ytdlp` already reports that case properly.
+        && binaries::resolve(app, Tool::Ffmpeg).is_ok();
+
+    if eligible {
+        let selector = format_selector(request.quality.as_deref());
+        let cancel = jobs.cancel_signal(id).await;
+
+        // Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about
+        // two seconds to unpack itself before it does anything. That is two
+        // seconds of a cancelled job sitting there looking cancelled and not
+        // being, and the child is not in the registry for `cancel_job` to
+        // reach -- dropping the future is what ends it.
+        //
+        // `Ok(None)` is the ordinary answer for most of the web; an extraction
+        // error is left to `run_ytdlp` to produce again with its own stderr
+        // tail attached, which is the one the user can actually read.
+        let resolved = match cancel.guard(muxed::resolve(app, url, &selector)).await {
+            Ok(resolved) => resolved,
+            Err(_) => return Err(AppError::Cancelled),
+        };
+
+        if let Ok(Some(plan)) = resolved {
+            match muxed::run(
+                app,
+                jobs,
+                id,
+                emitters,
+                &cancel,
+                dir,
+                request.output_name.as_deref(),
+                &plan,
+            )
+            .await
+            {
+                Ok(output) => return Ok(output),
+                Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                Err(_) => {
+                    // Back to the start of the bar: the fallback is a fresh
+                    // download and a percentage that walked to 80 and then sat
+                    // still would be the wrong story about what is happening.
+                    emitters.progress_now(JobProgress::new(
+                        id,
+                        JobKind::Download,
+                        Stage::Preparing,
+                    ));
+                }
+            }
+        }
+    }
+
+    run_ytdlp(app, jobs, id, emitters, url, dir, request).await
+}
+
 /// The extractor engine: yt-dlp, for the thousand-odd sites where the link the
 /// user has is not the link the file is at.
 async fn run_ytdlp(
@@ -314,19 +482,19 @@ async fn run_ytdlp(
         // over. yt-dlp's own default, stated because the app now depends on it:
         // the retry button is only worth pressing if this holds.
         "--continue".into(),
-        // The single biggest speed lever. YouTube and Instagram serve DASH and
-        // HLS, and yt-dlp fetches fragments one at a time by default, so a
-        // download that could saturate the line instead trickles.
+        // What this path is left with is mostly fragmented streams -- see
+        // CONCURRENT_FRAGMENTS -- and those are exactly the ones it helps.
         "--concurrent-fragments".into(),
         CONCURRENT_FRAGMENTS.to_string(),
         // YouTube throttles each connection after the first few megabytes.
         // Requesting in chunks makes it hand out a fresh allowance per chunk.
+        // It is a workaround for having one connection; `muxed` solves the same
+        // problem by having eight, which is why this only has to serve the
+        // downloads that path declined.
         "--http-chunk-size".into(),
         "10M".into(),
-        // When a stream still ends up throttled below this, re-extract rather
-        // than sit at 40 KB/s for an hour.
         "--throttled-rate".into(),
-        "100K".into(),
+        THROTTLED_RATE.into(),
         "--retries".into(),
         "10".into(),
         "--fragment-retries".into(),
@@ -372,6 +540,7 @@ async fn run_ytdlp(
 
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
     cmd.args(&args);
+    binaries::with_js_runtime(app, &mut cmd);
 
     // The child goes into the registry so `cancel_job` can reach it, while the
     // reader keeps the pipes. Taking stdout and stderr before the handover is
@@ -472,16 +641,15 @@ fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> 
         return None;
     }
 
-    let number = |raw: &str| -> Option<u64> {
+    // yt-dlp writes "NA" for a field it does not have, and occasionally
+    // "Unknown" or "none". None of them parse as a number, so one guard covers
+    // all of them: anything that is not a figure is an absent figure.
+    let decimal = |raw: &str| -> Option<f64> {
         let raw = raw.trim();
-        (raw != "NA" && raw != "N/A" && !raw.is_empty())
-            .then(|| raw.parse::<f64>().ok())
-            .flatten()
-            .map(|v| v as u64)
+        (!raw.is_empty()).then(|| raw.parse::<f64>().ok()).flatten()
     };
-    let text = |raw: &str| -> Option<String> {
-        let raw = raw.trim();
-        (!raw.is_empty() && raw != "NA" && raw != "N/A").then(|| raw.to_string())
+    let number = |raw: &str| -> Option<u64> {
+        decimal(raw).filter(|value| *value >= 0.0).map(|v| v as u64)
     };
 
     let percent = fields[0]
@@ -497,7 +665,8 @@ fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> 
         kind: JobKind::Download,
         percent,
         stage,
-        speed: text(fields[3]),
+        speed: decimal(fields[3]).filter(|rate| *rate > 0.0),
+        encode_rate: None,
         eta_secs: number(fields[4]),
         bytes: number(fields[1]),
         total_bytes: number(fields[2]),
@@ -539,6 +708,7 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
         "--",
         &url,
     ]);
+    binaries::with_js_runtime(app, &mut cmd);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
     let value: serde_json::Value = serde_json::from_str(&stdout)
@@ -619,8 +789,61 @@ mod tests {
 
     #[test]
     fn best_needs_no_height_filter() {
-        assert_eq!(format_selector(Some("best")), "bestvideo+bestaudio/best");
-        assert_eq!(format_selector(None), "bestvideo+bestaudio/best");
+        for spec in [format_selector(Some("best")), format_selector(None)] {
+            assert!(!spec.contains("height"), "{spec}");
+            assert!(spec.ends_with("/best"), "{spec}");
+        }
+    }
+
+    /// The output container is mp4, so the first thing asked for has to be
+    /// something every player decodes. Without this, YouTube returns VP9 or AV1
+    /// with Opus, yt-dlp puts them in an .mp4 exactly as told, and the file
+    /// opens to a black screen on Windows.
+    ///
+    /// On the codec and not on `ext`, which was the first attempt: YouTube
+    /// publishes AV1 inside mp4, so `bestvideo[ext=mp4]` selected format 399
+    /// (`av01.0.09M.08`) and landed back in the same problem.
+    #[test]
+    fn asks_for_playable_codecs_before_merely_best_ones() {
+        for quality in [None, Some("best"), Some("1080"), Some("720")] {
+            let spec = format_selector(quality);
+
+            assert!(
+                spec.starts_with("bestvideo[vcodec^=avc1]"),
+                "{quality:?} -> {spec}"
+            );
+            assert!(
+                spec.contains("bestaudio[acodec^=mp4a]"),
+                "{quality:?} -> {spec}"
+            );
+            // The container filter is a fallback now, not the first ask.
+            assert!(
+                spec.find("[ext=mp4]").unwrap() > spec.find("[vcodec^=avc1]").unwrap(),
+                "{quality:?} -> {spec}"
+            );
+            // And it still degrades all the way down, so a source with nothing
+            // but VP9 at this height downloads rather than failing.
+            assert!(spec.ends_with("/best"), "{quality:?} -> {spec}");
+        }
+    }
+
+    /// Every video branch carries the height cap, not just the first one --
+    /// otherwise asking for 720p and getting no H.264 at 720p falls through to
+    /// a branch with no limit at all and downloads the 4K.
+    #[test]
+    fn every_branch_respects_the_requested_height() {
+        let spec = format_selector(Some("720"));
+        let branches: Vec<&str> = spec.split('/').collect();
+
+        for branch in &branches[..branches.len() - 1] {
+            assert!(
+                branch.contains("[height<=720]"),
+                "unbounded branch {branch:?} in {spec}"
+            );
+        }
+        // The last one is the bare "best": a source with nothing at or under
+        // the cap should still download something rather than fail.
+        assert_eq!(branches.last(), Some(&"best"));
     }
 
     #[test]
@@ -637,11 +860,12 @@ mod tests {
 
     #[test]
     fn parses_a_progress_line() {
-        let p = parse_progress("j1", " 42.5%|1048576|4194304| 1.20MiB/s|30", Stage::Downloading)
+        let p = parse_progress("j1", " 42.5%|1048576|4194304|1258291.2|30", Stage::Downloading)
             .expect("should parse");
         assert_eq!(p.percent, Some(42.5));
         assert_eq!(p.bytes, Some(1_048_576));
         assert_eq!(p.total_bytes, Some(4_194_304));
+        assert_eq!(p.speed, Some(1_258_291.2));
         assert_eq!(p.eta_secs, Some(30));
     }
 
@@ -654,5 +878,29 @@ mod tests {
         assert_eq!(p.total_bytes, None);
         assert_eq!(p.speed, None);
         assert_eq!(p.eta_secs, None);
+    }
+
+    /// The template asks for `total_bytes` with `total_bytes_estimate` as its
+    /// alternate, so on a fragmented source the estimate is what lands in the
+    /// field -- and it has to parse like any other number. Before the alternate
+    /// was added this position was always "NA" for HLS, which is why an
+    /// Instagram or m3u8 download never showed a size.
+    #[test]
+    fn reads_an_estimated_total_like_any_other() {
+        let p = parse_progress("j1", " 5.0%|524288|10485760.0|65536|120", Stage::Downloading)
+            .expect("should parse");
+        assert_eq!(p.total_bytes, Some(10_485_760));
+        assert_eq!(p.speed, Some(65_536.0));
+    }
+
+    /// yt-dlp says "Unknown" as well as "NA", and a zero speed between two
+    /// fragments is not a speed worth putting on screen.
+    #[test]
+    fn ignores_speeds_that_are_not_speeds() {
+        for field in ["Unknown", "NA", "none", "", "0"] {
+            let line = format!(" 50.0%|1000|2000|{field}|10");
+            let p = parse_progress("j1", &line, Stage::Downloading).expect("should parse");
+            assert_eq!(p.speed, None, "{field:?} should not be a speed");
+        }
     }
 }

@@ -7,14 +7,17 @@ pull its audio out, or turn its speech into text.
 Built for people who do not want to think about codecs. Every tool is one file
 picker, two or three choices, and a button. There is no bitrate field anywhere.
 
-`yt-dlp` and `FFmpeg` ship inside the installer, so nothing else has to be
-installed and everything except downloading works offline.
+`yt-dlp`, `FFmpeg` and `Deno` ship inside the installer, so nothing else has to
+be installed and everything except downloading works offline. (Deno is the
+JavaScript runtime yt-dlp needs to answer YouTube's player challenge; without it
+yt-dlp falls back to clients that carry a shorter format list, so a request for
+1080p can quietly come back lower.)
 
 ## Tools
 
 | | |
 |---|---|
-| **Download** | Paste a link — any link. A page goes to yt-dlp, which handles the ~1000 sites it supports and shows the title, channel, duration and thumbnail first. A link that already points at a file — an installer, an archive, a PDF, a direct MP4 — is fetched by the app itself on eight connections, with its real name and exact size shown before you commit. Interrupted downloads resume rather than restart. |
+| **Download** | Paste a link — any link. A page goes to yt-dlp, which handles the ~1000 sites it supports and shows the title, channel, duration and thumbnail first. A link that already points at a file — an installer, an archive, a PDF, a direct MP4 — is fetched by the app itself on eight connections, with its real name and exact size shown before you commit. Video pages are fetched the same way: yt-dlp resolves the streams, the app pulls them on eight ranged connections, and FFmpeg merges — measured at 1.5× a single connection on a healthy line and up to 10× against a throttled one. Every running download shows its size, its speed and how much longer it has. Interrupted downloads resume rather than restart. |
 | **Compress** | Three things in one place, because they are the same question: quality (Small / Balanced / High), resolution (Original / 1080p / 720p / 480p, with anything at or above the source disabled), and an optional size to land under. The estimated output size updates as you change either of the first two, so the trade is visible before anything runs. |
 | **Trim** | Drag two handles over a timeline. Cuts losslessly by default, which is instant; *Exact cut* re-encodes when you need the exact frame you asked for. |
 | **Convert** | MP4, MKV, MOV, WebM, MP3, M4A, WAV — one grid, whichever the file needs. When the streams can be copied into the new container the app says so and finishes in about a second. |
@@ -59,7 +62,8 @@ bun install
 bun run tauri dev
 ```
 
-The first build downloads yt-dlp and FFmpeg (~200 MB) into `src-tauri/binaries/`.
+The first build downloads yt-dlp, FFmpeg and Deno into `src-tauri/binaries/`
+(~300 MB unpacked; Deno alone is 95 MB on disk from a 40 MB archive).
 After that they are cached; `build.rs` re-fetches only when the pinned URL in
 `src-tauri/tools.lock.json` changes.
 
@@ -84,8 +88,10 @@ src/
   components/     ui primitives, layout, feedback
   features/
     downloads/    download screen
-    media/        components/MediaToolScreen.tsx is the form; tools/ is the
+    media/        components/MediaToolForm.tsx is the form; tools/ is the
                   five tools as data — controls, readiness, request
+    tools/        the shape every tool screen shares: the list is the page and
+                  the form is a dialog over it
     jobs/         job queue, reducer, persistence
     transcribe/
     settings/
@@ -94,6 +100,8 @@ src-tauri/src/
   binaries.rs     tool resolution: app data dir -> bundled resources -> PATH
   download.rs     engine choice, plus the yt-dlp engine
   direct.rs       the HTTP engine: parallel ranges, resume, any file type
+  muxed.rs        the fast path: yt-dlp resolves, direct.rs fetches, ffmpeg
+                  merges -- and declines to anything fragmented or live
   library.rs      the app's storage folder and its per-tool layout
   jobs.rs         job registry, cancellation, CPU/network semaphores
   process.rs      spawn + concurrent stdout/stderr drain

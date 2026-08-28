@@ -5,8 +5,8 @@ import { useTranslation } from "react-i18next";
 import type {
   MediaToolConfig,
   MediaToolContext,
-} from "../components/MediaToolScreen";
-import { FormatGroup, InstantBadge } from "../components/ToolShell";
+} from "../components/MediaToolForm";
+import { FormatGroup, InstantBadge } from "../components/ToolFormParts";
 import { defaultOutputName } from "../useMediaJob";
 
 const VIDEO_FORMATS = ["mp4", "mkv", "mov", "webm"];

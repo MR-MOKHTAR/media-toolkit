@@ -18,6 +18,9 @@ pub enum Tool {
     YtDlp,
     Ffmpeg,
     Ffprobe,
+    /// The JavaScript runtime yt-dlp needs to answer YouTube's player
+    /// challenge. See `with_js_runtime`.
+    Deno,
 }
 
 impl Tool {
@@ -26,6 +29,7 @@ impl Tool {
             Self::YtDlp => "yt-dlp",
             Self::Ffmpeg => "ffmpeg",
             Self::Ffprobe => "ffprobe",
+            Self::Deno => "deno",
         }
     }
 
@@ -45,9 +49,35 @@ impl Tool {
     /// for the health check, so a wrong flag reports a working tool as missing.
     fn version_arg(self) -> &'static str {
         match self {
-            Self::YtDlp => "--version",
+            Self::YtDlp | Self::Deno => "--version",
             Self::Ffmpeg | Self::Ffprobe => "-version",
         }
+    }
+}
+
+/// Points yt-dlp at the JavaScript runtime we ship, when there is one.
+///
+/// YouTube's player signs its media URLs with a challenge that has to be *run*,
+/// not parsed. yt-dlp needs a JS engine for it, defaults to looking for Deno,
+/// and without one prints:
+///
+///   WARNING: [youtube] No supported JavaScript runtime could be found ...
+///   YouTube extraction without a JS runtime has been deprecated, and some
+///   formats may be missing
+///
+/// "Some formats may be missing" is the mild version. It falls back to the
+/// clients that do not need the challenge -- `visionos`, `android_vr` -- which
+/// carry a smaller format list, so a request for 1080p can quietly come back as
+/// 720p, and the URLs those clients hand out are the ones most likely to be
+/// rate-limited.
+///
+/// Conditional, in the same shape and for the same reason as
+/// `--ffmpeg-location`: passing a flag that names nothing is worse than not
+/// passing it, and a build where the fetch was skipped must still work.
+pub fn with_js_runtime(app: &AppHandle, cmd: &mut Command) {
+    if let Ok(deno) = resolve(app, Tool::Deno) {
+        cmd.arg("--js-runtimes");
+        cmd.arg(format!("deno:{}", deno.path.to_string_lossy()));
     }
 }
 

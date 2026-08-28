@@ -261,7 +261,7 @@ async fn extract_audio(
                         percent: update
                             .fraction(Some(job.duration_secs))
                             .map(|f| f * PREPARE_SHARE),
-                        speed: update.speed.clone(),
+                        encode_rate: update.speed,
                         ..JobProgress::new(id, KIND, Stage::Preparing)
                     });
                 }

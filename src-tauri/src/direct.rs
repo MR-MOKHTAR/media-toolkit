@@ -113,6 +113,22 @@ fn client() -> &'static Client {
     })
 }
 
+/// A GET with this module's client, carrying whatever headers the caller was
+/// given.
+///
+/// Headers exist for the muxed path: a media URL resolved out of a page is
+/// signed for a particular client, and googlevideo answers a request that does
+/// not carry the `User-Agent` yt-dlp negotiated with either a 403 or a
+/// deliberately slow stream. A pasted link needs none of that and passes
+/// `None`.
+fn get(url: &str, headers: Option<&HeaderMap>) -> reqwest::RequestBuilder {
+    let request = client().get(url);
+    match headers {
+        Some(headers) => request.headers(headers.clone()),
+        None => request,
+    }
+}
+
 /// What a probe learned about a link that turned out to be a file.
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -231,13 +247,7 @@ pub async fn run(
             emit(emitters, id, downloaded, total, speed);
         };
 
-        match (info.size_bytes, info.resumable) {
-            // Both known and worth splitting: the fast path.
-            (Some(total), true) if total >= SPLIT_THRESHOLD => {
-                segmented(cancel, url, &part, total, info, &mut report).await
-            }
-            _ => single(cancel, url, &part, info, &mut report).await,
-        }
+        transfer(cancel, url, None, &part, info, &mut report).await
     };
 
     let downloaded = match transfer {
@@ -268,7 +278,63 @@ pub async fn run(
     Ok(output)
 }
 
+/// Fetches one already-resolved media URL to an exact path.
+///
+/// The entry point the muxed download path uses. It differs from `run` in the
+/// three ways that path needs: the caller names the file (it is one of two
+/// streams about to be merged, not the user's output), the URL carries the
+/// headers it was signed for, and progress is reported through the caller's own
+/// closure so two streams can add up to one bar.
+///
+/// The `.part` and its sidecar work exactly as they do for a pasted link, so a
+/// cancelled or failed muxed download resumes from whatever it already fetched.
+pub async fn fetch_to(
+    cancel: &CancelSignal,
+    url: &str,
+    headers: &HeaderMap,
+    part: &Path,
+    size_bytes: u64,
+    tag: Option<&str>,
+    report: &mut (dyn FnMut(u64, Option<u64>, Option<f64>) + Send),
+) -> AppResult<u64> {
+    let info = FileInfo {
+        filename: String::new(),
+        size_bytes: Some(size_bytes),
+        // Assumed, and verified by the first range request: googlevideo and
+        // every other CDN yt-dlp resolves to serve ranges. A host that turns out
+        // not to answers with something other than 206, `copy_range` reports it,
+        // and the caller falls back to yt-dlp.
+        resumable: true,
+        content_type: None,
+        tag: tag.map(str::to_string),
+    };
+
+    let outcome = transfer(cancel, url, Some(headers), part, &info, report).await;
+    if outcome.is_err() {
+        prune_if_tiny(part).await;
+    }
+    outcome
+}
+
 // ----------------------------------------------------------------- transfer
+
+/// Splitting is worth it, or it is not. The one place that decides.
+async fn transfer(
+    cancel: &CancelSignal,
+    url: &str,
+    headers: Option<&HeaderMap>,
+    part: &Path,
+    info: &FileInfo,
+    report: &mut (dyn FnMut(u64, Option<u64>, Option<f64>) + Send),
+) -> AppResult<u64> {
+    match (info.size_bytes, info.resumable) {
+        // Both known and worth splitting: the fast path.
+        (Some(total), true) if total >= SPLIT_THRESHOLD => {
+            segmented(cancel, url, headers, part, total, info, report).await
+        }
+        _ => single(cancel, url, headers, part, info, report).await,
+    }
+}
 
 /// What a worker reports back. Bytes for the bar, chunks for the resume.
 enum Tick {
@@ -345,6 +411,7 @@ async fn save_state(part: &Path, state: &PartState) {
 async fn segmented(
     cancel: &CancelSignal,
     url: &str,
+    headers: Option<&HeaderMap>,
     part: &Path,
     total: u64,
     info: &FileInfo,
@@ -394,6 +461,7 @@ async fn segmented(
         let cursor = Arc::clone(&next);
         let sender = tx.clone();
         let url = url.to_string();
+        let headers = headers.cloned();
         let part = part.to_path_buf();
 
         workers.spawn(async move {
@@ -404,7 +472,7 @@ async fn segmented(
                 };
                 let start = u64::from(index) * CHUNK_SIZE;
                 let end = (start + CHUNK_SIZE).min(total) - 1;
-                fetch_chunk(&url, &part, start, end, &sender).await?;
+                fetch_chunk(&url, headers.as_ref(), &part, start, end, &sender).await?;
                 // A full chunk is on disk. Losing this message would only cost
                 // a refetch after a crash, so the send is not worth failing on.
                 let _ = sender.send(Tick::Chunk(index)).await;
@@ -415,7 +483,9 @@ async fn segmented(
     // held: with it alive, `recv` waits forever on a finished download.
     drop(tx);
 
-    let mut meter = Meter::new();
+    // Seeded with what the previous attempt already put on disk, so the first
+    // sample measures this attempt rather than the resume.
+    let mut meter = Meter::new(downloaded);
     let mut last_saved = Instant::now();
 
     loop {
@@ -467,6 +537,7 @@ async fn segmented(
 /// Fetches one range into its place in the file.
 async fn fetch_chunk(
     url: &str,
+    headers: Option<&HeaderMap>,
     part: &Path,
     start: u64,
     end: u64,
@@ -475,7 +546,7 @@ async fn fetch_chunk(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        match copy_range(url, part, start, end, sender).await {
+        match copy_range(url, headers, part, start, end, sender).await {
             Ok(()) => return Ok(()),
             Err(error) if attempt < CHUNK_ATTEMPTS => {
                 // A dropped connection mid-file is ordinary on a home line.
@@ -491,13 +562,13 @@ async fn fetch_chunk(
 
 async fn copy_range(
     url: &str,
+    headers: Option<&HeaderMap>,
     part: &Path,
     start: u64,
     end: u64,
     sender: &mpsc::Sender<Tick>,
 ) -> AppResult<()> {
-    let mut response = client()
-        .get(url)
+    let mut response = get(url, headers)
         .header(RANGE, format!("bytes={start}-{end}"))
         .send()
         .await
@@ -571,6 +642,7 @@ async fn copy_range(
 async fn single(
     cancel: &CancelSignal,
     url: &str,
+    headers: Option<&HeaderMap>,
     part: &Path,
     info: &FileInfo,
     report: &mut (dyn FnMut(u64, Option<u64>, Option<f64>) + Send),
@@ -589,7 +661,7 @@ async fn single(
         _ => existing,
     };
 
-    let mut request = client().get(url);
+    let mut request = get(url, headers);
     if resume_from > 0 {
         request = request.header(RANGE, format!("bytes={resume_from}-"));
     }
@@ -621,7 +693,7 @@ async fn single(
             .map_err(|error| AppError::io(part, error))?;
     }
 
-    let mut meter = Meter::new();
+    let mut meter = Meter::new(downloaded);
     report(downloaded, total, None);
 
     loop {
@@ -669,7 +741,10 @@ fn emit(
 
     emitters.progress(JobProgress {
         percent,
-        speed: speed.map(format_speed),
+        // Bytes per second, unformatted: `formatSpeed` in lib/format.ts writes
+        // it, so this engine and yt-dlp cannot disagree about units on two rows
+        // of the same list.
+        speed,
         eta_secs: match (total, speed) {
             (Some(total), Some(rate)) if rate > 1.0 && total > downloaded => {
                 Some(((total - downloaded) as f64 / rate) as u64)
@@ -698,10 +773,20 @@ struct Meter {
 impl Meter {
     const INTERVAL: Duration = Duration::from_millis(400);
 
-    fn new() -> Self {
+    /// `start` is what the transfer has *already* got -- the resume offset, or
+    /// zero for a fresh download.
+    ///
+    /// It used to be hard-coded to zero, which was right exactly once. A resumed
+    /// download begins with `downloaded` already at, say, 50 MiB, so the first
+    /// sample divided all 50 MiB by the 400 ms window and reported 125 MB/s --
+    /// with an ETA to match -- and then took several seconds of the EMA below to
+    /// decay back to the truth. The number the user watches was wrong for the
+    /// first few seconds of every retry, which is precisely when they are
+    /// looking at it.
+    fn new(start: u64) -> Self {
         Self {
             last: Instant::now(),
-            last_bytes: 0,
+            last_bytes: start,
             rate: None,
         }
     }
@@ -724,21 +809,6 @@ impl Meter {
         self.last = Instant::now();
         self.last_bytes = downloaded;
         self.rate
-    }
-}
-
-fn format_speed(bytes_per_sec: f64) -> String {
-    const UNITS: [&str; 4] = ["B/s", "KB/s", "MB/s", "GB/s"];
-    let mut value = bytes_per_sec.max(0.0);
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 || value >= 100.0 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
@@ -1146,6 +1216,7 @@ mod tests {
         let downloaded = segmented(
             &CancelSignal::default(),
             &server.url,
+            None,
             &part,
             total as u64,
             &info(total as u64, true),
@@ -1200,6 +1271,7 @@ mod tests {
         segmented(
             &CancelSignal::default(),
             &server.url,
+            None,
             &part,
             total,
             &info(total, true),
@@ -1235,6 +1307,7 @@ mod tests {
         let downloaded = single(
             &CancelSignal::default(),
             &server.url,
+            None,
             &part,
             &info(expected.len() as u64, false),
             &mut |_, _, _| {},
@@ -1262,6 +1335,7 @@ mod tests {
         single(
             &CancelSignal::default(),
             &server.url,
+            None,
             &part,
             &info(expected.len() as u64, false),
             &mut |_, _, _| {},
@@ -1308,6 +1382,7 @@ mod tests {
         let outcome = segmented(
             &cancel,
             &server.url,
+            None,
             &part,
             total,
             &info(total, true),
@@ -1456,11 +1531,24 @@ mod tests {
         assert_eq!(bytes_of(&[0], 3, total), CHUNK_SIZE);
     }
 
+    /// The bug: `Meter` counted from zero while a resumed transfer starts at
+    /// its resume offset, so the first reading was the whole resume divided by
+    /// one 400 ms window -- hundreds of megabytes a second, and an ETA to match.
     #[test]
-    fn speed_reads_as_a_speed() {
-        assert_eq!(format_speed(900.0), "900 B/s");
-        assert_eq!(format_speed(1024.0 * 1.5), "1.5 KB/s");
-        assert_eq!(format_speed(1024.0 * 1024.0 * 12.34), "12.3 MB/s");
+    fn a_resumed_transfer_does_not_report_the_resume_as_speed() {
+        const RESUMED_AT: u64 = 50 * 1024 * 1024;
+
+        let mut meter = Meter::new(RESUMED_AT);
+        std::thread::sleep(Duration::from_millis(450));
+        // A megabyte has genuinely arrived since the resume.
+        let rate = meter
+            .sample(RESUMED_AT + 1024 * 1024)
+            .expect("a full window has passed");
+
+        // Seeded from zero this reported ~120 MB/s. The real figure is around
+        // 2 MB/s; the bound is loose because the sleep is only approximate.
+        assert!(rate < 10.0 * 1024.0 * 1024.0, "reported {rate} B/s");
+        assert!(rate > 0.0, "reported {rate} B/s");
     }
 
     #[test]

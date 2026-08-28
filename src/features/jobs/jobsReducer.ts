@@ -1,5 +1,5 @@
 import { fileNameOf } from "../../lib/format";
-import type { Job, JobProgress, JobStatusEvent } from "./types";
+import type { Job, JobProgress, JobStatusEvent, JobSummary } from "./types";
 
 /**
  * Jobs are keyed rather than kept in an array.
@@ -27,6 +27,7 @@ export type JobsAction =
   | { type: "select"; id: string | null }
   | { type: "remove"; id: string }
   | { type: "clearFinished" }
+  | { type: "reconcile"; live: JobSummary[] }
   | { type: "hydrate"; state: JobsState };
 
 export const emptyJobsState: JobsState = {
@@ -64,7 +65,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
       };
 
     case "progress": {
-      const { id, percent, stage, speed, etaSecs, bytes, totalBytes } =
+      const { id, percent, stage, speed, encodeRate, etaSecs, bytes, totalBytes } =
         action.payload;
       const current = state.byId[id];
       if (!current) return state;
@@ -76,6 +77,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
         stage,
         percent,
         speed: speed ?? undefined,
+        encodeRate: encodeRate ?? undefined,
         etaSecs: etaSecs ?? undefined,
         // Sticky, unlike speed and ETA. A byte count is a fact about the file;
         // an event that omits it is saying "no news", not "zero". yt-dlp's
@@ -112,6 +114,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
               // way.
               title: titleFor(state.byId[id], outputPath),
               speed: undefined,
+              encodeRate: undefined,
               etaSecs: undefined,
               endedAt: Date.now(),
             }),
@@ -124,6 +127,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
               state: "failed",
               error: action.payload.error,
               speed: undefined,
+              encodeRate: undefined,
               etaSecs: undefined,
               endedAt: Date.now(),
             }),
@@ -134,6 +138,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
             ...patch(state, id, {
               state: "cancelled",
               speed: undefined,
+              encodeRate: undefined,
               etaSecs: undefined,
               endedAt: Date.now(),
             }),
@@ -164,6 +169,64 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
         order: state.order.filter((id) => id !== action.id),
         selectedId: state.selectedId === action.id ? null : state.selectedId,
       };
+    }
+
+    /**
+     * Puts back the jobs the backend is still running.
+     *
+     * `storage.ts` marks everything that was in flight as failed on load,
+     * because nothing is running when the app has just started -- which is true
+     * of a cold start and false of a webview reload, and the webview reloads on
+     * every save in dev and whenever the user hits refresh. The rows then said
+     * "failed" while yt-dlp was very much still writing the file, and the retry
+     * button they grew would have started a *second* download into the same
+     * folder, both engines writing the same `.part`.
+     *
+     * The backend has always been able to answer this -- `list_jobs` has been a
+     * registered command with no caller since it was written.
+     */
+    case "reconcile": {
+      if (action.live.length === 0) return state;
+
+      const byId = { ...state.byId };
+      const order = [...state.order];
+      let changed = false;
+
+      for (const live of action.live) {
+        const known = byId[live.id];
+        if (known) {
+          // Already running as far as this state is concerned: the reload
+          // happened before the revive, or the event beat this call.
+          if (known.state === "running" || known.state === "queued") continue;
+          byId[live.id] = {
+            ...known,
+            state: "running",
+            // Whatever it was doing is unknown until the next tick lands, which
+            // is at most 100ms away. Claiming a stage would be a guess.
+            stage: "preparing",
+            percent: null,
+            error: undefined,
+            endedAt: undefined,
+          };
+        } else {
+          // History was cleared, or this is a different profile's storage. The
+          // job is real and running, so it gets a row.
+          byId[live.id] = {
+            id: live.id,
+            kind: live.kind,
+            title: live.title,
+            source: live.title,
+            state: "running",
+            stage: "preparing",
+            percent: null,
+            createdAt: Date.now(),
+          };
+          order.unshift(live.id);
+        }
+        changed = true;
+      }
+
+      return changed ? { ...state, byId, order } : state;
     }
 
     case "clearFinished": {

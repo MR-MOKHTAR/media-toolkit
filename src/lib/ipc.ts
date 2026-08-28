@@ -18,6 +18,7 @@ import type {
   DownloadRequest,
   JobProgress,
   JobStatusEvent,
+  JobSummary,
   LibraryInfo,
   LibrarySlot,
   ToolStatus,
@@ -82,8 +83,7 @@ export const cancelAllJobs = () => invoke<void>("cancel_all_jobs");
 
 /** Jobs the backend is still running. The webview reloads on every save in
  *  dev, and would otherwise lose track of work that is still going. */
-export const listJobs = () =>
-  invoke<{ id: string; kind: string; title: string }[]>("list_jobs");
+export const listJobs = () => invoke<JobSummary[]>("list_jobs");
 
 export const revealInFolder = (path: string) =>
   invoke<void>("reveal_in_folder", { path });

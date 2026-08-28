@@ -196,9 +196,23 @@ function NavItem({
         "border-s-2",
         NAV_ROW_MARKER[state],
         collapsed && "justify-center px-0",
-        state === "idle" &&
-          !collapsed &&
-          "hover:translate-x-0.5 rtl:hover:-translate-x-0.5",
+        // The hover nudge, as 2px of leading padding rather than a 2px
+        // translate.
+        //
+        // The row is `w-full` inside the scroll container above, so its box
+        // already ends exactly on that container's content edge -- and a
+        // transform still counts toward scrollable overflow. Nudging the box
+        // pushed 2px of it past the edge, and because `overflow-y: auto` forces
+        // `overflow-x` to `auto` as well, the tools list grew a horizontal
+        // scrollbar under it for as long as the pointer was on a row. The same
+        // mechanism the Tooltip's own comment describes; this is the other way
+        // into it.
+        //
+        // Padding cannot do that: it moves the contents within a box that has
+        // not changed size. It is also logical, so the `rtl:` override this
+        // replaces -- a physical `translate-x` needed one to nudge the correct
+        // way -- is simply gone.
+        state === "idle" && !collapsed && "hover:ps-3",
       )}
     >
       <span className="relative flex shrink-0 items-center">

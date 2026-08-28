@@ -3,13 +3,13 @@
  *
  * Adding a tool is a file in this folder and a line here -- no screen, no
  * layout, no drop zone, no ready check, no output row. The form itself is
- * `MediaToolScreen`, once, and the sidebar changes which of these it is given.
+ * `MediaToolForm`, once, and the sidebar changes which of these it is given.
  */
 import type { Route } from "../../../app/navigation";
 import type {
   AnyMediaToolConfig,
   MediaToolKind,
-} from "../components/MediaToolScreen";
+} from "../components/MediaToolForm";
 import { compressTool } from "./compress";
 import { convertTool } from "./convert";
 import { extractAudioTool } from "./extractAudio";
@@ -22,10 +22,10 @@ export const MEDIA_TOOLS: Record<MediaToolKind, AnyMediaToolConfig> = {
   extractAudio: extractAudioTool,
 };
 
-/** Whether this route is one of them, and carries the dropped file that every
- *  tool route may arrive with. */
+/** Whether this route is one of them, and carries both the file every tool
+ *  route may arrive with and whether its form is open. */
 export function isMediaToolRoute(
   route: Route,
-): route is { name: MediaToolKind; file?: string } {
+): route is { name: MediaToolKind; file?: string; composing?: boolean } {
   return route.name in MEDIA_TOOLS;
 }

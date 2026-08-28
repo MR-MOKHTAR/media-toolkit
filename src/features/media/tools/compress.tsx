@@ -11,7 +11,7 @@ import { formatBytes } from "../../../lib/format";
 import type {
   MediaToolConfig,
   MediaToolContext,
-} from "../components/MediaToolScreen";
+} from "../components/MediaToolForm";
 import { defaultOutputName } from "../useMediaJob";
 
 type Preset = "small" | "balanced" | "high";

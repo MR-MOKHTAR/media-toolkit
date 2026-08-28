@@ -152,6 +152,29 @@ export function JobsProvider({
     };
   }, []);
 
+  // What the backend is still running, asked once the listeners above are
+  // attached so nothing that finishes in between is missed.
+  //
+  // `loadJobs` has just marked everything that was in flight as failed, on the
+  // reasoning that nothing is running when the app has just started. That is
+  // true of a cold start and false of a webview reload -- which happens on
+  // every save in dev, and whenever anyone hits refresh. Without this the rows
+  // read "failed" while yt-dlp was still writing the file, and their retry
+  // button would have started a second download of the same thing into the same
+  // folder.
+  useEffect(() => {
+    let cancelled = false;
+    void ipc
+      .listJobs()
+      .then((live) => !cancelled && dispatch({ type: "reconcile", live }))
+      // Not in Tauri, or the command failed. The revived history is a
+      // reasonable answer either way; it is only ever an improvement on it.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const startDownload = useCallback(
     async (request: DownloadRequest, meta: JobMeta) => {
       const id = await ipc.startDownload(request);

@@ -22,6 +22,11 @@ pub struct ToolStatus {
     pub ytdlp: bool,
     pub ffmpeg: bool,
     pub ffprobe: bool,
+    /// The JavaScript runtime yt-dlp needs for YouTube. Reported like the
+    /// others because its absence is not silent -- it costs formats -- and
+    /// "some of your downloads came back at a lower quality" is not something
+    /// anyone would think to look for without a row saying so.
+    pub deno: bool,
     /// Shown in Settings next to the update button, so "is it current?" is a
     /// question the user can answer without leaving the app.
     pub ytdlp_version: Option<String>,
@@ -65,10 +70,11 @@ pub async fn warm_tool_status(app: &AppHandle) {
 }
 
 async fn measure_tools(app: &AppHandle) -> ToolStatus {
-    let (ytdlp_version, ffmpeg, ffprobe) = tokio::join!(
+    let (ytdlp_version, ffmpeg, ffprobe, deno) = tokio::join!(
         binaries::probe(app, Tool::YtDlp),
         binaries::probe(app, Tool::Ffmpeg),
         binaries::probe(app, Tool::Ffprobe),
+        binaries::probe(app, Tool::Deno),
     );
 
     ToolStatus {
@@ -78,6 +84,7 @@ async fn measure_tools(app: &AppHandle) -> ToolStatus {
         ytdlp: ytdlp_version.is_some(),
         ffmpeg: ffmpeg.is_some(),
         ffprobe: ffprobe.is_some(),
+        deno: deno.is_some(),
         ytdlp_version,
     }
 }

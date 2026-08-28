@@ -6,6 +6,7 @@ mod error;
 mod jobs;
 mod library;
 mod media;
+mod muxed;
 mod paths;
 mod process;
 mod settings;

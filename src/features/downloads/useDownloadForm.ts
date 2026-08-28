@@ -37,6 +37,9 @@ export interface DownloadFormValues {
   url: string;
   mediaType: "video" | "audio";
   quality: string;
+  /** The standing "download on several connections" setting, carried onto the
+   *  request so a retry a week later runs the way this one did. */
+  parallel: boolean;
   /** The probe for *this* URL, or null if it has not landed. Null is not a
    *  failure state: `start` fetches one itself rather than guessing. */
   link: UrlInfo | null;
@@ -194,6 +197,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         // stale by the time the bytes are requested, and the backend is the one
         // that has to be right.
         mode: "auto",
+        parallel: values.parallel,
       };
 
       void startDownload(request, {
