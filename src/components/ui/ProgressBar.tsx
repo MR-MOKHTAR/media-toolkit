@@ -34,10 +34,15 @@ export function ProgressBar({ percent, className, label }: ProgressBarProps) {
     >
       <div
         className={cn(
-          "h-full rounded-full bg-accent",
+          "h-full rounded-full",
+          "bg-(image:--gradient-accent)",
+          "shadow-(--shadow-glow)",
           indeterminate
             ? "animate-[indeterminate_1.4s_var(--ease-out-quart)_infinite]"
-            : "transition-[inline-size] duration-[--duration-base] ease-[--ease-out-quart]",
+            : [
+                "transition-[inline-size] duration-(--duration-base) ease-out-quart",
+                "bg-size-[200%_100%] animate-[shimmer_2.5s_ease-in-out_infinite]",
+              ],
         )}
         style={{ inlineSize: indeterminate ? "40%" : `${clamped}%` }}
       />

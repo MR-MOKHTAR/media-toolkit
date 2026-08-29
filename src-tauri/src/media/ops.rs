@@ -92,29 +92,19 @@ pub struct ConvertRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResizeRequest {
+pub struct ExtractAudioRequest {
     pub input: String,
     pub output_dir: String,
     pub output_name: Option<String>,
-    pub height: u32,
+    /// mp3 | m4a | wav, or `original` to lift the track out untouched.
+    pub format: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GifRequest {
-    pub input: String,
-    pub output_dir: String,
-    pub output_name: Option<String>,
-    pub start_secs: f64,
-    pub end_secs: f64,
-    /// 360p/10fps or 480p/15fps.
-    #[serde(default)]
-    pub smooth: bool,
-}
-
-/// A 30-second 720p GIF is roughly 200 MB. The cap is a guard rail, not a
-/// preference.
-const MAX_GIF_SECONDS: f64 = 15.0;
+/// The value the extract-audio screen sends for "leave the track alone".
+///
+/// Not a format name, because which format comes out is the file's answer and
+/// not the user's -- see `copy_audio_ext`.
+const ORIGINAL: &str = "original";
 
 fn output_for(dir: &str, name: &Option<String>, input: &Path, ext: &str) -> AppResult<PathBuf> {
     let dir = paths::ensure_dir(dir)?;
@@ -174,14 +164,13 @@ pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> 
     let output = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
     let duration = Some(info.duration_secs);
 
-    // Small caps at 720p on top of its CRF; the others keep the source size
-    // unless the user asked otherwise.
-    let height_cap = request.max_height.or(match request.preset {
-        CompressPreset::Small => Some(720),
-        _ => None,
-    });
+    // The request is the only thing that decides resolution. The Small preset
+    // used to cap itself at 720p here, which was invisible from the screen and
+    // fought with the resolution control that replaced the resize tool: picking
+    // "original" still handed back 720p.
     let source_height = info.video.as_ref().map(|v| v.height).unwrap_or(0);
-    let scale = height_cap
+    let scale = request
+        .max_height
         .filter(|cap| source_height > *cap)
         .map(scale_to_height);
 
@@ -436,14 +425,13 @@ pub fn convert(request: &ConvertRequest, info: &MediaInfo) -> AppResult<Plan> {
     let mut args = vec![arg("-i"), path_arg(&input)];
 
     match format.as_str() {
-        // Picking an audio format IS "extract audio". There is no separate
-        // mode and no separate tool -- collapsing those two ideas is the
-        // biggest simplification available in this app.
-        "mp3" => args.extend(["-vn", "-c:a", "libmp3lame", "-q:a", "2"].iter().map(arg)),
-        "m4a" => args.extend(
-            ["-vn", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"].iter().map(arg),
-        ),
-        "wav" => args.extend(["-vn", "-c:a", "pcm_s16le"].iter().map(arg)),
+        // An audio target here drops the picture, which is the same operation
+        // the extract-audio tool performs -- so the encoder settings are shared
+        // rather than written twice and left to drift.
+        "mp3" | "m4a" | "wav" => {
+            args.push(arg("-vn"));
+            args.extend(audio_encode_args(&format).into_iter().flatten());
+        }
         "webm" => args.extend(
             ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-row-mt", "1",
              "-c:a", "libopus", "-b:a", "128k"].iter().map(arg),
@@ -485,93 +473,92 @@ pub fn convert(request: &ConvertRequest, info: &MediaInfo) -> AppResult<Plan> {
     })
 }
 
-// ---------------------------------------------------------------- resize
+// --------------------------------------------------------- extract audio
 
-pub fn resize(request: &ResizeRequest, info: &MediaInfo) -> AppResult<Plan> {
-    let input = paths::require_file(&request.input)?;
-    let video = info
-        .video
-        .as_ref()
-        .ok_or_else(|| AppError::invalid("file", "this tool needs a video"))?;
-    if request.height >= video.height {
-        // Upscaling produces a bigger file that looks no better. The UI also
-        // disables these options, but a request could still arrive.
-        return Err(AppError::invalid("height", "the video is already this small"));
+/// The encoder settings for one audio-only output.
+///
+/// `None` for anything that is not one of the three audio formats this app
+/// writes, so a caller can tell an unsupported request from a supported one
+/// rather than silently producing a file with default settings.
+fn audio_encode_args(format: &str) -> Option<Vec<String>> {
+    let args: &[&str] = match format {
+        // -q:a 2 is VBR at roughly 190 kbps: transparent for speech and music
+        // alike, and a smaller file than the 320k people reach for by reflex.
+        "mp3" => &["-c:a", "libmp3lame", "-q:a", "2"],
+        "m4a" => &["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"],
+        "wav" => &["-c:a", "pcm_s16le"],
+        _ => return None,
+    };
+    Some(args.iter().map(arg).collect())
+}
+
+/// The extension of the container this file's audio can be lifted into without
+/// being re-encoded, or `None` when the app knows no container for that codec.
+///
+/// This is what makes the tool worth having beside Convert: the audio inside an
+/// MP4 is already a finished AAC file, so handing it over is a copy that takes
+/// a moment and loses nothing. Re-encoding it to MP3 -- the thing everybody
+/// does by habit -- spends a minute to make it measurably worse.
+///
+/// Conservative on purpose. A codec that is not listed falls back to a real
+/// encode, which always works; guessing a container that cannot hold the codec
+/// would fail the job instead.
+pub fn copy_audio_ext(info: &MediaInfo) -> Option<&'static str> {
+    match info.audio.as_ref()?.codec.as_str() {
+        // ALAC in an M4A is what Apple writes and what everything reads.
+        "aac" | "alac" => Some("m4a"),
+        "mp3" => Some("mp3"),
+        "opus" => Some("opus"),
+        "vorbis" => Some("ogg"),
+        "flac" => Some("flac"),
+        "ac3" => Some("ac3"),
+        "eac3" => Some("eac3"),
+        // Only the PCM flavours a WAV header can describe. pcm_s24be and the
+        // float variants are deliberately absent.
+        "pcm_s16le" | "pcm_s24le" | "pcm_s32le" | "pcm_u8" => Some("wav"),
+        _ => None,
     }
-    let output = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
+}
 
-    let mut args = vec![arg("-i"), path_arg(&input), arg("-vf"), scale_to_height(request.height)];
-    args.extend(
-        ["-c:v", "libx264", "-crf", "23", "-preset", "medium", "-pix_fmt", "yuv420p",
-         // Re-encoding audio for a resize is pure waste; nothing about it changed.
-         "-c:a", "copy", "-movflags", "+faststart"].iter().map(arg),
-    );
+pub fn extract_audio(request: &ExtractAudioRequest, info: &MediaInfo) -> AppResult<Plan> {
+    let input = paths::require_file(&request.input)?;
+    if !info.has_audio() {
+        return Err(AppError::invalid("file", "no audio stream"));
+    }
+    let format = request.format.to_ascii_lowercase();
+
+    // -vn is the whole of what makes this extraction rather than conversion:
+    // the picture is dropped, and cover art in the source cannot end up as a
+    // video stream in an audio file.
+    let mut args = vec![arg("-i"), path_arg(&input), arg("-vn")];
+
+    let (extension, encode) = if format == ORIGINAL {
+        // A request for `original` that reaches here after the file changed
+        // under the screen falls back to AAC rather than failing: the user asked
+        // for the audio, and refusing to hand it over on a technicality would
+        // be the worse answer.
+        match copy_audio_ext(info) {
+            Some(ext) => (ext.to_string(), vec![arg("-c:a"), arg("copy")]),
+            None => ("m4a".to_string(), audio_encode_args("m4a").unwrap_or_default()),
+        }
+    } else {
+        let encode = audio_encode_args(&format)
+            .ok_or_else(|| AppError::invalid("format", format!("unsupported: {format}")))?;
+        (format, encode)
+    };
+
+    let output = output_for(&request.output_dir, &request.output_name, &input, &extension)?;
+    args.extend(encode);
     args.push(path_arg(&output));
 
     Ok(Plan {
         passes: vec![Pass {
             args,
             duration_secs: Some(info.duration_secs),
-            label: "resize",
+            label: "audio",
         }],
         output,
         temp_files: Vec::new(),
-    })
-}
-
-// ------------------------------------------------------------------- gif
-
-pub fn gif(request: &GifRequest, info: &MediaInfo) -> AppResult<Plan> {
-    let input = paths::require_file(&request.input)?;
-    if !info.has_video() {
-        return Err(AppError::invalid("file", "this tool needs a video"));
-    }
-    let start = request.start_secs.max(0.0);
-    let end = request.end_secs.min(start + MAX_GIF_SECONDS);
-    let duration = end - start;
-    if duration <= 0.0 {
-        return Err(AppError::invalid("range", "the end must come after the start"));
-    }
-
-    let (width, fps) = if request.smooth { (480, 15) } else { (360, 10) };
-    let output = output_for(&request.output_dir, &request.output_name, &input, "gif")?;
-    let palette = std::env::temp_dir().join(format!(
-        "mt-palette-{}-{}.png",
-        std::process::id(),
-        output.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
-    ));
-
-    let filters = format!("fps={fps},scale={width}:-1:flags=lanczos");
-
-    // A GIF holds 256 colours. Letting ffmpeg pick them from the actual clip
-    // rather than a fixed palette is the difference between a usable result
-    // and a banded mess. stats_mode=diff weights colours in the moving parts.
-    let palettegen = vec![
-        arg("-ss"), arg(format!("{start:.3}")),
-        arg("-t"), arg(format!("{duration:.3}")),
-        arg("-i"), path_arg(&input),
-        arg("-vf"), format!("{filters},palettegen=stats_mode=diff"),
-        path_arg(&palette),
-    ];
-
-    let paletteuse = vec![
-        arg("-ss"), arg(format!("{start:.3}")),
-        arg("-t"), arg(format!("{duration:.3}")),
-        arg("-i"), path_arg(&input),
-        arg("-i"), path_arg(&palette),
-        arg("-lavfi"),
-        format!("{filters}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"),
-        arg("-loop"), arg("0"),
-        path_arg(&output),
-    ];
-
-    Ok(Plan {
-        passes: vec![
-            Pass { args: palettegen, duration_secs: Some(duration), label: "palette" },
-            Pass { args: paletteuse, duration_secs: Some(duration), label: "gif" },
-        ],
-        output,
-        temp_files: vec![palette],
     })
 }
 
@@ -657,6 +644,38 @@ mod tests {
         assert!(filter.starts_with("scale=-2:720"), "{filter}");
     }
 
+    /// The resolution control replaced the resize tool, so `max_height` is now
+    /// the only thing that scales a compression -- no preset does it quietly.
+    #[test]
+    fn compress_scales_only_when_the_request_asks() {
+        let path = std::env::temp_dir().join(format!("mt-compress-{}.mp4", std::process::id()));
+        std::fs::write(&path, b"x").unwrap();
+        let base = CompressRequest {
+            input: path.to_string_lossy().into(),
+            output_dir: std::env::temp_dir().to_string_lossy().into(),
+            output_name: Some("c".into()),
+            preset: CompressPreset::Small,
+            target_size_mb: None,
+            max_height: None,
+        };
+        let source = sample(1920, 1080, 10.0);
+
+        // Smallest preset, no height asked for: the frames keep their size.
+        let plan = compress(&base, &source).unwrap();
+        assert!(!joined(&plan, 0).contains("scale="), "{}", joined(&plan, 0));
+
+        let capped = CompressRequest { max_height: Some(720), ..base };
+        let plan = compress(&capped, &source).unwrap();
+        assert!(joined(&plan, 0).contains("scale=-2:720"), "{}", joined(&plan, 0));
+
+        // A cap above the source is not an upscale, it is a no-op.
+        let taller = CompressRequest { max_height: Some(1440), ..capped };
+        let plan = compress(&taller, &source).unwrap();
+        assert!(!joined(&plan, 0).contains("scale="), "{}", joined(&plan, 0));
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn trim_uses_duration_not_end_timestamp() {
         let request = TrimRequest {
@@ -712,56 +731,75 @@ mod tests {
         assert!(can_stream_copy(&vp9, "mkv"));
     }
 
-    #[test]
-    fn resize_refuses_to_upscale() {
-        let path = std::env::temp_dir().join("mt-resize.mp4");
-        std::fs::write(&path, b"x").unwrap();
-        let request = ResizeRequest {
-            input: path.to_string_lossy().into(),
+    fn extract_request(input: &Path, name: &str, format: &str) -> ExtractAudioRequest {
+        ExtractAudioRequest {
+            input: input.to_string_lossy().into(),
             output_dir: std::env::temp_dir().to_string_lossy().into(),
-            output_name: Some("r".into()),
-            height: 1080,
-        };
-        // Source is already 720 tall.
-        assert!(resize(&request, &sample(1280, 720, 10.0)).is_err());
+            output_name: Some(name.into()),
+            format: format.into(),
+        }
+    }
+
+    /// The point of the tool: the AAC track inside an MP4 is already a finished
+    /// audio file, so `original` hands it over instead of encoding it again.
+    #[test]
+    fn extracting_the_original_copies_the_track_into_its_own_container() {
+        let path = std::env::temp_dir().join("mt-extract-copy.mp4");
+        std::fs::write(&path, b"x").unwrap();
+
+        let plan = extract_audio(
+            &extract_request(&path, "a", "original"),
+            &sample(1920, 1080, 30.0),
+        )
+        .unwrap();
+        let args = joined(&plan, 0);
+        assert!(args.contains("-vn"), "{args}");
+        assert!(args.contains("-c:a copy"), "{args}");
+        assert_eq!(plan.output.extension().unwrap(), "m4a", "aac belongs in m4a");
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A codec with no container the app trusts still has to produce audio, so
+    /// `original` degrades to an encode rather than to an error.
+    #[test]
+    fn an_uncopyable_track_falls_back_to_encoding() {
+        let path = std::env::temp_dir().join("mt-extract-fallback.mkv");
+        std::fs::write(&path, b"x").unwrap();
+        let mut info = sample(1920, 1080, 30.0);
+        info.audio.as_mut().unwrap().codec = "truehd".into();
+        assert_eq!(copy_audio_ext(&info), None);
+
+        let plan =
+            extract_audio(&extract_request(&path, "b", "original"), &info).unwrap();
+        let args = joined(&plan, 0);
+        assert!(!args.contains("copy"), "{args}");
+        assert!(args.contains("-c:a aac"), "{args}");
+        assert_eq!(plan.output.extension().unwrap(), "m4a");
+
         std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn resize_copies_the_audio_untouched() {
-        let path = std::env::temp_dir().join("mt-resize2.mp4");
+    fn extracting_a_named_format_encodes_into_it() {
+        let path = std::env::temp_dir().join("mt-extract-mp3.mp4");
         std::fs::write(&path, b"x").unwrap();
-        let request = ResizeRequest {
-            input: path.to_string_lossy().into(),
-            output_dir: std::env::temp_dir().to_string_lossy().into(),
-            output_name: Some("r2".into()),
-            height: 720,
-        };
-        let plan = resize(&request, &sample(1920, 1080, 10.0)).unwrap();
-        assert!(joined(&plan, 0).contains("-c:a copy"), "{}", joined(&plan, 0));
-        std::fs::remove_file(&path).unwrap();
-    }
 
-    #[test]
-    fn gif_is_two_passes_and_capped_in_length() {
-        let path = std::env::temp_dir().join("mt-gif.mp4");
-        std::fs::write(&path, b"x").unwrap();
-        let request = GifRequest {
-            input: path.to_string_lossy().into(),
-            output_dir: std::env::temp_dir().to_string_lossy().into(),
-            output_name: Some("g".into()),
-            start_secs: 0.0,
-            end_secs: 60.0,
-            smooth: false,
-        };
-        let plan = gif(&request, &sample(1920, 1080, 120.0)).unwrap();
-        assert_eq!(plan.passes.len(), 2);
-        assert!(joined(&plan, 0).contains("palettegen"));
-        assert!(joined(&plan, 1).contains("paletteuse"));
-        // Capped at 15 s, not the 60 that was asked for.
-        assert!(joined(&plan, 1).contains("-t 15.000"), "{}", joined(&plan, 1));
-        // The palette is temporary and must be cleaned up.
-        assert_eq!(plan.temp_files.len(), 1);
+        let plan = extract_audio(
+            &extract_request(&path, "c", "mp3"),
+            &sample(1920, 1080, 30.0),
+        )
+        .unwrap();
+        let args = joined(&plan, 0);
+        assert!(args.contains("-c:a libmp3lame"), "{args}");
+        assert_eq!(plan.output.extension().unwrap(), "mp3");
+
+        // A file with no audio has nothing to extract, and saying so beats
+        // running ffmpeg to produce an empty container.
+        let mut silent = sample(1920, 1080, 30.0);
+        silent.audio = None;
+        assert!(extract_audio(&extract_request(&path, "d", "mp3"), &silent).is_err());
+
         std::fs::remove_file(&path).unwrap();
     }
 

@@ -40,8 +40,7 @@ export function Toast({
 
   return (
     <div
-      className="fixed bottom-4 z-50 flex max-w-sm flex-col gap-2"
-      style={{ insetInlineEnd: "1rem" }}
+      className="fixed bottom-4 end-4 z-50 flex max-w-sm flex-col gap-2"
     >
       <AnimatePresence initial={false}>
         {toasts.map((toast) => (
@@ -52,13 +51,20 @@ export function Toast({
             layout
             // Enters from the edge it is anchored to, so it follows the writing
             // direction instead of being branched per language.
-            initial={{ opacity: 0, x: isRtl ? -20 : 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: isRtl ? -20 : 20 }}
-            transition={{ duration: 0.18 }}
+            initial={{ opacity: 0, x: isRtl ? -20 : 20, scale: 0.95 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: isRtl ? -20 : 20, scale: 0.95 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className={cn(
               "flex w-full items-start gap-2.5 rounded-lg",
-              "border border-line bg-surface p-3 shadow-(--shadow-panel)",
+              "border border-line-soft bg-surface-glass p-3",
+              "shadow-(--shadow-panel) backdrop-blur-glass",
+              /* Coloured inline-start border marking the toast's kind. */
+              "border-s-2",
+              toast.type === "success" && "border-s-success",
+              toast.type === "error" && "border-s-danger",
+              toast.type === "warning" && "border-s-warning",
+              toast.type === "info" && "border-s-accent",
             )}
             // An error is worth interrupting a screen reader for; the rest are
             // status updates that can wait for a pause.

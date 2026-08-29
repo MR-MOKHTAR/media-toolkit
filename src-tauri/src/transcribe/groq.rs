@@ -128,14 +128,15 @@ pub async fn verify_key(key: &str) -> AppResult<()> {
 }
 
 /// One chunk's answer.
+///
+/// Just the text. It used to carry Groq's remaining-audio-seconds header too,
+/// for the running total the form printed; the app no longer keeps a total, so
+/// an undocumented header it could only ever half-trust is not worth reading.
 pub struct Transcribed {
     /// Timed relative to the audio that was sent. Putting these back on the
     /// source timeline is `chunks::merge_segments`' job, and keeping that
     /// separation is what makes the merge testable.
     pub segments: Vec<Segment>,
-    /// Audio-seconds Groq says are left, when it volunteered a header saying
-    /// so. See `remaining_audio_secs` for why this is optional and untrusted.
-    pub remaining_audio_secs: Option<u32>,
 }
 
 /// Transcribes one chunk, retrying what is worth retrying.
@@ -246,8 +247,6 @@ async fn send_once(
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_retry_after);
-    let remaining_audio = remaining_audio_secs(response.headers());
-
     let body = cancel
         .guard(response.bytes())
         .await?
@@ -263,7 +262,6 @@ async fn send_once(
         })?;
         return Ok(Outcome::Done(Transcribed {
             segments: into_segments(parsed),
-            remaining_audio_secs: remaining_audio,
         }));
     }
 
@@ -275,15 +273,16 @@ async fn send_once(
             return Ok(Outcome::Retry {
                 after: wait,
                 error: AppError::RateLimited {
-                    scope: scope_for(retry_after),
+                    scope: scope_for(retry_after, &message),
                     retry_after_secs: retry_after.map(|d| d.as_secs()),
                 },
             });
         }
-        // Too long to sit through. Fail now with the reset time so the screen
-        // can say when, and so the ledger can stop offering the model.
+        // Too long to sit through. Fail now with the reset time, which is the
+        // whole of what the user is told: this 429 is the only thing that knows
+        // a limit was reached, since nothing local counts any more.
         return Err(AppError::RateLimited {
-            scope: scope_for(retry_after),
+            scope: scope_for(retry_after, &message),
             retry_after_secs: Some(wait.as_secs()),
         });
     }
@@ -308,28 +307,27 @@ async fn send_once(
     Err(AppError::api(SERVICE, status.as_u16(), message))
 }
 
-/// What Groq said is left of the audio-seconds budget, if it said anything.
+/// Which budget ran out.
 ///
-/// Groq documents `x-ratelimit-*-{requests,tokens}` but nothing for audio, and
-/// the audio headers it does send are undocumented and could change or stop.
-/// So this matches by shape rather than by an exact name, and everything
-/// downstream treats the answer as a hint that can only ever lower an estimate.
-pub fn remaining_audio_secs(headers: &reqwest::header::HeaderMap) -> Option<u32> {
-    headers.iter().find_map(|(name, value)| {
-        let name = name.as_str();
-        if !name.starts_with("x-ratelimit-remaining") || !name.contains("audio") {
-            return None;
-        }
-        parse_leading_number(value.to_str().ok()?)
-    })
-}
+/// Groq's own words first. Its 429 body names the window it metered -- "limit
+/// 28800, ... please try again in 5m" arrives alongside "audio seconds per day"
+/// -- and that is the difference between telling someone to come back in an
+/// hour and telling them they are done until tomorrow. This is now the only
+/// place that answer comes from: the app keeps no count of its own to infer it.
+///
+/// Failing that, the length of the wait. An hour bucket cannot ask for more
+/// than an hour; anything longer is the daily one. A short wait is a burst
+/// rather than a budget, and saying "your daily limit is gone" when it is not
+/// would send someone away for a day they did not need to lose.
+fn scope_for(retry_after: Option<Duration>, message: &str) -> RateScope {
+    let said = message.to_ascii_lowercase();
+    if said.contains("per day") || said.contains("daily") {
+        return RateScope::Day;
+    }
+    if said.contains("per hour") || said.contains("hourly") {
+        return RateScope::Hour;
+    }
 
-/// Which budget ran out, inferred from how long we were asked to wait.
-///
-/// An hour bucket cannot ask for more than an hour; anything longer is the
-/// daily one. A short wait is a burst rather than a budget, and saying "your
-/// daily limit is gone" when it is not would send someone away for a day.
-fn scope_for(retry_after: Option<Duration>) -> RateScope {
     match retry_after {
         Some(wait) if wait.as_secs() > 3_600 => RateScope::Day,
         Some(wait) if wait.as_secs() > MAX_INLINE_WAIT.as_secs() => RateScope::Hour,
@@ -438,8 +436,15 @@ fn httpdate_secs_from_now(value: &str) -> Option<u64> {
     let days = era * 146_097 + doe - 719_468;
 
     let target = days * 86_400 + hour * 3_600 + minute * 60 + second;
-    let now = super::ledger::now_unix() as i64;
+    let now = now_unix() as i64;
     (target > now).then(|| (target - now).min(86_400) as u64)
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Exponential, with a jittered quarter on top.
@@ -461,14 +466,6 @@ fn jitter_millis(span: u64) -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| u64::from(d.subsec_nanos()) % span)
         .unwrap_or(0)
-}
-
-fn parse_leading_number(value: &str) -> Option<u32> {
-    // Groq writes these as "7200" but also as "1m30s" for reset headers; taking
-    // the leading digits is right for the remaining-count form and yields
-    // nothing surprising for the other.
-    let digits: String = value.trim().chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
 }
 
 /// Truncation on a character boundary, never a byte one. Slicing Persian or
@@ -532,10 +529,22 @@ mod tests {
     /// day they did not need to lose.
     #[test]
     fn the_scope_follows_how_long_we_were_asked_to_wait() {
-        assert_eq!(scope_for(Some(Duration::from_secs(30))), RateScope::Request);
-        assert_eq!(scope_for(Some(Duration::from_secs(600))), RateScope::Hour);
-        assert_eq!(scope_for(Some(Duration::from_secs(7_200))), RateScope::Day);
-        assert_eq!(scope_for(None), RateScope::Request);
+        assert_eq!(scope_for(Some(Duration::from_secs(30)), ""), RateScope::Request);
+        assert_eq!(scope_for(Some(Duration::from_secs(600)), ""), RateScope::Hour);
+        assert_eq!(scope_for(Some(Duration::from_secs(7_200)), ""), RateScope::Day);
+        assert_eq!(scope_for(None, ""), RateScope::Request);
+    }
+
+    /// What Groq says beats what the wait implies: a daily budget that frees up
+    /// in ten minutes' time still means the daily budget, and telling the user
+    /// "more frees up in 10 minutes" would be a promise the next request breaks.
+    #[test]
+    fn groqs_own_wording_decides_which_limit_was_reached() {
+        let daily = "Rate limit reached for model `whisper-large-v3` on audio seconds per day (ASD): Limit 28800, Used 28800. Please try again in 8m32s.";
+        assert_eq!(scope_for(Some(Duration::from_secs(512)), daily), RateScope::Day);
+
+        let hourly = "Rate limit reached ... on audio seconds per hour (ASH): Limit 7200.";
+        assert_eq!(scope_for(Some(Duration::from_secs(7_200)), hourly), RateScope::Hour);
     }
 
     #[test]
@@ -561,21 +570,6 @@ mod tests {
     fn falls_back_to_the_raw_body_when_it_is_not_an_envelope() {
         assert_eq!(message_from("<html>502 Bad Gateway</html>"), "<html>502 Bad Gateway</html>");
         assert!(message_from(&"x".repeat(1_000)).chars().count() <= 300);
-    }
-
-    #[test]
-    fn finds_an_audio_seconds_header_whatever_it_is_called() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "x-ratelimit-remaining-audio-seconds",
-            "6100".parse().unwrap(),
-        );
-        assert_eq!(remaining_audio_secs(&headers), Some(6_100));
-
-        // The documented token/request headers must not be mistaken for it.
-        let mut other = reqwest::header::HeaderMap::new();
-        other.insert("x-ratelimit-remaining-tokens", "500".parse().unwrap());
-        assert_eq!(remaining_audio_secs(&other), None);
     }
 
     /// Ten seconds of audio comes back as `text` with no `segments`. Reading

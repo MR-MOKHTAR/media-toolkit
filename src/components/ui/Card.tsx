@@ -1,21 +1,54 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
+interface CardProps extends HTMLAttributes<HTMLElement> {
+  /** `sm` (12px) for a row in a list, `md` (16px) for a standalone panel,
+   *  `none` when the card's children draw their own padded rows. */
+  padding?: "none" | "sm" | "md";
+  /** The hover lift. Only for a card that is itself a click target -- a static
+   *  container that rises under the pointer is promising something it does
+   *  not do. */
+  interactive?: boolean;
+  as?: "div" | "li" | "section";
+}
+
+const CARD_PADDING = {
+  none: "",
+  sm: "p-3",
+  md: "p-4",
+} as const;
+
+/**
+ * A bordered surface on the canvas.
+ *
+ * This component existed and was imported by nothing, while nine places wrote
+ * its class string out by hand -- at three paddings and two backgrounds, so
+ * a job row, a transcript pane and a settings box were three different cards
+ * for no reason anyone chose. The `padding` and `interactive` props are the
+ * two axes those nine sites actually varied along; everything else about a
+ * card is now settled here.
+ */
 export function Card({
+  padding = "md",
+  interactive = false,
+  as: Tag = "div",
   className,
   children,
   ...props
-}: HTMLAttributes<HTMLDivElement>) {
+}: CardProps) {
   return (
-    <div
+    <Tag
       className={cn(
-        "rounded-lg border border-line bg-surface p-4",
+        "rounded-lg border border-line bg-surface",
+        CARD_PADDING[padding],
+        interactive &&
+          "transition-[box-shadow,transform] duration-(--duration-fast) hover:-translate-y-px hover:shadow-(--shadow-raise)",
         className,
       )}
       {...props}
     >
       {children}
-    </div>
+    </Tag>
   );
 }
 
@@ -31,6 +64,13 @@ export function Card({
  * behind it. It sits lighter than the page instead of being a second, brighter
  * white, and anything sliding underneath -- the history panel, a toast --
  * shows through rather than stopping at a hard edge.
+ *
+ * 20px between controls and 24px of padding, up from 14 and 20. At 14 the rows
+ * were closer to each other than the label inside a row is to its own control,
+ * so a form read as one dense block rather than as a sequence of decisions.
+ * The gap is now clearly larger than any spacing inside a control, which is
+ * what makes the grouping legible. Hints that belong to the control above them
+ * are not spaced by this gap at all -- they sit inside a `ControlGroup`.
  */
 export function FormCard({
   className,
@@ -40,12 +80,39 @@ export function FormCard({
   return (
     <div
       className={cn(
-        "flex flex-col gap-3.5 rounded-xl border border-line p-5",
-        "bg-surface/70 shadow-(--shadow-card) backdrop-blur-md",
+        "flex flex-col gap-5 rounded-xl border border-line-soft p-6",
+        "bg-surface-glass shadow-(--shadow-card) backdrop-blur-glass",
+        /* Thin gradient accent along the top edge — visible enough to mark
+           the card as the primary surface without competing with anything
+           inside it. */
+        "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",
+        "before:bg-(image:--gradient-accent) before:opacity-40 before:rounded-t-xl",
+        "relative overflow-hidden",
         className,
       )}
       {...props}
     >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A control and the line of text that explains it, as one item of the form.
+ *
+ * The alternative was a negative margin on the hint -- `-mt-2` under a
+ * `gap-3.5` card -- which every screen wrote by hand and which had to be
+ * retuned the moment the card's gap changed. Grouping says the same thing
+ * declaratively: the hint is part of this item, so the form's own gap never
+ * applies between them.
+ */
+export function ControlGroup({
+  className,
+  children,
+  ...props
+}: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div className={cn("flex flex-col gap-1.5", className)} {...props}>
       {children}
     </div>
   );
@@ -81,6 +148,30 @@ export function Field({
   );
 }
 
+/**
+ * The label over a group of controls.
+ *
+ * `text-sm font-medium text-fg-soft` was written by hand in five places --
+ * two of them on a `<p>` doing an `<h3>`'s job, and one of them at a different
+ * weight from its neighbour on the same screen. It is the same label in all
+ * five, so it is one component with the heading level as a prop.
+ */
+export function SectionLabel({
+  as: Tag = "h3",
+  className,
+  children,
+  ...props
+}: HTMLAttributes<HTMLElement> & { as?: "h2" | "h3" | "p" }) {
+  return (
+    <Tag
+      className={cn("text-sm font-medium text-fg-soft", className)}
+      {...props}
+    >
+      {children}
+    </Tag>
+  );
+}
+
 export function EmptyState({
   icon,
   title,
@@ -94,7 +185,7 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-      <div className="flex size-12 items-center justify-center rounded-lg bg-surface-soft text-fg-muted">
+      <div className="flex size-12 items-center justify-center rounded-lg bg-(image:--gradient-accent) text-on-accent/90 shadow-(--shadow-glow)">
         {icon}
       </div>
       <div className="flex flex-col gap-1">

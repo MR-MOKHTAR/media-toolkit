@@ -28,6 +28,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Every release before v1.1.0 shipped as "0.1.0" in its filenames and its
+      # release title, because the version lives in tauri.conf.json and nothing
+      # ever checked it against the tag being pushed. This runs before any
+      # toolchain is installed, so a forgotten bump fails in seconds.
+      - name: Verify the tag matches the app version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version" *: *"([^"]+)".*/\1/')
+          pkg=$(grep -m1 '"version"' package.json | sed -E 's/.*"version" *: *"([^"]+)".*/\1/')
+          crate=$(grep -m1 '^version *=' src-tauri/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$tag tauri.conf.json=$conf package.json=$pkg Cargo.toml=$crate"
+          for v in "$conf" "$pkg" "$crate"; do
+            if [ "$v" != "$tag" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match the app version. Bump all three manifests to ${tag} (bun run set-version ${tag}) and re-tag."
+              exit 1
+            fi
+          done
+
       # libwebkit2gtk-4.1 is the Tauri v2 webview; patchelf is what the deb
       # bundler uses to fix up the binary's rpath.
       - name: Install system dependencies (Linux)
@@ -84,8 +105,14 @@ jobs:
           DOWNLOADER_REQUIRE_TOOLS: "1"
           DOWNLOADER_FORCE_TOOL_FETCH: "1"
         with:
-          tagName: __VERSION__
-          releaseName: "Media Toolkit v__VERSION__"
+          # The pushed tag verbatim, not __VERSION__. __VERSION__ expands to the
+          # version in tauri.conf.json, which is what titled five past releases
+          # "App v0.1.0" no matter which tag produced them. The guard above has
+          # already proved the two agree. Empty on workflow_dispatch, which
+          # makes tauri-action build without touching releases -- the artifact
+          # upload below is the point of those runs.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('MediaToolkit {0}', github.ref_name) || '' }}
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false

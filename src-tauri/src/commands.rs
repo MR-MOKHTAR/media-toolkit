@@ -15,7 +15,6 @@ use crate::binaries::{self, Tool};
 use crate::download::{self, DownloadRequest, UrlInfo};
 use crate::error::{AppError, AppResult};
 use crate::jobs::{JobKind, JobSummary, Jobs};
-use crate::paths;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +22,11 @@ pub struct ToolStatus {
     pub ytdlp: bool,
     pub ffmpeg: bool,
     pub ffprobe: bool,
+    /// The JavaScript runtime yt-dlp needs for YouTube. Reported like the
+    /// others because its absence is not silent -- it costs formats -- and
+    /// "some of your downloads came back at a lower quality" is not something
+    /// anyone would think to look for without a row saying so.
+    pub deno: bool,
     /// Shown in Settings next to the update button, so "is it current?" is a
     /// question the user can answer without leaving the app.
     pub ytdlp_version: Option<String>,
@@ -66,10 +70,11 @@ pub async fn warm_tool_status(app: &AppHandle) {
 }
 
 async fn measure_tools(app: &AppHandle) -> ToolStatus {
-    let (ytdlp_version, ffmpeg, ffprobe) = tokio::join!(
+    let (ytdlp_version, ffmpeg, ffprobe, deno) = tokio::join!(
         binaries::probe(app, Tool::YtDlp),
         binaries::probe(app, Tool::Ffmpeg),
         binaries::probe(app, Tool::Ffprobe),
+        binaries::probe(app, Tool::Deno),
     );
 
     ToolStatus {
@@ -79,6 +84,7 @@ async fn measure_tools(app: &AppHandle) -> ToolStatus {
         ytdlp: ytdlp_version.is_some(),
         ffmpeg: ffmpeg.is_some(),
         ffprobe: ffprobe.is_some(),
+        deno: deno.is_some(),
         ytdlp_version,
     }
 }
@@ -92,11 +98,6 @@ pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateRes
     // it had done nothing.
     *status_cache().lock().await = None;
     Ok(result)
-}
-
-#[tauri::command]
-pub fn get_default_download_path(app: AppHandle) -> String {
-    paths::default_download_dir(&app)
 }
 
 #[tauri::command]

@@ -1,11 +1,11 @@
 # Third-party software bundled with this application
 
-This app ships three external programs inside its installer. It does not
+This app ships four external programs inside its installer. It does not
 modify them; it runs them as separate processes.
 
 ## FFmpeg / ffprobe — GPL-3.0-or-later
 
-Used for every media operation (compress, trim, convert, resize, GIF) and for
+Used for every media operation (compress, trim, convert, GIF) and for
 reading media metadata.
 
 - Build: `n8.1-latest`, GPL configuration, from
@@ -18,7 +18,7 @@ reading media metadata.
 
 **Why GPL and not LGPL:** the GPL configuration is the one that includes
 libx264 and libx265. Without them there is no H.264 or H.265 encoder, which
-would leave the compress, convert, and resize tools with nothing to encode
+would leave the compress and convert tools with nothing to encode
 with. Linking them makes the distributed work GPL-3.0-or-later.
 
 **Consequence:** because this application is distributed together with a
@@ -34,6 +34,33 @@ Used to download media from the web.
 - Source: <https://github.com/yt-dlp/yt-dlp>
 - The standalone build is bundled so the app does not require a system Python
   installation.
+
+## Deno — MIT
+
+The JavaScript runtime yt-dlp uses to answer YouTube's player challenge.
+Without it yt-dlp warns that "YouTube extraction without a JS runtime has been
+deprecated, and some formats may be missing", and falls back to clients that
+carry a shorter format list — so a request for 1080p can quietly come back at a
+lower resolution.
+
+- Source: <https://github.com/denoland/deno>
+- Run only as a sandboxed subprocess of yt-dlp, via `--js-runtimes`. Nothing in
+  this app executes JavaScript through it directly.
+- MIT is permissive and imposes no condition on the rest of this distribution.
+
+## Bundled fonts — SIL Open Font License 1.1
+
+Two font files ship inside the application bundle, under
+`src/assets/fonts/`. Neither is modified; each is the upstream `woff2` subset.
+
+| Face | Used for | Source |
+|---|---|---|
+| Inter | the interface, Latin | <https://github.com/rsms/inter> |
+| Vazirmatn | the interface, Arabic script | <https://github.com/rastikerdar/vazirmatn> |
+
+The OFL permits bundling and redistribution inside an application, including
+a GPL-licensed one, provided the fonts are not sold on their own and keep
+their names. Full license text: <https://openfontlicense.org>.
 
 ---
 

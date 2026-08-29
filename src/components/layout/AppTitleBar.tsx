@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { Minus, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -10,10 +9,6 @@ interface AppTitleBarProps {
   onMinimize: () => void;
   onToggleMaximize: () => void;
   onClose: () => void;
-  /** Screen-specific controls, shown before the window buttons and separated
-   *  from them by a rule -- they are the app's, not the window's. Falsy on the
-   *  screens that have none, which also drops the rule. */
-  actions?: ReactNode;
   /** False while the sidebar is expanded, because the name is up there instead.
    *  The drag region stays either way -- it is what moves the window. */
   showTitle: boolean;
@@ -32,17 +27,17 @@ interface AppTitleBarProps {
  *
  * Everything else that has passed through here has left: a back button that
  * said nothing about where you were, a gradient "New Download" call to action,
- * a theme toggle, a raw <select> for the language, and most recently the
- * settings gear -- Settings is a destination like any other and now sits with
- * Tasks at the foot of the sidebar, so there is one way to reach it rather
- * than two.
+ * a theme toggle, a raw <select> for the language, the settings gear --
+ * Settings is a destination like any other and now sits with Tasks at the foot
+ * of the sidebar -- and last of all the history toggle, which opened a panel
+ * that no longer exists. Each tool's jobs are its screen now, so there is
+ * nothing left for a screen to contribute to this row.
  */
 export function AppTitleBar({
   isMaximized,
   onMinimize,
   onToggleMaximize,
   onClose,
-  actions,
   showTitle,
 }: AppTitleBarProps) {
   const { t } = useTranslation();
@@ -69,11 +64,6 @@ export function AppTitleBar({
       </div>
 
       <div className="no-drag ms-1 flex items-center">
-        {actions}
-        {/* Faint on purpose: it separates the app's buttons from the window's,
-            it is not a border. Only drawn when there is something on the other
-            side of it. */}
-        {actions && <span aria-hidden className="mx-1.5 h-5 w-px bg-line" />}
         {/* No gap: minimise, maximise and close read as one control, the way
             they do in every window they appear in. */}
         <div className="flex items-center">
@@ -89,7 +79,7 @@ export function AppTitleBar({
           <IconButton
             label={t("close")}
             onClick={onClose}
-            className="hover:bg-danger hover:text-white"
+            className="hover:bg-danger hover:text-on-accent"
           >
             <X size={17} />
           </IconButton>

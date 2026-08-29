@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
 import { TextInput } from "../../components/ui/TextInput";
+import { Card } from "../../components/ui/Card";
 import { cn } from "../../lib/cn";
 import * as ipc from "../../lib/ipc";
 import type { ToastType } from "../../types/feedback";
@@ -94,7 +95,7 @@ export function ApiKeyPanel({ notify, onStatusChange }: Props) {
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-line bg-surface p-3">
+    <Card padding="sm" className="flex flex-col gap-2">
       <div className="flex gap-2">
         <TextInput
           type="password"
@@ -166,6 +167,6 @@ export function ApiKeyPanel({ notify, onStatusChange }: Props) {
           </>
         )}
       </div>
-    </div>
+    </Card>
   );
 }

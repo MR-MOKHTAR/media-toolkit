@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 
@@ -7,58 +7,26 @@ import { fileNameOf } from "../../lib/format";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import type { JobKind } from "../jobs/types";
-import { useHistoryPanel } from "../jobs/useHistoryPanel";
 import { useJobs } from "../jobs/useJobs";
+import { useOutputFolder } from "./useOutputFolder";
 
 /**
- * Starting a media job, shared by all five tools.
+ * Starting a media job, shared by every tool that runs one.
  *
- * Also owns the output folder, which defaults to the folder the input came
- * from -- that is where people expect the result, and it means the common case
- * needs no interaction at all.
+ * The output folder is `useOutputFolder`'s -- the half of this that stands on
+ * its own -- and it is returned from here unchanged so the screens that read
+ * `job.outputDir` and call `job.followInput` see no difference.
  */
 export function useMediaJob(
-  kind: JobKind,
+  kind: Exclude<JobKind, "download">,
   command: string,
   notify: (type: ToastType, message: string) => void,
-  /**
-   * Whether starting the job opens this tool's history panel.
-   *
-   * True for every tool that produces a file: the form has nothing more to show,
-   * and the panel is where the progress bar for what was just started appears.
-   * The screen itself stays put -- it used to navigate to Tasks instead, which
-   * threw away the loaded file and the chosen settings to show a list of every
-   * tool's work. Transcribe passes false: its result is text, and it shows that
-   * text in place.
-   */
-  { openHistoryOnStart = true }: { openHistoryOnStart?: boolean } = {},
 ) {
   const { t } = useTranslation();
   const { addExternalJob } = useJobs();
-  const { openPanel } = useHistoryPanel();
-  const [outputDir, setOutputDir] = useState("");
+  const folder = useOutputFolder(kind, notify);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (outputDir) return;
-    void ipc.getDefaultDownloadPath().then(setOutputDir).catch(() => undefined);
-  }, [outputDir]);
-
-  /** Defaults the output next to the source once a file is chosen. */
-  const followInput = useCallback((path: string | null) => {
-    if (!path) return;
-    const parent = path.replace(/[/\\][^/\\]+$/, "");
-    if (parent && parent !== path) setOutputDir(parent);
-  }, []);
-
-  const chooseFolder = useCallback(async () => {
-    try {
-      const selected = await ipc.chooseFolder(outputDir);
-      if (selected) setOutputDir(selected);
-    } catch {
-      notify("error", t("error_selecting_folder"));
-    }
-  }, [notify, outputDir, t]);
+  const { outputDir } = folder;
 
   const run = useCallback(
     async (request: Record<string, unknown>, title: string, detail?: string) => {
@@ -75,7 +43,6 @@ export function useMediaJob(
           detail,
         });
         notify("info", t("job_started"));
-        if (openHistoryOnStart) openPanel();
         return id;
       } catch (raw) {
         // The typed error carries the real reason -- an unreadable file, a
@@ -87,19 +54,10 @@ export function useMediaJob(
         setBusy(false);
       }
     },
-    [
-      addExternalJob,
-      command,
-      kind,
-      notify,
-      openHistoryOnStart,
-      openPanel,
-      outputDir,
-      t,
-    ],
+    [addExternalJob, command, kind, notify, outputDir, t],
   );
 
-  return { outputDir, setOutputDir, followInput, chooseFolder, run, busy };
+  return { ...folder, run, busy };
 }
 
 /** Kept as the name every screen already imports; the wording itself lives in

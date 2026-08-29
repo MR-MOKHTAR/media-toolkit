@@ -32,8 +32,7 @@ pub enum JobKind {
     Compress,
     Trim,
     Convert,
-    Resize,
-    Gif,
+    ExtractAudio,
     Transcribe,
 }
 
@@ -102,7 +101,22 @@ pub struct JobProgress {
     /// number: ffmpeg cannot report progress without a known duration.
     pub percent: Option<f64>,
     pub stage: Stage,
-    pub speed: Option<String>,
+    /// Bytes per second, not a formatted string.
+    ///
+    /// It was a `String`, which meant each engine formatted its own: yt-dlp's
+    /// `_speed_str` says "3.36MiB/s" and the direct downloader said "3.4 MB/s",
+    /// and the two appeared on adjacent rows of the same list. A number crosses
+    /// the bridge and `formatSpeed` in lib/format.ts writes it once -- in the
+    /// reader's own digits, like every other figure in the UI.
+    pub speed: Option<f64>,
+    /// ffmpeg's realtime multiplier -- `2.0` for "twice as fast as playback".
+    ///
+    /// Its own field rather than more overloading of `speed`, which it shared
+    /// until this became a number: a download's speed is bytes per second and an
+    /// encode's is a ratio, and the UI has to write "3.4 MB/s" for one and
+    /// "2.0×" for the other. One field carrying whichever the job kind happens
+    /// to mean is how the two got formatted with each other's units.
+    pub encode_rate: Option<f64>,
     pub eta_secs: Option<u64>,
     pub bytes: Option<u64>,
     pub total_bytes: Option<u64>,
@@ -116,6 +130,7 @@ impl JobProgress {
             percent: None,
             stage,
             speed: None,
+            encode_rate: None,
             eta_secs: None,
             bytes: None,
             total_bytes: None,
@@ -159,7 +174,10 @@ pub struct CancelSignal {
 }
 
 impl CancelSignal {
-    fn cancel(&self) {
+    /// Raised by `Jobs::cancel` in the app. Reachable from the crate so the
+    /// direct downloader's tests can cancel a transfer that is genuinely in
+    /// flight, which is the only way to prove the partial file survives it.
+    pub(crate) fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
     }

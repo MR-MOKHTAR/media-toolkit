@@ -12,6 +12,8 @@ import { TOOLS } from "../../app/tools";
 import { cn } from "../../lib/cn";
 import { isActiveJob } from "../../features/jobs/types";
 import { useJobs } from "../../features/jobs/useJobs";
+import { IconButton } from "../ui/Button";
+import { NAV_ROW_MARKER, navRow } from "../ui/navRow";
 import { Tooltip } from "../ui/Tooltip";
 import { AppIdentity } from "./AppIdentity";
 
@@ -20,7 +22,7 @@ import { AppIdentity } from "./AppIdentity";
  *
  * This replaces a breadcrumb bar and a home screen that between them did one
  * job: get you to a tool. The breadcrumb spent 36px on every screen telling you
- * where you were, and the home screen was a grid of the same seven tools listed
+ * where you were, and the home screen was a grid of the same tools listed
  * here -- so switching from one tool to another meant going back to a menu
  * first. A sidebar says where you are by highlighting it and gets you anywhere
  * in one click, in the space the breadcrumb was already taking.
@@ -67,7 +69,7 @@ export function AppSidebar({
       aria-label={t("nav_sidebar")}
       className={cn(
         "flex shrink-0 flex-col gap-1 border-e border-line bg-surface-soft p-2 pt-0",
-        "transition-[width] duration-[--duration-fast]",
+        "transition-[width] duration-(--duration-fast)",
         collapsed ? "w-14" : "w-60",
       )}
     >
@@ -98,19 +100,14 @@ export function AppSidebar({
         <Tooltip
           label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
         >
-          <button
-            type="button"
+          <IconButton
+            label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
             onClick={onToggle}
-            aria-label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
             aria-expanded={!collapsed}
-            className={cn(
-              "no-drag flex size-8 items-center justify-center rounded-sm text-fg-muted",
-              "transition-colors duration-[--duration-fast]",
-              "hover:bg-surface-hover hover:text-fg",
-            )}
+            className="no-drag"
           >
             <CollapseIcon size={16} />
-          </button>
+          </IconButton>
         </Tooltip>
       </div>
 
@@ -132,7 +129,12 @@ export function AppSidebar({
 
       {/* Tasks and Settings are not tools, so they sit apart from them --
           the same split the Tasks screen's own rail makes with its clear
-          button, and the one VS Code makes at the bottom of its activity bar. */}
+          button, and the one VS Code makes at the bottom of its activity bar.
+
+          A plain rule. This was an inline `border-image` gradient fading
+          `to right` -- a physical direction, so the fade ran backwards in
+          Persian and Arabic, in the one file whose header insists that
+          everything in it be logical. */}
       <div className="flex flex-col gap-1 border-t border-line pt-2">
         <NavItem
           icon={ListChecks}
@@ -176,6 +178,8 @@ function NavItem({
   busy?: boolean;
   onSelect: () => void;
 }) {
+  const state = active ? "active" : busy ? "busy" : "idle";
+
   const button = (
     <button
       type="button"
@@ -186,16 +190,29 @@ function NavItem({
       // the styled one.
       aria-label={label}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-md border-s-2 py-2 text-base",
-        "transition-colors duration-[--duration-fast]",
-        collapsed ? "justify-center px-0" : "px-2.5 text-start",
-        // Transparent rather than absent when inactive, so selecting a row
-        // moves nothing sideways.
-        active
-          ? "border-accent bg-accent-soft font-medium text-accent"
-          : busy
-            ? "border-transparent text-accent hover:bg-accent-soft"
-            : "border-transparent text-fg-soft hover:bg-surface-hover hover:text-fg",
+        navRow(state),
+        // The bar sits on the sidebar's own leading edge, which is the window
+        // edge it is docked against.
+        "border-s-2",
+        NAV_ROW_MARKER[state],
+        collapsed && "justify-center px-0",
+        // The hover nudge, as 2px of leading padding rather than a 2px
+        // translate.
+        //
+        // The row is `w-full` inside the scroll container above, so its box
+        // already ends exactly on that container's content edge -- and a
+        // transform still counts toward scrollable overflow. Nudging the box
+        // pushed 2px of it past the edge, and because `overflow-y: auto` forces
+        // `overflow-x` to `auto` as well, the tools list grew a horizontal
+        // scrollbar under it for as long as the pointer was on a row. The same
+        // mechanism the Tooltip's own comment describes; this is the other way
+        // into it.
+        //
+        // Padding cannot do that: it moves the contents within a box that has
+        // not changed size. It is also logical, so the `rtl:` override this
+        // replaces -- a physical `translate-x` needed one to nudge the correct
+        // way -- is simply gone.
+        state === "idle" && !collapsed && "hover:ps-3",
       )}
     >
       <span className="relative flex shrink-0 items-center">

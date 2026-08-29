@@ -1,9 +1,12 @@
 mod binaries;
 mod commands;
+mod direct;
 mod download;
 mod error;
 mod jobs;
+mod library;
 mod media;
+mod muxed;
 mod paths;
 mod process;
 mod settings;
@@ -21,15 +24,16 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Jobs::default())
         .setup(|app| {
-            app.manage(transcribe::LedgerState(std::sync::Mutex::new(
-                transcribe::ledger::load(app.handle()),
-            )));
-
             // A transcription killed by a SIGKILL or a power cut leaves its
             // chunk directory behind, and those are large. Nothing else ever
             // cleans them up, so a stale sweep at startup is the only thing
             // between a working install and a slowly filling /tmp.
             sweep_stale_workdirs();
+
+            // The library is created here rather than on the first save, so
+            // "your files go to ~/Downloads/Media Toolkit" is true from the
+            // moment the app is installed and the folder is there to be found.
+            library::ensure_layout(app.handle());
 
             // Checking the tools means running them, and yt-dlp takes about two
             // seconds to unpack itself. Do it here, in the background, while the
@@ -46,7 +50,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::tool_status,
             commands::update_ytdlp,
-            commands::get_default_download_path,
+            library::library_info,
+            library::library_folder,
+            library::set_library_root,
+            library::reset_library_root,
+            library::set_library_organize,
+            library::set_save_next_to_input,
             commands::probe_url,
             commands::start_download,
             commands::cancel_job,
@@ -57,14 +66,12 @@ pub fn run() {
             media::commands::probe_media,
             media::commands::estimate_compressed_size,
             media::commands::can_copy_streams,
+            media::commands::audio_copy_format,
             media::commands::start_compress,
             media::commands::start_trim,
             media::commands::start_convert,
-            media::commands::start_resize,
-            media::commands::start_gif,
+            media::commands::start_extract_audio,
             transcribe::commands::start_transcribe,
-            transcribe::commands::groq_quota,
-            transcribe::commands::estimate_transcribe_secs,
             transcribe::commands::read_transcript,
             transcribe::commands::api_key_status,
             transcribe::commands::set_api_key,

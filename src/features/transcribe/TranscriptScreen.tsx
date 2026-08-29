@@ -107,7 +107,7 @@ export function TranscriptScreen({ jobId, language, notify }: Props) {
           the box they were introducing. */}
       <div className="flex shrink-0 items-center gap-2">
         <h1
-          className="min-w-0 flex-1 truncate text-base font-medium text-fg"
+          className="min-w-0 flex-1 truncate text-lg font-medium text-fg"
           dir="ltr"
           title={job.title}
         >
@@ -165,7 +165,7 @@ export function TranscriptScreen({ jobId, language, notify }: Props) {
       )}
 
       {job.state === "failed" && job.error && (
-        <div className="flex shrink-0 items-start gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3">
+        <div className="flex shrink-0 items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 p-3">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-danger" />
           <p className="text-sm text-danger">
             {describeAppError(job.error, t, language)}

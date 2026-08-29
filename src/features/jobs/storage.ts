@@ -1,5 +1,15 @@
 import { emptyJobsState, type JobsState } from "./jobsReducer";
-import type { Job, JobKind } from "./types";
+import { SLOT_FOR_KIND, type Job, type JobKind } from "./types";
+
+/**
+ * The kinds this version knows how to draw.
+ *
+ * History outlives the app that wrote it, and a tool can go away -- resize did,
+ * once its two options moved inside compress. A stored row for a kind that no
+ * longer exists has no icon, no shelf and no name to translate, so it is
+ * dropped on load rather than rendered as a broken card.
+ */
+const KNOWN_KINDS = new Set<string>(["download", ...Object.keys(SLOT_FOR_KIND)]);
 
 const KEY = "media-toolkit-jobs-v3";
 /** The download-only history this replaces. Read once, then left alone. */
@@ -49,6 +59,11 @@ function trimForStorage(job: Job): Job {
  * because nothing is running when the app has just started. Downloads are
  * marked failed -- the file is incomplete. Media jobs are marked cancelled:
  * the source file is untouched, so there is nothing to recover from.
+ *
+ * A download revived this way keeps the request that started it, so the row it
+ * comes back as carries a retry button -- and both engines continue from the
+ * `.part` file rather than starting the transfer again. Closing the app on a
+ * download that was nearly finished now costs seconds instead of the download.
  */
 function reviveState(raw: unknown): JobsState {
   const parsed = raw as { byId?: Record<string, Job>; order?: string[] };
@@ -58,7 +73,7 @@ function reviveState(raw: unknown): JobsState {
   const order: string[] = [];
   for (const id of parsed.order.slice(0, MAX_ITEMS)) {
     const job = parsed.byId[id];
-    if (!job) continue;
+    if (!job || !KNOWN_KINDS.has(job.kind)) continue;
     byId[id] =
       job.state === "running" || job.state === "queued"
         ? {

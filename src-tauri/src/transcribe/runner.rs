@@ -10,11 +10,10 @@
 
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::chunks::{self, ChunkSpec, Segment};
 use super::groq::{self, Model};
-use super::ledger;
 use super::subtitles::{self, OutputFormat};
 use crate::binaries::{self, Tool};
 use crate::error::{AppError, AppResult};
@@ -142,8 +141,8 @@ async fn pipeline(
 
     // 3. Upload, one at a time. Concurrency here would multiply pressure on the
     //    scarcest resource in the whole feature -- a per-model audio-seconds
-    //    budget -- to shorten a job whose wall time is a fixed number of round
-    //    trips anyway.
+    //    budget nobody but Groq can see -- to shorten a job whose wall time is a
+    //    fixed number of round trips anyway.
     let client = groq::client()?;
     let mut transcribed: Vec<(ChunkSpec, Vec<Segment>)> = Vec::with_capacity(plan.len());
     let mut carry: Option<String> = None;
@@ -152,10 +151,6 @@ async fn pipeline(
         if cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
-
-        let (_, window_len) = chunks::cut_window(chunk, job.duration_secs);
-        let billed = window_len.max(10.0).ceil() as u32;
-        charge(app, job.model, billed);
 
         // Groq's prompt is a continuity hint as much as a vocabulary one: the
         // tail of what came before helps it punctuate and spell consistently
@@ -174,31 +169,10 @@ async fn pipeline(
             prompt: prompt.as_deref(),
         };
 
-        let answer = match groq::transcribe(&client, &request, path, cancel).await {
-            Ok(answer) => answer,
-            Err(error) => {
-                // A request we built wrong never reached the model and costs no
-                // audio; leaving the charge on the books would eat a budget the
-                // user did not spend.
-                if let AppError::InvalidInput { .. } | AppError::Api { .. } = &error {
-                    refund(app, job.model, billed);
-                }
-                if let AppError::RateLimited {
-                    retry_after_secs: Some(secs),
-                    ..
-                } = &error
-                {
-                    block(app, job.model, *secs);
-                }
-                return Err(error);
-            }
-        };
-
-        // Groq's own count, when it volunteered one, is better than ours -- but
-        // only ever downwards. See `Ledger::observe_remaining`.
-        if let Some(remaining) = answer.remaining_audio_secs {
-            observe(app, job.model, remaining);
-        }
+        // Nothing is caught here. A rate limit ends the job with the wait Groq
+        // asked for, and the screen turns that into a warning saying which
+        // limit was reached -- there is no local budget left to adjust.
+        let answer = groq::transcribe(&client, &request, path, cancel).await?;
 
         carry = answer
             .segments
@@ -287,7 +261,7 @@ async fn extract_audio(
                         percent: update
                             .fraction(Some(job.duration_secs))
                             .map(|f| f * PREPARE_SHARE),
-                        speed: update.speed.clone(),
+                        encode_rate: update.speed,
                         ..JobProgress::new(id, KIND, Stage::Preparing)
                     });
                 }
@@ -385,45 +359,6 @@ async fn cleanup_output(jobs: &Jobs, id: &str) {
     if let Some(path) = jobs.finish(id).await {
         let _ = std::fs::remove_file(path);
     }
-}
-
-// ------------------------------------------------------------------ ledger
-
-fn charge(app: &AppHandle, model: Model, secs: u32) {
-    with_ledger(app, |ledger| {
-        ledger.charge(model, secs, ledger::now_unix())
-    });
-}
-
-fn refund(app: &AppHandle, model: Model, secs: u32) {
-    with_ledger(app, |ledger| {
-        ledger.refund(model, secs, ledger::now_unix())
-    });
-}
-
-fn observe(app: &AppHandle, model: Model, remaining: u32) {
-    with_ledger(app, |ledger| {
-        ledger.observe_remaining(model, remaining, ledger::now_unix())
-    });
-}
-
-fn block(app: &AppHandle, model: Model, secs: u64) {
-    with_ledger(app, |ledger| {
-        ledger.block(model, ledger::now_unix() + secs)
-    });
-}
-
-/// Read, mutate, write, under the managed lock so two jobs in the network lane
-/// cannot lose each other's charges to a last-writer-wins race.
-///
-/// A poisoned lock is recovered from rather than propagated: the ledger is an
-/// estimate, and refusing to run because a previous panic left it locked would
-/// be a far worse outcome than a slightly stale count.
-fn with_ledger(app: &AppHandle, edit: impl FnOnce(&mut ledger::Ledger)) {
-    let state = app.state::<super::LedgerState>();
-    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    edit(&mut guard);
-    ledger::save(app, &guard);
 }
 
 /// The last few words of a segment, as continuity context for the next chunk.

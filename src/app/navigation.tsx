@@ -1,7 +1,7 @@
 /**
  * Navigation.
  *
- * A state machine, not a router. There are seven screens, no deep links, no
+ * A state machine, not a router. There are six screens, no deep links, no
  * address bar (the window is undecorated), no SEO and a bundle small enough
  * that code splitting would not pay for itself. react-router would cost about
  * 25 KB and a whole mental model for none of what it is good at.
@@ -20,22 +20,68 @@ export type ToolName =
   | "compress"
   | "trim"
   | "convert"
-  | "resize"
-  | "gif"
+  | "extractAudio"
   | "transcribe";
 
+/** The panels in Settings. Named here rather than inside the screen because a
+ *  route can point at one: the tool forms send you to the panel that holds the
+ *  choice you were looking at, not to the top of Settings to find it yourself.
+ *
+ *  The order the rail lists them in is `SETTINGS_SECTIONS`, in
+ *  features/settings/useSettingsSection -- a route is a name, not a position. */
+export type SettingsSection =
+  | "general"
+  | "storage"
+  | "downloads"
+  | "transcription"
+  | "tools";
+
+/**
+ * Whether the tool's form is open over its list.
+ *
+ * In the route rather than in the screen's own `useState`, and the reason is a
+ * flow that already exists: two forms send the user to Settings mid-edit -- the
+ * download screen's quality hint and the transcribe screen's model row -- and
+ * both expect to be found as they were left on the way back. Local state cannot
+ * survive that, because leaving unmounts the screen. Recorded here, `replace`
+ * before the trip carries the open form and its half-filled field across, and
+ * `back` restores both.
+ *
+ * It also means Escape closes the form and then, pressed again, leaves the
+ * screen -- one key, two steps, in the order the user expects.
+ */
+interface Composing {
+  /** True while the form dialog is open. */
+  composing?: boolean;
+}
+
+/**
+ * The six screens that are a tool: a list of what it has done, with its form
+ * over the top when `composing`.
+ *
+ * Named as a type of its own because `ToolScreen` is written once for all six
+ * and has to be able to say what it takes. `ToolRoute["name"]` is exactly
+ * `JobKind` -- the same six strings -- which is what lets that screen read the
+ * tool it is showing off the route rather than being told twice.
+ */
+export type ToolRoute =
+  /** `link` is the half-filled field, kept across a trip to Settings and back:
+   *  the quality row sends people there mid-paste, and coming back to an empty
+   *  box is the price of a setting they went to look at. */
+  | ({ name: "download"; link?: string } & Composing)
+  /** `file` is what lets a drop on a tool's list open its form with the file
+   *  already loaded, instead of dropping the user on an empty one. */
+  | ({ name: ToolName; file?: string } & Composing);
+
 export type Route =
-  | { name: "download" }
+  | ToolRoute
   | { name: "jobs" }
-  | { name: "settings" }
+  | { name: "settings"; section?: SettingsSection }
   /** One finished or running transcription. The only screen that is about a
    *  single job rather than about a tool, which is why it carries an id: it is
    *  reached both by starting a transcription and by reopening one from the
    *  job list days later. */
-  | { name: "transcript"; jobId: string }
-  /** `file` is what lets a drop on the home screen open a tool with the file
-   *  already loaded, instead of dropping the user on an empty form. */
-  | { name: ToolName; file?: string };
+  | { name: "transcript"; jobId: string };
 
 interface NavigationValue {
   route: Route;

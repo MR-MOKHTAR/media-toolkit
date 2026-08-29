@@ -76,19 +76,26 @@
   --radius-xl: 1.5rem;     /* 24 -- dialogs, tool cards */
 
   /* --------------------------------------------------------- color ---
-   * One accent, one neutral ramp, three semantic, and one hue that exists
-   * only to mark audio.
+   * One accent, one neutral ramp, three semantic, and four hues that exist
+   * only to mark what a file is.
    *
-   * That last one was removed once, on the theory that icon shape alone
+   * The audio one was removed once, on the theory that icon shape alone
    * could separate audio from video inside a neutral container. It could
    * not: a grey glyph is the last thing read on a card, so the fastest
-   * signal on the row was also its quietest. Video reuses the accent and
-   * GIF reuses the warning hue, so telling three kinds apart costs exactly
-   * one new colour. */
+   * signal on the row was also its quietest.
+   *
+   * There are four now rather than one because a download is no longer
+   * always media -- an installer, an archive and an image are ordinary
+   * results, and they arrive in a list where the eye is scanning for one
+   * row. Video still reuses the accent, and document and unknown share the
+   * neutral, so seven kinds cost three new colours rather than six. */
   --color-canvas: #f3f5f9;
   --color-surface: #ffffff;
   --color-surface-soft: #f7f9fc;
-  --color-surface-hover: #f1f5fb;
+  /* The neutral hover fill. Tinted a degree towards the accent rather than
+     left on the canvas' blue-grey, so a plain row hover and an accent row
+     hover read as the same gesture at two intensities. */
+  --color-surface-hover: #eff6f7;
 
   --color-fg: #172033;
   --color-fg-soft: #526079;
@@ -96,20 +103,48 @@
 
   --color-line: #dfe4ec;
   --color-line-strong: #cfd6e2;
+  /* The hairline on a translucent surface. This existed as `border-line/60`
+     in six places before it had a name, which meant the glass panels were
+     bordered by an undeclared sixth line colour that no dark override could
+     reach. Solid rather than an alpha of --color-line: a hairline that blends
+     with whatever happens to slide underneath a glass panel is not a hairline. */
+  --color-line-soft: #e4e9f0;
 
-  --color-accent: #1769e0;
-  --color-accent-hover: #0e59c4;
-  --color-accent-soft: #eaf2ff;
-  --color-accent-line: #bcd5fb;
+  /* The tint behind a modal or an overlay panel. Was `bg-fg/20` in one place
+     and `bg-fg/25` in another, for the same job. */
+  --color-scrim: rgba(23, 32, 51, 0.25);
+
+  /* A step deeper than the teal the fills would have taken on their own.
+     `text-accent` is a small-text colour in a dozen places -- nav rows, chips,
+     the checked option in a picker -- and at #0d9488 that text sat at 3.7:1 on
+     white, under the 4.5:1 floor. This clears it at 4.8:1 and is the same hue,
+     so nothing about the accent reads differently. */
+  --color-accent: #0b8177;
+  --color-accent-hover: #0f766e;
+  --color-accent-soft: #e6fbf7;
+  --color-accent-line: #a7e8de;
   --color-on-accent: #ffffff;
 
-  --color-success: #13936b;
+  /* Green, not the blue-green it was. The accent is teal now, and a success
+     tick at #13936b was a shade of the same hue -- on a card that shows both,
+     "done" and "the accent" have to be two colours, not two brightnesses. */
+  --color-success: #12924e;
   --color-danger: #db3d4b;
   --color-warning: #d4870d;
 
   /* Audio. Far enough from the accent blue to read as a different kind at a
      glance, and not close to danger red or success green. */
   --color-media-audio: #7048c9;
+  /* Images. Warmer and deeper than the warning amber it sits closest to --
+     that one only ever appears as text, never as a filled chip, so the two
+     never share a surface. */
+  --color-media-image: #b0620a;
+  /* Archives. Blue, which the accent vacated when it moved to teal -- and the
+     one cool hue left that is neither the accent nor success. */
+  --color-media-archive: #2563c9;
+  /* Installers and packages. Distinct from danger red: that is a destructive
+     action, this is a kind of file, and they appear on the same card. */
+  --color-media-app: #c0417a;
 
   /* -------------------------------------------------------- motion ---
    * Two durations and one curve. */
@@ -121,6 +156,58 @@
   /* The form card. Far lighter than the panel shadow above: a card that sits
      in the middle of the canvas needs to lift off it, not float over it. */
   --shadow-card: 0 10px 30px rgba(31, 43, 68, 0.07);
+  /* Hover. Every lift in the app used Tailwind's own `shadow-md`, which is
+     pure black at 10% -- invisible against the #111824 surface dark mode
+     paints cards on, so the interaction simply vanished in one theme. A token
+     gets the dark override the defaults can never have. */
+  --shadow-raise: 0 6px 18px rgba(31, 43, 68, 0.1);
+
+  /* ------------------------------------------------------- modern ---
+   * Gradients, glows and glass for the modernisation pass. Every token
+   * here is consumed only by the components that were updated; nothing
+   * in the base layer depends on them, so the old look is still the
+   * fallback if a class is missing. */
+  --gradient-accent: linear-gradient(135deg, #0b8177, #22c7b8);
+  --gradient-accent-hover: linear-gradient(135deg, #0f766e, #10a99b);
+  /* The halo that turns behind a tool's mark. Conic rather than linear because
+     it is rotated: a linear gradient spun around its centre reverses direction
+     twice a turn and reads as a wobble, while a conic one has no seam to catch
+     the eye. It is always drawn blurred, so the two stops are the whole
+     definition -- an accent arc and the violet the app already uses for audio,
+     over a transparent remainder that becomes the gap in the ring. */
+  --gradient-halo: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    #22c7b8 90deg,
+    #7048c9 190deg,
+    transparent 300deg
+  );
+  --shadow-glow: 0 0 20px rgba(11, 129, 119, 0.16);
+  --shadow-glow-accent: 0 4px 24px rgba(11, 129, 119, 0.26);
+
+  /* The ring on a focused text field. A token because it was written out in
+     full in three places, and because a focus ring is exactly the kind of
+     thing that must be identical everywhere or it reads as a rendering bug.
+     The controls that are not typed into keep the global :focus-visible
+     outline instead -- one idiom for entry, one for everything else. */
+  --shadow-focus: 0 0 0 3px var(--color-accent-soft), var(--shadow-glow);
+
+  --color-surface-glass: rgba(255, 255, 255, 0.55);
+  /* A length, not `blur(16px)`, and named into Tailwind's --blur-* namespace
+     so it generates `backdrop-blur-glass`. As a full filter function it had no
+     working utility form at all: the seven `backdrop-[var(...)]` sites this
+     replaces compiled to nothing, because `backdrop` in v4 is the ::backdrop
+     variant rather than a utility, so no surface in the app was ever blurred.
+     `backdrop-blur-(--glass-blur)` would not have fixed it either -- that
+     expands to blur(blur(16px)). */
+  --blur-glass: 16px;
+
+  /* ------------------------------------------------------- states ---
+   * One disabled treatment. There were four: 40 on the segmented options,
+   * 45 on the buttons, 50 on the model picker and 70 on the check rows,
+   * so the same dead control faded by a different amount depending on
+   * which screen it was on. */
+  --opacity-disabled: 45%;
 }
 
 /* Dark is a token override, not a second stylesheet. `data-theme` wins in
@@ -132,7 +219,7 @@
     --color-canvas: #0c111a;
     --color-surface: #111824;
     --color-surface-soft: #151e2c;
-    --color-surface-hover: #1a2535;
+    --color-surface-hover: #17262e;
 
     --color-fg: #edf3fb;
     --color-fg-soft: #a8b4c6;
@@ -140,21 +227,44 @@
 
     --color-line: #263244;
     --color-line-strong: #344258;
+    --color-line-soft: #1e2837;
+    --color-scrim: rgba(0, 0, 0, 0.5);
 
-    --color-accent: #4c8df6;
-    --color-accent-hover: #67a0fb;
-    --color-accent-soft: #152d51;
-    --color-accent-line: #28528a;
-    --color-on-accent: #08111f;
+    --color-accent: #2dd4bf;
+    --color-accent-hover: #5eead4;
+    --color-accent-soft: #0c3b38;
+    --color-accent-line: #1c6b62;
+    /* Near-black on a light teal fill, the same inversion the blue accent
+       used: at this lightness the accent is the light surface, so white
+       label text on it would sit at barely 1.6:1. */
+    --color-on-accent: #04161a;
 
-    --color-success: #40c99a;
+    --color-success: #45d17f;
     --color-danger: #f06470;
     --color-warning: #f0ac40;
 
     --color-media-audio: #a68bfa;
+    --color-media-image: #e8944a;
+    --color-media-archive: #6aa5fb;
+    --color-media-app: #f07aa8;
 
     --shadow-panel: 0 22px 70px rgba(0, 0, 0, 0.5);
     --shadow-card: 0 12px 34px rgba(0, 0, 0, 0.32);
+    --shadow-raise: 0 6px 20px rgba(0, 0, 0, 0.42);
+
+    --gradient-accent: linear-gradient(135deg, #2dd4bf, #5eead4);
+    --gradient-accent-hover: linear-gradient(135deg, #22b8a6, #4bd8c4);
+    --gradient-halo: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      #2dd4bf 90deg,
+      #a68bfa 190deg,
+      transparent 300deg
+    );
+    --shadow-glow: 0 0 24px rgba(45, 212, 191, 0.18);
+    --shadow-glow-accent: 0 4px 28px rgba(45, 212, 191, 0.3);
+    --color-surface-glass: rgba(17, 24, 36, 0.6);
+    --blur-glass: 20px;
   }
 }
 
@@ -213,10 +323,13 @@
     padding: 0;
   }
 
+  /* No border-radius here. It was setting --radius-sm on *any* focused
+     element, so a focused card, dialog or nav row silently lost its own
+     corner the moment it was tabbed to. The outline follows the element's
+     real radius on its own. */
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-    border-radius: var(--radius-sm);
   }
 
   /* Numbers that are read as quantities line up in columns and do not jitter
@@ -276,5 +389,101 @@
     /* margin-inline-start, not left: the sweep has to travel with the
        writing direction or it runs backwards in Persian and Arabic. */
     margin-inline-start: 100%;
+  }
+}
+
+/* Shimmer that sweeps across the progress bar fill to give it life. */
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+/* The dialog's entrance.
+ *
+ * These replace `animate-in` and `fade-in-0`, which are `tailwindcss-animate`
+ * classes -- a plugin this project does not install, so both compiled to
+ * nothing and the confirm dialog appeared with no transition at all. Written
+ * as keyframes rather than by adding the plugin for one class pair, because
+ * everything else in the app already animates with framer-motion or with the
+ * keyframes below, and because the reduced-motion block above covers these.
+ *
+ * scale-in animates the `scale` property, never `transform`, and that is the
+ * whole trick. The dialog is centred with -translate-x-1/2 -translate-y-1/2,
+ * which Tailwind v4 compiles to the *`translate` property* rather than to a
+ * transform -- and the individual `translate`/`rotate`/`scale` properties apply
+ * on top of `transform`, they do not replace it. So a keyframe that said
+ * `transform: translate(-50%, -50%) scale(...)` -- as this one used to, written
+ * when v3 compiled the utility into `transform` and the two could not both
+ * apply -- had its offset counted twice: the dialog opened a full width up and
+ * to the left of centre, then snapped into place the moment the animation ended
+ * and its transform stopped applying.
+ *
+ * Animating `scale` alone composes correctly with the centring translate, and
+ * leaves the keyframe saying only what it is actually about. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* The halo behind a tool's mark, turning.
+ *
+ * Its own keyframes rather than Tailwind's `spin`: v4 only emits the keyframes
+ * for an animation it can see used through a theme value, and this is an
+ * arbitrary `animate-[...]` with a nine-second duration, so `@keyframes spin`
+ * would never be generated and the halo would sit still. */
+@keyframes halo-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The glow under a tool's mark, breathing.
+ *
+ * Scale and opacity only, on an element that is already blurred and sits behind
+ * an opaque tile -- so nothing here can move a pixel of text or an edge the eye
+ * is trying to hold still. Four seconds is deliberately slower than anything
+ * else in the app: this is the one thing on the screen that moves while the
+ * user is doing nothing, and at two seconds it read as a control asking to be
+ * clicked rather than as the surface being alive. */
+@keyframes aura-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.8;
+  }
+}
+
+/* A gentle scale pulse for drag-over icons. */
+@keyframes subtle-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.85;
   }
 }

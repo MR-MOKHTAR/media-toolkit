@@ -42,7 +42,7 @@ export function AppIdentity({ className }: { className?: string }) {
       <span
         data-tauri-drag-region
         dir="auto"
-        className="min-w-0 truncate text-sm font-semibold text-fg"
+        className="min-w-0 truncate text-base font-semibold text-fg"
       >
         {t("app_name")}
       </span>

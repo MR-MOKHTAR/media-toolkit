@@ -96,13 +96,3 @@ export function formatWait(
   const value = Math.ceil(seconds / 3600);
   return t("wait_hours", { formatted: formatCount(value, language) });
 }
-
-/**
- * Audio-seconds as minutes, for the quota line.
- *
- * Seconds are the unit Groq meters in and nobody thinks in: "7,200 left" means
- * nothing, "120 minutes left" is immediately a decision.
- */
-export function formatMinutes(seconds: number, language: string): string {
-  return formatCount(Math.floor(Math.max(0, seconds) / 60), language);
-}

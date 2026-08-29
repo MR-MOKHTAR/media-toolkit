@@ -7,6 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -17,9 +18,10 @@ import type {
   DownloadRequest,
   JobProgress,
   JobStatusEvent,
-  Quota,
+  JobSummary,
+  LibraryInfo,
+  LibrarySlot,
   ToolStatus,
-  TranscribeModel,
   TranscriptText,
   UpdateResult,
   UrlInfo,
@@ -44,8 +46,30 @@ export const getToolStatus = () => invoke<ToolStatus>("tool_status");
  *  YouTube changes something. */
 export const updateYtdlp = () => invoke<UpdateResult>("update_ytdlp");
 
-export const getDefaultDownloadPath = () =>
-  invoke<string>("get_default_download_path");
+// ---------------------------------------------------------------- library
+//
+// Where the app's own files live. Rust owns the layout -- see `library.rs` --
+// so no screen ever builds an output path itself.
+
+/** The folder for one kind of result, created on the way out. */
+export const getLibraryFolder = (slot: LibrarySlot) =>
+  invoke<string>("library_folder", { slot });
+
+export const getLibraryInfo = () => invoke<LibraryInfo>("library_info");
+
+/** Rejects a folder the app cannot write to, so the failure lands in the
+ *  picker rather than in the first download that uses it. */
+export const setLibraryRoot = (path: string) =>
+  invoke<LibraryInfo>("set_library_root", { path });
+
+export const resetLibraryRoot = () =>
+  invoke<LibraryInfo>("reset_library_root");
+
+export const setLibraryOrganize = (enabled: boolean) =>
+  invoke<LibraryInfo>("set_library_organize", { enabled });
+
+export const setSaveNextToInput = (enabled: boolean) =>
+  invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
 export const probeUrl = (url: string) => invoke<UrlInfo>("probe_url", { url });
 
@@ -59,8 +83,7 @@ export const cancelAllJobs = () => invoke<void>("cancel_all_jobs");
 
 /** Jobs the backend is still running. The webview reloads on every save in
  *  dev, and would otherwise lose track of work that is still going. */
-export const listJobs = () =>
-  invoke<{ id: string; kind: string; title: string }[]>("list_jobs");
+export const listJobs = () => invoke<JobSummary[]>("list_jobs");
 
 export const revealInFolder = (path: string) =>
   invoke<void>("reveal_in_folder", { path });
@@ -87,16 +110,6 @@ export async function chooseMediaFile(defaultPath?: string) {
 }
 
 // ------------------------------------------------------------- transcribe
-
-/** Groq's remaining audio-seconds for a model, as best this machine can tell.
- *  See the note in the Rust `ledger`: it can only ever be optimistic, so the
- *  screen warns on it and never blocks. */
-export const groqQuota = (model: TranscribeModel) =>
-  invoke<Quota>("groq_quota", { model });
-
-/** What a file of this length will cost, overlaps included. */
-export const estimateTranscribeSecs = (durationSecs: number) =>
-  invoke<number>("estimate_transcribe_secs", { durationSecs });
 
 /** Reads a finished transcript back for display. Narrow by design -- the
  *  backend checks the extension and the size, because the webview names the
@@ -127,6 +140,28 @@ export const testApiKey = () => invoke<void>("test_api_key");
  * test and is dead for every user.
  */
 export const copyText = (text: string) => writeText(text);
+
+/**
+ * Paints the native window and the webview's own base layer in the theme's
+ * canvas colour.
+ *
+ * The webview has a background of its own, underneath the document, and a
+ * resize repaints from that before any CSS applies. On Windows that showed as
+ * a white flash across the whole window on every minimise and maximise in dark
+ * mode -- the one frame where WebView2's default white was all there was to
+ * draw. Setting it once per theme change means the worst case is a frame of
+ * the right colour.
+ *
+ * Failure is ignored: this is cosmetic, and it is unavailable in a plain
+ * browser (`vite dev` without Tauri) and on mobile.
+ */
+export const setWindowBackground = async (color: string) => {
+  try {
+    await getCurrentWindow().setBackgroundColor(color);
+  } catch {
+    // No native window to colour, or a webview that does not support it.
+  }
+};
 
 export const onJobProgress = (
   handler: (payload: JobProgress) => void,

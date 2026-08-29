@@ -7,8 +7,42 @@
       name="description"
       content="Download media from the web and convert, compress, trim, and resize it — all offline."
     />
-    <meta name="theme-color" content="#000000" />
+    <!-- Tells the engine the document has both. Without it WebView2 composites
+         a white page background under everything and shows it for a frame
+         whenever the window is resized, restored or un-minimised. -->
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0c111a" />
     <title>Media Toolkit</title>
+
+    <!--
+      The theme, applied before the first pixel.
+
+      React sets `html.dark` in an effect, which is one paint too late: the
+      window opened light, then flipped, and on Windows the same white frame
+      came back on every minimise and maximise because a resize repaints the
+      webview from its own background colour before React has anything to say.
+      Both of those are fixed here rather than in CSS, because CSS cannot read
+      the stored preference and a media query would answer for the OS, not for
+      the app's own toggle.
+
+      Kept in sync with THEME_STORAGE_KEY and the canvas tokens by hand -- this
+      is four lines of literals ahead of the bundle on purpose, and putting it
+      behind an import would put it back after the first paint.
+    -->
+    <script>
+      (function () {
+        var dark = true;
+        try {
+          dark = localStorage.getItem("downloader-theme") !== "light";
+        } catch (error) {
+          // Storage disabled. The app's own default is dark.
+        }
+        var root = document.documentElement;
+        if (dark) root.classList.add("dark");
+        root.style.background = dark ? "#0c111a" : "#f3f5f9";
+        root.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
   </head>
 
   <body>
