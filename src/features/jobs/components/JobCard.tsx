@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  FileText,
   FolderOpen,
   Loader2,
   RotateCcw,
@@ -45,9 +44,6 @@ interface JobCardProps {
   /** Runs an unfinished download again, continuing from what it already got.
    *  Only offered when the job carries the request that started it. */
   onRetry: (id: string) => void;
-  /** Opens the transcript screen for a finished Whisper job. Optional because
-   *  most lists of jobs have nowhere to navigate to. */
-  onViewTranscript?: (id: string) => void;
 }
 
 /** What a download sets as its detail when the user picked audio. */
@@ -78,10 +74,6 @@ function fileKindOfJob(job: Job): FileKind {
   // Whatever container it landed in, the result of this tool is audio -- and it
   // is known before the file exists, which the extension cannot be.
   if (job.kind === "extractAudio") return "audio";
-  // Before the output path is consulted, not after: a finished transcript is a
-  // .srt, which is a document, but saying so here keeps the icon right from the
-  // moment the job starts.
-  if (job.kind === "transcribe") return "document";
 
   if (job.outputPath) return fileKindOf(job.outputPath);
   const fromTitle = fileKindOf(job.title);
@@ -141,7 +133,6 @@ function JobCardComponent({
   onRemove,
   onReveal,
   onRetry,
-  onViewTranscript,
 }: JobCardProps) {
   const { t } = useTranslation();
   const active = job.state === "running" || job.state === "queued";
@@ -158,11 +149,6 @@ function JobCardComponent({
   const retryable = Boolean(
     job.request && (job.state === "failed" || job.state === "cancelled"),
   );
-  // The card's stretched target still reveals the file, for every kind. Making
-  // it mean something different for one of them would contradict reveal_hint,
-  // which is on every other card in the same list.
-  const viewable = revealable && job.kind === "transcribe" && onViewTranscript;
-
   /* Whatever is known about the file, as the middle group of the metadata line
      between the status and the date. Built as a list so the `·` separators
      fall between whatever actually turned up, rather than every token having
@@ -321,15 +307,6 @@ function JobCardComponent({
       </div>
 
       <div className="relative flex shrink-0 items-center gap-1">
-        {viewable && (
-          <IconButton
-            variant="accent"
-            label={t("transcript_view")}
-            onClick={() => onViewTranscript(job.id)}
-          >
-            <FileText size={16} />
-          </IconButton>
-        )}
         {retryable && (
           <IconButton
             variant="accent"

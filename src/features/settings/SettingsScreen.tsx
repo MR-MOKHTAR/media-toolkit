@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  Captions,
   Download,
   FolderOpen,
   SlidersHorizontal,
@@ -15,12 +14,10 @@ import { navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
 import type { AppLanguage } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
-import { ApiKeyPanel } from "./ApiKeyPanel";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { GeneralPanel } from "./GeneralPanel";
 import { StoragePanel } from "./StoragePanel";
 import { ToolsPanel } from "./ToolsPanel";
-import { TranscriptionPanel } from "./TranscriptionPanel";
 import { SETTINGS_SECTIONS, useSettingsSection } from "./useSettingsSection";
 
 interface Props {
@@ -72,8 +69,6 @@ const SECTIONS: Record<SettingsSection, SectionDefinition> = {
   },
   storage: {
     labelKey: "storage",
-    // The folder note, promoted: it says what the panel is for *and* the one
-    // caveat about it, which is exactly what a description under the heading is.
     noteKey: "library_note",
     icon: FolderOpen,
   },
@@ -81,11 +76,6 @@ const SECTIONS: Record<SettingsSection, SectionDefinition> = {
     labelKey: "settings_downloads",
     noteKey: "settings_downloads_note",
     icon: Download,
-  },
-  transcription: {
-    labelKey: "transcription",
-    noteKey: "settings_transcription_note",
-    icon: Captions,
   },
   tools: {
     labelKey: "bundled_tools",
@@ -201,13 +191,6 @@ export function SettingsScreen({
     ),
     storage: <StoragePanel notify={notify} />,
     downloads: <DownloadsPanel />,
-    transcription: (
-      <>
-        <TranscriptionPanel />
-        <ApiKeyPanel notify={notify} />
-        <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
-      </>
-    ),
     tools: (
       <>
         <ToolsPanel notify={notify} />

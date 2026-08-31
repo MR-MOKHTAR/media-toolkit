@@ -13,7 +13,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from "./mediaKind";
 import type {
-  ApiKeyStatus,
   AppError,
   DownloadRequest,
   JobProgress,
@@ -22,7 +21,6 @@ import type {
   LibraryInfo,
   LibrarySlot,
   ToolStatus,
-  TranscriptText,
   UpdateResult,
   UrlInfo,
 } from "../features/jobs/types";
@@ -108,27 +106,6 @@ export async function chooseMediaFile(defaultPath?: string) {
   });
   return typeof selected === "string" ? selected : null;
 }
-
-// ------------------------------------------------------------- transcribe
-
-/** Reads a finished transcript back for display. Narrow by design -- the
- *  backend checks the extension and the size, because the webview names the
- *  path and a general file read would be an arbitrary-read primitive. */
-export const readTranscript = (path: string) =>
-  invoke<TranscriptText>("read_transcript", { path });
-
-/** Whether a Groq key is stored, and its last four characters. The key itself
- *  is never returned: Rust makes every HTTP call, so it has no reason to exist
- *  on this side of the bridge. */
-export const apiKeyStatus = () => invoke<ApiKeyStatus>("api_key_status");
-
-export const setApiKey = (key: string) => invoke<void>("set_api_key", { key });
-
-export const clearApiKey = () => invoke<void>("clear_api_key");
-
-/** Checks the key that is actually stored, not one passed in -- the saved key
- *  is the thing that can be wrong. */
-export const testApiKey = () => invoke<void>("test_api_key");
 
 /**
  * Copies text to the system clipboard.

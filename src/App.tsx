@@ -14,8 +14,7 @@ import { isMediaToolRoute, MEDIA_TOOLS } from "./features/media/tools";
 import { DragDropProvider } from "./features/media/useDragDrop";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ToolScreen } from "./features/tools/ToolScreen";
-import { TranscribeForm } from "./features/transcribe/TranscribeForm";
-import { TranscriptScreen } from "./features/transcribe/TranscriptScreen";
+
 import { useAppPreferences } from "./hooks/useAppPreferences";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { useSidebarCollapsed } from "./hooks/useSidebarCollapsed";
@@ -125,31 +124,7 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
                   )}
                 </ToolScreen>
               )}
-              {route.name === "transcribe" && (
-                <ToolScreen route={route} language={language}>
-                  {(close) => (
-                    <TranscribeForm
-                      initialFile={route.file}
-                      // The only media tool that can fail for being offline, so
-                      // it is the only one that needs to know.
-                      isOnline={isOnline}
-                      notify={notify}
-                      onDone={close}
-                    />
-                  )}
-                </ToolScreen>
-              )}
-              {route.name === "transcript" && (
-                <TranscriptScreen
-                  // Keyed by job, so reopening a different transcript
-                  // remounts rather than showing the previous one's text
-                  // while the new file is still being read.
-                  key={route.jobId}
-                  jobId={route.jobId}
-                  language={language}
-                  notify={notify}
-                />
-              )}
+
             </main>
           </div>
 

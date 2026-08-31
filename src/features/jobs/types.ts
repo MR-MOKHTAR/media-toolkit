@@ -5,8 +5,7 @@ export type JobKind =
   | "compress"
   | "trim"
   | "convert"
-  | "extractAudio"
-  | "transcribe";
+  | "extractAudio";
 
 export type JobState =
   | "queued"
@@ -16,16 +15,13 @@ export type JobState =
   | "cancelled";
 
 /** What the job is doing. `merging` and `finalizing` exist because those phases
- *  sit at 100% for a while, and a stuck bar needs an explanation.
- *  `transcribing` is its own stage because the work is happening on Groq's
- *  machines, not this one, and "Processing" would claim otherwise. */
+ *  sit at 100% for a while, and a stuck bar needs an explanation. */
 export type JobStage =
   | "queued"
   | "preparing"
   | "downloading"
   | "merging"
   | "encoding"
-  | "transcribing"
   | "finalizing";
 
 /** Which budget ran out. The hour recovers in minutes and the day does not, so
@@ -144,8 +140,7 @@ export type LibrarySlot =
   | "files"
   | "compressed"
   | "trimmed"
-  | "converted"
-  | "transcripts";
+  | "converted";
 
 /** Which shelf each tool writes to. Kept beside the type so adding a tool has
  *  exactly one place to answer "where does its output go". */
@@ -154,7 +149,6 @@ export const SLOT_FOR_KIND: Record<Exclude<JobKind, "download">, LibrarySlot> = 
   trim: "trimmed",
   convert: "converted",
   extractAudio: "audio",
-  transcribe: "transcripts",
 };
 
 export interface LibraryInfo {
@@ -210,35 +204,6 @@ export interface UpdateResult {
   changed: boolean;
 }
 
-/** The two Groq Whisper models. Each has its own audio-seconds budget, which is
- *  why switching model is real advice when one of them runs out. */
-export type TranscribeModel = "whisperLargeV3" | "whisperLargeV3Turbo";
-
-export type TranscriptFormat = "txt" | "srt" | "vtt";
-
-export interface TranscribeRequest {
-  input: string;
-  outputDir: string;
-  outputName?: string;
-  model: TranscribeModel;
-  /** ISO-639-1, or omitted to let Whisper detect it. */
-  language?: string;
-  translate: boolean;
-  format: TranscriptFormat;
-  prompt?: string;
-}
-
-export interface ApiKeyStatus {
-  present: boolean;
-  /** The last four characters, so two keys can be told apart. The key itself
-   *  never crosses into the webview. */
-  hint: string | null;
-}
-
-export interface TranscriptText {
-  text: string;
-  truncated: boolean;
-}
 
 export const isActiveJob = (job: Job) =>
   job.state === "queued" || job.state === "running";

@@ -1,7 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
-import { useNavigation } from "../../../app/navigation";
 import type { Job } from "../types";
 import { useJobs } from "../useJobs";
 import { JobCard } from "./JobCard";
@@ -31,7 +30,6 @@ export function JobList({
   empty: ReactNode;
 }) {
   const { state, cancel, remove, reveal, retry } = useJobs();
-  const { go } = useNavigation();
 
   const cancelling = useMemo(() => new Set(state.cancelling), [state.cancelling]);
 
@@ -57,7 +55,6 @@ export function JobList({
               onRemove={remove}
               onReveal={(path) => void reveal(path)}
               onRetry={(id) => void retry(id)}
-              onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
             />
           </motion.li>
         ))}

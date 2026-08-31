@@ -20,8 +20,7 @@ export type ToolName =
   | "compress"
   | "trim"
   | "convert"
-  | "extractAudio"
-  | "transcribe";
+  | "extractAudio";
 
 /** The panels in Settings. Named here rather than inside the screen because a
  *  route can point at one: the tool forms send you to the panel that holds the
@@ -33,7 +32,6 @@ export type SettingsSection =
   | "general"
   | "storage"
   | "downloads"
-  | "transcription"
   | "tools";
 
 /**
@@ -76,12 +74,7 @@ export type ToolRoute =
 export type Route =
   | ToolRoute
   | { name: "jobs" }
-  | { name: "settings"; section?: SettingsSection }
-  /** One finished or running transcription. The only screen that is about a
-   *  single job rather than about a tool, which is why it carries an id: it is
-   *  reached both by starting a transcription and by reopening one from the
-   *  job list days later. */
-  | { name: "transcript"; jobId: string };
+  | { name: "settings"; section?: SettingsSection };
 
 interface NavigationValue {
   route: Route;
