@@ -20,6 +20,7 @@ import type {
   JobSummary,
   LibraryInfo,
   LibrarySlot,
+  PlaylistListing,
   ToolStatus,
   UpdateResult,
   UrlInfo,
@@ -70,6 +71,14 @@ export const setSaveNextToInput = (enabled: boolean) =>
   invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
 export const probeUrl = (url: string) => invoke<UrlInfo>("probe_url", { url });
+
+/** The videos behind a playlist link.
+ *
+ *  Separate from `probeUrl` because it is the slow half -- yt-dlp walking a
+ *  whole list -- and it only runs once the user has asked for the whole thing
+ *  rather than on every paste. */
+export const listPlaylist = (url: string) =>
+  invoke<PlaylistListing>("list_playlist", { url });
 
 /** Returns a job id immediately; the work reports itself through events. */
 export const startDownload = (request: DownloadRequest) =>

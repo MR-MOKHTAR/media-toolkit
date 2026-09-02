@@ -16,7 +16,7 @@ import {
   type FileKind,
 } from "../../lib/fileKind";
 import * as ipc from "../../lib/ipc";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes, formatCount, formatDuration } from "../../lib/format";
 import { firstUrlIn, looksLikeUrl, normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../media/components/ToolFormParts";
 import { ToolDialog } from "../tools/ToolDialog";
 import type { UrlInfo } from "../jobs/types";
-import { useDownloadForm } from "./useDownloadForm";
+import { useDownloadForm, type PlaylistChoice } from "./useDownloadForm";
 import { qualityLabel, useDownloadSettings } from "./useDownloadSettings";
 
 interface Props {
@@ -57,7 +57,7 @@ interface Props {
  * above an empty field, describing a download nobody had asked for yet.
  */
 export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { go, replace } = useNavigation();
   const [url, setUrl] = useState(initialUrl ?? "");
   // Read on mount, which is every time this screen is opened -- so a quality
@@ -96,6 +96,15 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   const fileKind: FileKind | null = info && isFile
     ? fileKindOf(info.title, info.uploader)
     : null;
+
+  /** Whether this link raises the playlist question at all: it either is a
+   *  playlist page, or it is a video that names one. */
+  const namesPlaylist = Boolean(info && (info.isPlaylist || info.inPlaylist));
+  /** Reset per link rather than remembered: "all of them" is an answer about
+   *  one particular playlist, and carrying it to the next link pasted would
+   *  queue a second list nobody asked for. */
+  const [playlist, setPlaylist] = useState<PlaylistChoice>("one");
+  useEffect(() => setPlaylist("one"), [link]);
 
   const { savePath, toolsReady, starting, selectFolder, start } = useDownloadForm({
     isOnline,
@@ -177,6 +186,10 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         mediaType,
         quality: settings.quality,
         audioFormat: settings.audioFormat,
+        // Only ever "all" for a link that raises the question. A stale choice
+        // cannot leak onto the next link -- the effect above resets it -- but
+        // the request is the wrong place to rely on that.
+        playlist: namesPlaylist ? playlist : "one",
         parallel: settings.parallel,
         link: info,
       },
@@ -300,6 +313,42 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
             ) : (
               <p className="text-xs text-fg-muted">{t("audio_quality_note")}</p>
             )}
+
+            {/* The other question this link raises, and only when it raises
+                one. The backend has been reporting that a link is a playlist
+                since the feature existed, to a form that showed a warning and
+                offered nothing -- so the answer was always "the first video",
+                and the other thirty-nine simply never arrived.
+
+                Defaults to the one video. Queueing forty downloads is not what
+                anybody means by pressing Download once, and it is the choice
+                that is expensive to undo. */}
+            {namesPlaylist && (
+              <div className="flex flex-col gap-1.5">
+                <Segmented
+                  label={t("playlist_scope")}
+                  value={playlist}
+                  onChange={setPlaylist}
+                  options={[
+                    { value: "one" as const, label: t("playlist_only_this") },
+                    {
+                      value: "all" as const,
+                      label: info.entryCount
+                        ? t("playlist_all_of", {
+                            total: formatCount(info.entryCount, i18n.language),
+                          })
+                        : t("playlist_all"),
+                    },
+                  ]}
+                />
+                {playlist === "all" && (
+                  <p className="flex items-center gap-1.5 text-xs text-fg-muted">
+                    <ListVideo size={12} className="shrink-0" />
+                    <span>{t("playlist_all_hint")}</span>
+                  </p>
+                )}
+              </div>
+            )}
           </ControlGroup>
         )
       )}
@@ -385,15 +434,14 @@ function LinkPreview({
                     .join(" · ")}
             </p>
 
-            {/* A link to a playlist downloads its first video and nothing else
-                -- `--no-playlist` is passed on every call, deliberately, because
-                queueing forty videos off one paste is not what anyone meant by
-                pressing Download once. The backend has been reporting that this
-                is a playlist, and how long it is, to nobody: the form looked
-                exactly the same as for a single video and the other thirty-nine
-                simply never arrived, with no line anywhere saying so. */}
-            {info?.isPlaylist && (
-              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-warning">
+            {/* That this link carries a playlist. The *choice* about it is a
+                control further down the form -- this line is only the label,
+                sitting with the title and channel it belongs to.
+
+                It used to be a warning, because "the first video and nothing
+                else" was all the app could do. It is not a warning any more. */}
+            {info && (info.isPlaylist || info.inPlaylist) && (
+              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-fg-muted">
                 <ListVideo size={12} className="shrink-0" />
                 {/* Two keys rather than i18next's `count`, which switches on a
                     plural rule and would need one key per form -- two in
@@ -403,8 +451,10 @@ function LinkPreview({
                     not. */}
                 <span className="truncate">
                   {info.entryCount
-                    ? t("playlist_first_only_of", { total: info.entryCount })
-                    : t("playlist_first_only")}
+                    ? t("playlist_of", {
+                        total: formatCount(info.entryCount, i18n.language),
+                      })
+                    : t("playlist_label")}
                 </span>
               </p>
             )}

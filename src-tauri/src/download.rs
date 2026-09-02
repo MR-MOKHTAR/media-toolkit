@@ -159,7 +159,21 @@ pub struct UrlInfo {
     pub uploader: Option<String>,
     pub duration_secs: Option<f64>,
     pub thumbnail: Option<String>,
+    /// The link is a playlist page in its own right: it resolves to a list of
+    /// videos rather than to one.
     pub is_playlist: bool,
+    /// The link is a *video* that also names a playlist -- the `list=` on a
+    /// `watch?v=…&list=…`, which is the shape YouTube's share button produces
+    /// from inside a playlist and by far the most common way one is pasted.
+    ///
+    /// Read off the URL rather than from yt-dlp, deliberately. Answering it
+    /// properly would mean a second `-J` without `--no-playlist`, which is two
+    /// more seconds on every paste to answer a question most links do not raise.
+    /// The expensive call is `list_playlist`, and it only happens if the user
+    /// actually asks for the whole thing.
+    pub in_playlist: bool,
+    /// How many videos the playlist holds, when the page said. Never known for
+    /// `in_playlist`, where nothing has looked yet.
     pub entry_count: Option<u64>,
     /// Known ahead of time for a file, never for a media page -- the size there
     /// depends on the format yt-dlp ends up choosing.
@@ -844,6 +858,7 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
             duration_secs: None,
             thumbnail: None,
             is_playlist: false,
+            in_playlist: false,
             entry_count: None,
             size_bytes: file.size_bytes,
             resumable: file.resumable,
@@ -884,12 +899,124 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
             .and_then(|v| v.as_str())
             .map(str::to_string),
         is_playlist: entries.is_some(),
+        // Only worth saying for a link that is not already a playlist page:
+        // `/playlist?list=X` carries the parameter too, and offering "this one
+        // or all of them" twice over for the same list would be one choice
+        // wearing two hats.
+        in_playlist: entries.is_none() && names_a_playlist(&url),
         entry_count: entries.map(|e| e.len() as u64),
         // yt-dlp cannot say: the size depends on the format it ends up
         // choosing, which it does not decide until the download starts.
         size_bytes: None,
         // yt-dlp writes a `.part` and continues from it, for every site.
         resumable: true,
+    })
+}
+
+/// Whether this URL names a playlist alongside whatever else it points at.
+///
+/// A string check on the query, not a parse: `list=` is the parameter every
+/// extractor that has the concept spells the same way, and the alternative is
+/// pulling in a URL crate to answer one question. A `list=` with an empty value
+/// -- which YouTube emits on some share links -- names nothing and is ignored.
+fn names_a_playlist(url: &str) -> bool {
+    let Some((_, query)) = url.split_once('?') else {
+        return false;
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .any(|(key, value)| key.eq_ignore_ascii_case("list") && !value.is_empty())
+}
+
+/// One video in a playlist, as `list_playlist` reports it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    /// The watch URL, ready to hand back to `start_download` unchanged.
+    pub url: String,
+    pub title: String,
+}
+
+/// The most videos one press of "download all" will queue.
+///
+/// A channel URL is a playlist too, and some of them are five thousand videos.
+/// Queueing that many is not a download, it is an accident with a progress bar
+/// -- and the job list persists a hundred rows, so the other four thousand nine
+/// hundred would not even be visible. The cap is reported rather than silently
+/// applied; see `PlaylistListing::truncated`.
+const MAX_PLAYLIST_ENTRIES: usize = 100;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistListing {
+    pub entries: Vec<PlaylistEntry>,
+    /// How many the playlist actually holds, before the cap.
+    pub total: u64,
+    /// Whether `entries` is short of `total`, so the form can say so rather
+    /// than quietly starting the first hundred of a thousand.
+    pub truncated: bool,
+}
+
+/// Expands a playlist link into the videos it holds.
+///
+/// Deliberately not part of `probe_url`: this is the expensive call -- yt-dlp
+/// walking a whole list -- and most pasted links never need it. It runs when the
+/// user has actually asked for the whole playlist.
+///
+/// `--flat-playlist` is what keeps it to one request: yt-dlp lists the entries
+/// without extracting each one, so a fifty-video playlist costs a single page
+/// load rather than fifty. Each entry is extracted properly later, by the
+/// download that fetches it.
+pub async fn list_playlist(app: &AppHandle, url: &str) -> AppResult<PlaylistListing> {
+    let url = validate_url(url)?;
+
+    let mut cmd = binaries::command(app, Tool::YtDlp)?;
+    // No `--no-playlist` here -- that flag is the whole reason this function
+    // exists -- and `--yes-playlist` to override it for a `watch?v=…&list=…`,
+    // where yt-dlp's own default is the single video.
+    cmd.args([
+        "-J",
+        "--no-warnings",
+        "--flat-playlist",
+        "--yes-playlist",
+        "--",
+        &url,
+    ]);
+    binaries::with_js_runtime(app, &mut cmd);
+
+    let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|error| AppError::invalid("url", format!("could not read playlist: {error}")))?;
+
+    let Some(raw) = value.get("entries").and_then(|e| e.as_array()) else {
+        return Err(AppError::invalid("url", "not a playlist"));
+    };
+
+    let total = raw.len() as u64;
+    let entries: Vec<PlaylistEntry> = raw
+        .iter()
+        // An entry with no URL is one yt-dlp could not resolve -- a deleted or
+        // private video, which every long playlist has a few of. Skipped rather
+        // than queued as a download that is certain to fail.
+        .filter_map(|entry| {
+            let url = entry.get("url").and_then(|v| v.as_str())?;
+            Some(PlaylistEntry {
+                url: url.to_string(),
+                title: entry
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Untitled")
+                    .to_string(),
+            })
+        })
+        .take(MAX_PLAYLIST_ENTRIES)
+        .collect();
+
+    Ok(PlaylistListing {
+        truncated: total > entries.len() as u64,
+        entries,
+        total,
     })
 }
 
@@ -933,6 +1060,31 @@ mod tests {
     #[test]
     fn a_video_request_is_never_original_audio() {
         assert!(!request("video", Some("original")).wants_original_audio());
+    }
+
+    /// The shape YouTube's share button produces from inside a playlist, and
+    /// the reason `in_playlist` exists: the app used to take the video and say
+    /// nothing at all about the other thirty-nine.
+    #[test]
+    fn spots_a_playlist_named_alongside_a_video() {
+        assert!(names_a_playlist(
+            "https://www.youtube.com/watch?v=abc123&list=PLxyz"
+        ));
+        assert!(names_a_playlist("https://www.youtube.com/playlist?list=PLxyz"));
+        // Order in the query is not fixed, and neither is case.
+        assert!(names_a_playlist("https://example.com/v?list=A&t=30"));
+        assert!(names_a_playlist("https://example.com/v?LIST=A"));
+    }
+
+    #[test]
+    fn a_plain_link_names_no_playlist() {
+        assert!(!names_a_playlist("https://www.youtube.com/watch?v=abc123"));
+        assert!(!names_a_playlist("https://example.com/video.mp4"));
+        assert!(!names_a_playlist("https://example.com/"));
+        // A parameter that merely starts with the same letters.
+        assert!(!names_a_playlist("https://example.com/v?listing=7"));
+        // YouTube emits this on some share links, and it names nothing.
+        assert!(!names_a_playlist("https://example.com/v?list="));
     }
 
     /// `validate_url`'s answer, for the cases that have one. `AppError` is not

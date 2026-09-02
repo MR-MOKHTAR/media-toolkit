@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, State};
 
 use crate::binaries::{self, Tool};
-use crate::download::{self, DownloadRequest, UrlInfo};
+use crate::download::{self, DownloadRequest, PlaylistListing, UrlInfo};
 use crate::error::{AppError, AppResult};
 use crate::jobs::{JobKind, JobSummary, Jobs};
 
@@ -108,6 +108,16 @@ pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateRes
 #[tauri::command]
 pub async fn probe_url(app: AppHandle, url: String) -> AppResult<UrlInfo> {
     download::probe_url(&app, &url).await
+}
+
+/// The videos behind a playlist link, for the form to queue one download each.
+///
+/// Its own command rather than a field on `probe_url` because it is the slow
+/// half: walking a playlist is a second yt-dlp run, and it only happens once the
+/// user has said they want the whole thing.
+#[tauri::command]
+pub async fn list_playlist(app: AppHandle, url: String) -> AppResult<PlaylistListing> {
+    download::list_playlist(&app, &url).await
 }
 
 #[tauri::command]

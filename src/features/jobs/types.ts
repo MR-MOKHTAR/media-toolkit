@@ -175,13 +175,35 @@ export interface UrlInfo {
   uploader: string | null;
   durationSecs: number | null;
   thumbnail: string | null;
+  /** The link is a playlist page in its own right. */
   isPlaylist: boolean;
+  /** The link is a video that also names a playlist -- the `list=` on a
+   *  `watch?v=…&list=…`. Read off the URL, so it costs nothing; the playlist
+   *  itself is only walked if the user asks for it. */
+  inPlaylist: boolean;
+  /** How many videos the playlist holds, when the page said. Never known for
+   *  `inPlaylist`, where nothing has looked yet. */
   entryCount: number | null;
   /** Known ahead of time only for a file. */
   sizeBytes: number | null;
   /** Whether an interrupted download of this link continues rather than
    *  restarts. */
   resumable: boolean;
+}
+
+/** One video in a playlist, ready to be queued as its own download. */
+export interface PlaylistEntry {
+  url: string;
+  title: string;
+}
+
+export interface PlaylistListing {
+  entries: PlaylistEntry[];
+  /** How many the playlist holds, before the cap. */
+  total: number;
+  /** Whether `entries` is short of `total`, so the form can say so rather than
+   *  quietly starting the first hundred of a thousand. */
+  truncated: boolean;
 }
 
 export interface ToolStatus {

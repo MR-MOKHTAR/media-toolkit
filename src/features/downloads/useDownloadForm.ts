@@ -16,12 +16,13 @@ import {
   fileKindOf,
   formatLabelOf,
 } from "../../lib/fileKind";
+import { formatCount } from "../../lib/format";
 import * as ipc from "../../lib/ipc";
 import { normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
-import type { DownloadRequest, LibrarySlot, UrlInfo } from "../jobs/types";
+import type { LibrarySlot, UrlInfo } from "../jobs/types";
 import type { AudioFormat } from "./useDownloadSettings";
 
 interface Options {
@@ -42,6 +43,9 @@ export interface DownloadFormValues {
   /** What an audio download should end up as. Ignored for video, and for a
    *  direct file link, which is fetched as whatever it already is. */
   audioFormat: AudioFormat;
+  /** Whether a link that names a playlist takes the one video or the whole
+   *  list. `one` for every link that names no playlist at all. */
+  playlist: PlaylistChoice;
   /** The standing "download on several connections" setting, carried onto the
    *  request so a retry a week later runs the way this one did. */
   parallel: boolean;
@@ -81,8 +85,11 @@ function detailFor(link: UrlInfo, t: TFunction): string {
   );
 }
 
+/** The two answers to "this one, or all of them". */
+export type PlaylistChoice = "one" | "all";
+
 export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { startDownload } = useJobs();
   const [savePath, setSavePath] = useState("");
   const [toolsReady, setToolsReady] = useState(true);
@@ -203,46 +210,85 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       // yt-dlp has sanitized it, which is why it is passed for media only.
       const name = resolved?.title.trim();
 
-      const request: DownloadRequest = {
-        url,
-        outputDir: dir,
-        outputName: isFile ? undefined : name || undefined,
-        mediaType: values.mediaType,
-        quality: values.mediaType === "audio" ? undefined : values.quality,
-        audioFormat:
-          values.mediaType === "audio" ? values.audioFormat : undefined,
-        // Always auto. The probe above is a preview, not a decision: it can be
-        // stale by the time the bytes are requested, and the backend is the one
-        // that has to be right.
-        mode: "auto",
-        parallel: values.parallel,
-      };
+      // What every download off this form carries, whether it is the one link
+      // that was pasted or the fortieth video of a playlist. Only the URL and
+      // the title differ between them.
+      const detail =
+        isFile && resolved
+          ? detailFor(resolved, t)
+          : values.mediaType === "audio"
+            ? // Not the container: which one an `original` download lands in
+              // depends on what the site turns out to serve, and the card is
+              // written before a byte has been fetched. The word for the choice
+              // is the honest thing to show, and it is the same word the setting
+              // is labelled with.
+              values.audioFormat === "original"
+              ? t("audio_format_original")
+              : "MP3"
+            : values.quality;
 
-      void startDownload(request, {
-        // The URL is the last resort, not the default. It used to be what every
-        // direct download was called, because the name was deliberately left
-        // out of the request and the card read the same field.
-        title: name || url,
-        source: url,
-        detail:
-          isFile && resolved
-            ? detailFor(resolved, t)
-            : values.mediaType === "audio"
-              ? // Not the container: which one an `original` download lands in
-                // depends on what the site turns out to serve, and the card is
-                // written before a byte has been fetched. The word for the
-                // choice is the honest thing to show, and it is the same word
-                // the setting is labelled with.
-                values.audioFormat === "original"
-                ? t("audio_format_original")
-                : "MP3"
-              : values.quality,
-      }).catch((error) => notify("error", describeAppError(ipc.toAppError(error), t)));
+      const queue = (target: string, title: string, outputName?: string) =>
+        startDownload(
+          {
+            url: target,
+            outputDir: dir,
+            outputName,
+            mediaType: values.mediaType,
+            quality: values.mediaType === "audio" ? undefined : values.quality,
+            audioFormat:
+              values.mediaType === "audio" ? values.audioFormat : undefined,
+            // Always auto. The probe above is a preview, not a decision: it can
+            // be stale by the time the bytes are requested, and the backend is
+            // the one that has to be right.
+            mode: "auto",
+            parallel: values.parallel,
+          },
+          // The URL is the last resort, not the default. It used to be what
+          // every direct download was called, because the name was deliberately
+          // left out of the request and the card read the same field.
+          { title: title || target, source: target, detail },
+        ).catch((error) =>
+          notify("error", describeAppError(ipc.toAppError(error), t)),
+        );
+
+      if (values.playlist === "all") {
+        // The expensive call, made once and only here. Every entry becomes its
+        // own job, so each gets its own row, its own progress and its own retry
+        // button -- and the network semaphore already runs four at a time
+        // rather than forty.
+        const listing = await ipc.listPlaylist(url).catch((error) => {
+          notify("error", describeAppError(ipc.toAppError(error), t));
+          return null;
+        });
+        if (!listing || listing.entries.length === 0) return false;
+
+        // `outputName` is left undefined for every entry: the pasted link's
+        // title belongs to the playlist, not to any video in it, and yt-dlp
+        // names each file from its own page.
+        for (const entry of listing.entries) {
+          void queue(entry.url, entry.title);
+        }
+
+        notify(
+          listing.truncated ? "warning" : "info",
+          listing.truncated
+            ? t("playlist_queued_capped", {
+                queued: formatCount(listing.entries.length, i18n.language),
+                total: formatCount(listing.total, i18n.language),
+              })
+            : t("playlist_queued", {
+                queued: formatCount(listing.entries.length, i18n.language),
+              }),
+        );
+        return true;
+      }
+
+      void queue(url, name || url, isFile ? undefined : name || undefined);
 
       notify("info", t("job_started"));
       return true;
     },
-    [isOnline, notify, savePath, startDownload, t, toolsReady],
+    [i18n.language, isOnline, notify, savePath, startDownload, t, toolsReady],
   );
 
   /** Wraps `start` so the screen does not have to own the pending flag it

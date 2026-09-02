@@ -50,6 +50,7 @@ pub fn run() {
             library::set_library_organize,
             library::set_save_next_to_input,
             commands::probe_url,
+            commands::list_playlist,
             commands::start_download,
             commands::cancel_job,
             commands::cancel_all_jobs,
