@@ -34,24 +34,29 @@ export type FileKind =
 
 export const VIDEO_EXTENSIONS = [
   "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "flv", "wmv", "mpg", "mpeg",
+  "3gp", "ogv", "mts", "m2ts", "vob", "divx", "asf", "rm", "rmvb",
 ];
 
 export const AUDIO_EXTENSIONS = [
   "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma",
+  "weba", "oga", "m4b", "aiff", "aif", "amr", "ape", "ac3",
 ];
 
 const IMAGE_EXTENSIONS = [
   "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tif", "tiff",
-  "heic", "avif",
+  "heic", "avif", "jfif", "apng", "psd",
 ];
 
 const ARCHIVE_EXTENSIONS = [
   "zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "zst", "iso",
+  "cab", "lz", "lzma", "arj", "txz", "tbz", "tbz2",
 ];
 
 const DOCUMENT_EXTENSIONS = [
   "pdf", "txt", "md", "srt", "vtt", "doc", "docx", "xls", "xlsx", "ppt",
   "pptx", "csv", "json", "xml", "epub",
+  "rtf", "odt", "ods", "odp", "ass", "sub", "sbv", "html", "htm", "yml",
+  "yaml", "log", "tex", "mobi", "azw3",
 ];
 
 /** Installers and packages. `bin` is here because that is what the direct
@@ -60,6 +65,8 @@ const DOCUMENT_EXTENSIONS = [
 const APP_EXTENSIONS = [
   "exe", "msi", "dmg", "pkg", "deb", "rpm", "appimage", "apk", "snap",
   "flatpak", "bin",
+  "appx", "msix", "jar", "run", "sh", "bat", "com", "xpi", "crx", "apks",
+  "xapk", "img",
 ];
 
 const EXTENSION_KIND: Record<string, FileKind> = {};

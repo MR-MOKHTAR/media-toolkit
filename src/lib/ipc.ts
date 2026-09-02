@@ -8,7 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from "./mediaKind";
@@ -117,6 +117,25 @@ export async function chooseMediaFile(defaultPath?: string) {
  * test and is dead for every user.
  */
 export const copyText = (text: string) => writeText(text);
+
+/**
+ * What is on the clipboard, or null.
+ *
+ * Through the plugin for the same reason as `copyText`, plus one of its own:
+ * `navigator.clipboard.readText()` needs a user gesture and a permission prompt
+ * in a browser, and the download form wants to look the moment it opens.
+ *
+ * Never throws. An empty clipboard, a clipboard holding an image, no native
+ * window at all in `vite dev` -- all of them are "nothing to paste", which is
+ * not a failure worth a toast when nobody asked for anything.
+ */
+export const readClipboardText = async (): Promise<string | null> => {
+  try {
+    return (await readText()) ?? null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Paints the native window and the webview's own base layer in the theme's

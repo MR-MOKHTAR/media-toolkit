@@ -161,21 +161,94 @@ enum Engine {
 /// around a thousand sites. Removing it is the whole feature. A failure on an
 /// unsupported site now explains itself, because the stderr tail comes back
 /// with the error.
+///
+/// A missing scheme is supplied rather than rejected. `youtu.be/abc` and
+/// `www.aparat.com/v/x` are what a share sheet, a chat message and half the
+/// links anyone reads out loud actually look like, and answering one of those
+/// with "must start with http://" is the app declining to do the obvious thing.
+/// Every other scheme is still refused: `file:`, `javascript:` and `data:` are
+/// the ones that would matter, and none of them is a download.
 fn validate_url(url: &str) -> AppResult<String> {
-    let trimmed = url.trim();
+    // Zero-width and bidi marks ride along on anything copied out of a Persian
+    // or Arabic page, and a URL carrying one is not the URL it looks like.
+    // A newline becomes a space rather than vanishing: two links on two lines
+    // must stay two links, so the first one is taken and the second is not
+    // silently glued onto its end.
+    let cleaned: String = url
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !is_invisible(*c))
+        .collect();
+
+    // The link out of whatever it was pasted with. A share sheet writes "Look
+    // at this https://youtu.be/x", and the URL is the part of that anyone
+    // meant. Whitespace ends it -- a real URL has none.
+    let trimmed = match cleaned.find("http://").or_else(|| cleaned.find("https://")) {
+        Some(at) => cleaned[at..].split_whitespace().next().unwrap_or("").to_string(),
+        None => cleaned.split_whitespace().next().unwrap_or("").to_string(),
+    };
+    let trimmed = trim_trailing_punctuation(&trimmed);
     if trimmed.is_empty() {
         return Err(AppError::invalid("url", "empty"));
     }
+
     let lower = trimmed.to_ascii_lowercase();
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return Err(AppError::invalid("url", "must start with http:// or https://"));
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Ok(trimmed);
     }
-    // Anything that would let a crafted URL reach the local filesystem or a
-    // shell is rejected outright rather than handed to a subprocess.
-    if lower.starts_with("file:") || lower.contains('\n') || lower.contains('\r') {
-        return Err(AppError::invalid("url", "unsupported scheme"));
+    // Some other scheme spelled out in full, or a bare host. `example.com:8080`
+    // is the one ambiguous case, and a port is digits -- so a colon followed by
+    // anything else is a scheme, and not one of the two this app speaks.
+    if let Some((head, rest)) = lower.split_once(':') {
+        let is_port = !rest.is_empty()
+            && rest
+                .split(['/', '?', '#'])
+                .next()
+                .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()));
+        let looks_like_scheme = !head.is_empty()
+            && head.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c));
+        if looks_like_scheme && !is_port {
+            return Err(AppError::invalid("url", "unsupported scheme"));
+        }
     }
-    Ok(trimmed.to_string())
+
+    // A host has a dot in it. Without this, a stray word in the field would be
+    // turned into `https://word` and spend two seconds failing DNS.
+    let host = lower.split(['/', '?', '#']).next().unwrap_or("");
+    if !host.contains('.') || host.starts_with('.') || host.ends_with('.') {
+        return Err(AppError::invalid("url", "not a link"));
+    }
+
+    Ok(format!("https://{trimmed}"))
+}
+
+/// Drops the sentence a link was pasted inside of, from its end.
+///
+/// A URL copied out of prose comes with the full stop or the closing quote that
+/// followed it. A closing bracket is only punctuation when nothing opened it --
+/// `en.wikipedia.org/wiki/Bat_(disambiguation)` ends in one on purpose, and
+/// cutting that gives a 404.
+fn trim_trailing_punctuation(url: &str) -> String {
+    let mut end = url.len();
+    while let Some(last) = url[..end].chars().next_back() {
+        let cut = match last {
+            '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\'' | '>' | '»' | '،' => true,
+            ')' => url[..end].matches('(').count() < url[..end].matches(')').count(),
+            ']' => url[..end].matches('[').count() < url[..end].matches(']').count(),
+            _ => false,
+        };
+        if !cut {
+            break;
+        }
+        end -= last.len_utf8();
+    }
+    url[..end].to_string()
+}
+
+/// Characters that are in the string and not on the screen: the bidi marks and
+/// zero-width joiners that come with any copy out of an RTL page, and the BOM.
+fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
 
 /// yt-dlp format selector for a requested height.
@@ -361,6 +434,16 @@ fn is_media_type(info: &FileInfo) -> bool {
         .is_some_and(|value| value.starts_with("video/") || value.starts_with("audio/"))
 }
 
+/// What to ask a site for when the user wants the audio.
+///
+/// AAC first because that is what most sites serve as a plain ranged stream
+/// (YouTube's format 140), which is exactly the shape the parallel engine can
+/// fetch -- and because it is already the audio inside the video, so decoding
+/// it costs nothing. The fallbacks cover Opus-only sources and the sites that
+/// publish nothing but a muxed file, both of which LAME encodes from just as
+/// happily.
+const AUDIO_SELECTOR: &str = "bestaudio[acodec^=mp4a]/bestaudio/best";
+
 /// A media page, on whichever of the two engines can have it.
 ///
 /// The fast path is tried first and is allowed to decline for any reason -- an
@@ -383,18 +466,31 @@ async fn run_media(
     dir: &Path,
     request: &DownloadRequest,
 ) -> AppResult<PathBuf> {
-    // Audio is a transcode, not a transfer: `-x --audio-format mp3` is
-    // yt-dlp's post-processor, the stream is a tenth the size of the video, and
-    // the download is not the slow part. Nothing to gain and a whole second
-    // path to get wrong.
-    let eligible = !request.wants_audio()
-        && request.parallel.unwrap_or(true)
-        // Merging is ffmpeg's, so without ffmpeg this path cannot finish what
-        // it starts. `run_ytdlp` already reports that case properly.
+    let audio = request.wants_audio();
+    let eligible = request.parallel.unwrap_or(true)
+        // Merging and encoding are both ffmpeg's, so without ffmpeg this path
+        // cannot finish what it starts. `run_ytdlp` already reports that case
+        // properly.
         && binaries::resolve(app, Tool::Ffmpeg).is_ok();
 
     if eligible {
-        let selector = format_selector(request.quality.as_deref());
+        // Audio used to be excluded here, on the reasoning that `-x` is a
+        // transcode and the transfer is not the slow part. Half of that is
+        // true: the encode has to happen either way, and it happens below
+        // instead. The transfer is the other half, and a 60-minute podcast is
+        // 90 MB that yt-dlp pulls down one socket at a time -- the same
+        // single-connection transfer, against the same throttled CDN, that the
+        // whole of this module exists to stop doing.
+        let selector = if audio {
+            AUDIO_SELECTOR.to_string()
+        } else {
+            format_selector(request.quality.as_deref())
+        };
+        let target = if audio {
+            muxed::Target::Mp3
+        } else {
+            muxed::Target::Container
+        };
         let cancel = jobs.cancel_signal(id).await;
 
         // Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about
@@ -411,7 +507,15 @@ async fn run_media(
             Err(_) => return Err(AppError::Cancelled),
         };
 
-        if let Ok(Some(plan)) = resolved {
+        // An MP3 is made from one audio stream. Two means the selector came
+        // back with a video track as well, which is not something to hand to
+        // an audio encoder -- so that one goes to yt-dlp, as it always did.
+        let usable = resolved
+            .ok()
+            .flatten()
+            .filter(|plan| !audio || plan.stream_count() == 1);
+
+        if let Some(plan) = usable {
             match muxed::run(
                 app,
                 jobs,
@@ -421,6 +525,7 @@ async fn run_media(
                 dir,
                 request.output_name.as_deref(),
                 &plan,
+                target,
             )
             .await
             {
@@ -746,6 +851,13 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
 mod tests {
     use super::*;
 
+    /// `validate_url`'s answer, for the cases that have one. `AppError` is not
+    /// `PartialEq` -- deliberately, it carries process output -- so the tests
+    /// that are about the accepted form unwrap rather than compare a `Result`.
+    fn normalized(url: &str) -> String {
+        validate_url(url).unwrap_or_else(|_| panic!("{url} should be accepted"))
+    }
+
     #[test]
     fn accepts_any_http_url() {
         // The point of the change: these are all supported by yt-dlp and were
@@ -763,14 +875,69 @@ mod tests {
 
     #[test]
     fn rejects_non_http_schemes() {
-        for url in ["file:///etc/passwd", "javascript:alert(1)", "", "  "] {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>",
+            "magnet:?xt=urn:btih:abc",
+            "",
+            "  ",
+            // Not a link at all: turning this into https://nonsense would cost
+            // two seconds of DNS to say so.
+            "nonsense",
+        ] {
             assert!(validate_url(url).is_err(), "{url} should be rejected");
         }
     }
 
+    /// A missing scheme is the normal shape of a link people read out, share
+    /// and retype. Supplying it is the difference between a link that works and
+    /// an error message about a prefix nobody types.
     #[test]
-    fn rejects_embedded_newlines() {
-        assert!(validate_url("https://a.com\nhttps://b.com").is_err());
+    fn supplies_a_missing_scheme() {
+        for (input, want) in [
+            ("youtu.be/dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ"),
+            ("www.aparat.com/v/abc", "https://www.aparat.com/v/abc"),
+            (
+                "example.com:8080/file.zip",
+                "https://example.com:8080/file.zip",
+            ),
+        ] {
+            assert_eq!(normalized(input), want, "{input}");
+        }
+    }
+
+    /// What is actually on the clipboard after copying out of a chat: the link
+    /// with a sentence around it, and the invisible marks an RTL page leaves
+    /// behind.
+    #[test]
+    fn takes_the_link_out_of_the_text_around_it() {
+        assert_eq!(
+            normalized("ببین این ویدیو https://youtu.be/abc خیلی خوبه"),
+            "https://youtu.be/abc"
+        );
+        assert_eq!(
+            normalized("see https://example.com/a.zip."),
+            "https://example.com/a.zip"
+        );
+        // A bracket that something opened stays: cutting it gives a 404.
+        assert_eq!(
+            normalized("https://en.wikipedia.org/wiki/Bat_(animal)"),
+            "https://en.wikipedia.org/wiki/Bat_(animal)"
+        );
+        // A zero-width mark from a copied RTL page is not part of the URL.
+        assert_eq!(
+            normalized("https://example.com/\u{200f}file.mp4"),
+            "https://example.com/file.mp4"
+        );
+    }
+
+    /// Two links on two lines is one link and some noise, not a URL containing
+    /// a newline. The point is that the second one can never be glued onto the
+    /// end of the first.
+    #[test]
+    fn a_second_line_is_not_part_of_the_first_url() {
+        assert_eq!(normalized("https://a.com/x\nhttps://b.com/y"), "https://a.com/x");
     }
 
     #[test]

@@ -17,6 +17,7 @@ import {
   formatLabelOf,
 } from "../../lib/fileKind";
 import * as ipc from "../../lib/ipc";
+import { normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
@@ -141,8 +142,8 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
   }, [notify, savePath, t]);
 
   const start = useCallback(
-    async (values: DownloadFormValues, onSuccess: () => void): Promise<boolean> => {
-      const url = values.url.trim();
+    async (values: DownloadFormValues, onAccepted: () => void): Promise<boolean> => {
+      const url = normalizeUrl(values.url);
       if (!url) {
         notify("error", t("invalid_url"));
         return false;
@@ -151,6 +152,17 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         notify("error", t("no_internet"));
         return false;
       }
+
+      // The form is done with. Everything below is a round trip to the backend
+      // -- and one of them can be a yt-dlp spawn, which takes two seconds to
+      // unpack itself before it says anything.
+      //
+      // Waiting for all of that before closing is what made the dialog sit
+      // there after the button was pressed, looking like nothing had happened.
+      // Nothing below can send the user back to this form: a link that turns
+      // out to be bad is reported on the list behind it, which is where the
+      // download would have been reported anyway.
+      onAccepted();
 
       // The screen's probe is debounced by 600ms, so pasting a link and hitting
       // Enter straight away arrives here knowing nothing about it -- and the
@@ -215,7 +227,6 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       }).catch((error) => notify("error", describeAppError(ipc.toAppError(error), t)));
 
       notify("info", t("job_started"));
-      onSuccess();
       return true;
     },
     [isOnline, notify, savePath, startDownload, t, toolsReady],
@@ -224,12 +235,12 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
   /** Wraps `start` so the screen does not have to own the pending flag it
    *  needs to disable its own button. */
   const submit = useCallback(
-    async (values: DownloadFormValues, onSuccess: () => void) => {
+    async (values: DownloadFormValues, onAccepted: () => void) => {
       if (inFlight.current) return false;
       inFlight.current = true;
       setStarting(true);
       try {
-        return await start(values, onSuccess);
+        return await start(values, onAccepted);
       } finally {
         inFlight.current = false;
         setStarting(false);

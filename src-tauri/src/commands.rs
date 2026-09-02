@@ -22,11 +22,14 @@ pub struct ToolStatus {
     pub ytdlp: bool,
     pub ffmpeg: bool,
     pub ffprobe: bool,
-    /// The JavaScript runtime yt-dlp needs for YouTube. Reported like the
-    /// others because its absence is not silent -- it costs formats -- and
-    /// "some of your downloads came back at a lower quality" is not something
-    /// anyone would think to look for without a row saying so.
-    pub deno: bool,
+    /// The JavaScript runtime yt-dlp runs YouTube's player challenge in --
+    /// `deno`, `node`, `bun` or `quickjs` -- or `None` if this machine has
+    /// none.
+    ///
+    /// Not bundled and not required: downloads work without one. Reported
+    /// because it is the one thing a user can install themselves that removes
+    /// yt-dlp's "some formats may be missing" warning entirely.
+    pub js_runtime: Option<String>,
     /// Shown in Settings next to the update button, so "is it current?" is a
     /// question the user can answer without leaving the app.
     pub ytdlp_version: Option<String>,
@@ -70,11 +73,10 @@ pub async fn warm_tool_status(app: &AppHandle) {
 }
 
 async fn measure_tools(app: &AppHandle) -> ToolStatus {
-    let (ytdlp_version, ffmpeg, ffprobe, deno) = tokio::join!(
+    let (ytdlp_version, ffmpeg, ffprobe) = tokio::join!(
         binaries::probe(app, Tool::YtDlp),
         binaries::probe(app, Tool::Ffmpeg),
         binaries::probe(app, Tool::Ffprobe),
-        binaries::probe(app, Tool::Deno),
     );
 
     ToolStatus {
@@ -84,7 +86,10 @@ async fn measure_tools(app: &AppHandle) -> ToolStatus {
         ytdlp: ytdlp_version.is_some(),
         ffmpeg: ffmpeg.is_some(),
         ffprobe: ffprobe.is_some(),
-        deno: deno.is_some(),
+        // A PATH walk, not a spawn: this one is optional, so paying a process
+        // launch to confirm a `node` that yt-dlp will re-check for itself buys
+        // nothing.
+        js_runtime: binaries::js_runtime(app).map(|runtime| runtime.name.to_string()),
         ytdlp_version,
     }
 }

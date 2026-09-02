@@ -18,9 +18,6 @@ pub enum Tool {
     YtDlp,
     Ffmpeg,
     Ffprobe,
-    /// The JavaScript runtime yt-dlp needs to answer YouTube's player
-    /// challenge. See `with_js_runtime`.
-    Deno,
 }
 
 impl Tool {
@@ -29,16 +26,11 @@ impl Tool {
             Self::YtDlp => "yt-dlp",
             Self::Ffmpeg => "ffmpeg",
             Self::Ffprobe => "ffprobe",
-            Self::Deno => "deno",
         }
     }
 
     fn file_name(self) -> String {
-        if cfg!(windows) {
-            format!("{}.exe", self.name())
-        } else {
-            self.name().to_string()
-        }
+        executable_name(self.name())
     }
 
     /// The flag that makes the tool print its version and exit zero.
@@ -49,35 +41,105 @@ impl Tool {
     /// for the health check, so a wrong flag reports a working tool as missing.
     fn version_arg(self) -> &'static str {
         match self {
-            Self::YtDlp | Self::Deno => "--version",
+            Self::YtDlp => "--version",
             Self::Ffmpeg | Self::Ffprobe => "-version",
         }
     }
 }
 
-/// Points yt-dlp at the JavaScript runtime we ship, when there is one.
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// The JavaScript engines yt-dlp can run YouTube's player challenge in, in
+/// yt-dlp's own order of preference.
+///
+/// Only `deno` is enabled by default, so anything else has to be named on the
+/// command line before yt-dlp will look for it -- which is the whole reason
+/// this list exists rather than a bare `deno` lookup.
+const JS_RUNTIMES: &[&str] = &["deno", "node", "bun", "quickjs"];
+
+/// A JavaScript runtime found on this machine.
+#[derive(Debug, Clone)]
+pub struct JsRuntime {
+    /// The name yt-dlp knows it by: `deno`, `node`, `bun` or `quickjs`.
+    pub name: &'static str,
+    path: PathBuf,
+}
+
+/// Whichever JavaScript runtime this machine already has, if any.
+///
+/// Nothing is bundled for this. Deno used to be, and it was 95 MB unpacked --
+/// two thirds of the installer -- for a warning line. Measured on 2026-09-02
+/// against a 4K YouTube video, `yt-dlp -J` returned the same 53 formats and
+/// chose the same 1080p H.264 + m4a pair with the runtime and without it; the
+/// only difference was the warning. That is not worth 95 MB in every download
+/// of the app, so the runtime is now something we *use* when it is there rather
+/// than something we ship.
+///
+/// It is there more often than the old comment assumed: `node` is on most
+/// developer machines and a great many ordinary ones, `bun` and `quickjs`
+/// increasingly so. Cached like `resolve`, since a PATH walk per yt-dlp spawn
+/// would be pointless work.
+pub fn js_runtime(app: &AppHandle) -> Option<JsRuntime> {
+    static CACHE: OnceLock<std::sync::Mutex<Option<Option<JsRuntime>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+
+    if let Some(hit) = cache.lock().unwrap().clone() {
+        return hit;
+    }
+    let found = JS_RUNTIMES.iter().find_map(|name| {
+        find_executable_path(app, &executable_name(name)).map(|path| JsRuntime { name, path })
+    });
+    *cache.lock().unwrap() = Some(found.clone());
+    found
+}
+
+/// The same search as `find_binary`, but always answering with a real path.
+///
+/// `find_binary` deliberately hands back the bare file name for a PATH hit, so
+/// the OS keeps resolving it if PATH is reordered mid-session. That is right
+/// for a tool this app spawns itself and wrong here: what this produces is the
+/// value of `--js-runtimes node:...`, which yt-dlp documents as "the path to
+/// the binary or its containing directory" -- and `node:node` is neither.
+fn find_executable_path(app: &AppHandle, file: &str) -> Option<PathBuf> {
+    if let Some(resolved) = find_binary(app, file) {
+        if resolved.path.is_absolute() {
+            return Some(resolved.path);
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(file))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Points yt-dlp at whatever JavaScript runtime this machine has.
 ///
 /// YouTube's player signs its media URLs with a challenge that has to be *run*,
-/// not parsed. yt-dlp needs a JS engine for it, defaults to looking for Deno,
-/// and without one prints:
+/// not parsed. Without an engine for it yt-dlp prints:
 ///
 ///   WARNING: [youtube] No supported JavaScript runtime could be found ...
 ///   YouTube extraction without a JS runtime has been deprecated, and some
 ///   formats may be missing
 ///
-/// "Some formats may be missing" is the mild version. It falls back to the
-/// clients that do not need the challenge -- `visionos`, `android_vr` -- which
-/// carry a smaller format list, so a request for 1080p can quietly come back as
-/// 720p, and the URLs those clients hand out are the ones most likely to be
-/// rate-limited.
+/// "May be missing" is the accurate word -- see the measurement on
+/// `js_runtime`. Downloads work either way; a runtime that is present removes
+/// the one case where they might not.
 ///
 /// Conditional, in the same shape and for the same reason as
 /// `--ffmpeg-location`: passing a flag that names nothing is worse than not
-/// passing it, and a build where the fetch was skipped must still work.
+/// passing it. The path is given explicitly so a runtime found somewhere PATH
+/// does not reach -- an app data dir, a bundled resource someone dropped in --
+/// is still used.
 pub fn with_js_runtime(app: &AppHandle, cmd: &mut Command) {
-    if let Ok(deno) = resolve(app, Tool::Deno) {
+    if let Some(runtime) = js_runtime(app) {
         cmd.arg("--js-runtimes");
-        cmd.arg(format!("deno:{}", deno.path.to_string_lossy()));
+        cmd.arg(format!("{}:{}", runtime.name, runtime.path.to_string_lossy()));
     }
 }
 
@@ -163,8 +225,16 @@ pub fn writable_bin_dir(app: &AppHandle) -> AppResult<PathBuf> {
 }
 
 fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
-    let file = tool.file_name();
+    find_binary(app, &tool.file_name())
+}
 
+/// Where an executable is, by file name.
+///
+/// App data dir, then the bundled resources, then PATH -- see the note at the
+/// top of the file for why that order. Split out from `locate` because the
+/// JavaScript runtime lookup needs exactly the same search over names that are
+/// not `Tool`s.
+fn find_binary(app: &AppHandle, file: &str) -> Option<Resolved> {
     let mut roots = Vec::new();
     if let Ok(data) = app.path().app_data_dir() {
         roots.push(data.join("bin"));
@@ -174,7 +244,7 @@ fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
     }
 
     for root in roots {
-        let candidate = root.join(&file);
+        let candidate = root.join(file);
         if candidate.is_file() {
             ensure_executable(&candidate);
             return Some(Resolved {
@@ -194,12 +264,12 @@ fn locate(app: &AppHandle, tool: Tool) -> Option<Resolved> {
     // *should* report as unavailable, which is what the health check is for.
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|dir| dir.join(&file))
+        .map(|dir| dir.join(file))
         .find(|candidate| candidate.is_file())
         .map(|_| Resolved {
             // The bare name, not the resolved path: leaving it to the OS keeps
             // this working if PATH is reordered mid-session.
-            path: PathBuf::from(&file),
+            path: PathBuf::from(file),
             dir: None,
         })
 }

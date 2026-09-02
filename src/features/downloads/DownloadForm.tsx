@@ -17,6 +17,7 @@ import {
 } from "../../lib/fileKind";
 import * as ipc from "../../lib/ipc";
 import { formatBytes, formatDuration } from "../../lib/format";
+import { firstUrlIn, looksLikeUrl, normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import {
   OutputFolderRow,
@@ -71,10 +72,22 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     null,
   );
   const [probing, setProbing] = useState(false);
+  /** True once the clipboard has put a link in an empty field, so the second
+   *  effect below knows to select it. */
+  const [filledFromClipboard, setFilledFromClipboard] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** What is in the field right now, readable from the clipboard effect --
+   *  which runs once, and whose closure would otherwise never see a keystroke
+   *  that landed while the read was in flight. */
+  const urlRef = useRef(url);
+  urlRef.current = url;
 
-  const trimmed = url.trim();
-  const info = probe?.url === trimmed ? probe.info : null;
+  /** The link the field is holding, as the backend will see it: the URL out of
+   *  whatever was pasted, with a scheme supplied if it had none. Everything
+   *  downstream keys off this rather than the raw text, so the preview, the
+   *  probe and the request are all about the same link. */
+  const link = normalizeUrl(url);
+  const info = probe?.url === link ? probe.info : null;
 
   // A file link has nothing to choose: it is fetched exactly as it is, so the
   // media toggle and the quality picker would both be lying about what is
@@ -93,10 +106,45 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
 
   useEffect(() => inputRef.current?.focus(), []);
 
+  // The link that is already on the clipboard, put in the field.
+  //
+  // Opening this form is, almost always, the second half of copying a link
+  // somewhere else -- so the field starts holding the thing the user came here
+  // to paste, and the preview for it is already loading by the time they look
+  // at the dialog. Selected rather than left at the caret, so typing over it
+  // costs nothing if the guess was wrong.
+  //
+  // Skipped when arriving from Settings mid-edit: `initialUrl` is the field as
+  // it was left, and the clipboard has no business overwriting it. Skipped too
+  // if anything has been typed while the read was in flight -- reading the
+  // clipboard is IPC, and the user is faster than it sometimes.
+  useEffect(() => {
+    if (initialUrl?.trim()) return;
+    let cancelled = false;
+    void ipc.readClipboardText().then((text) => {
+      const found = text && firstUrlIn(text);
+      // `urlRef` rather than `url`: this effect runs once and its closure would
+      // hold the empty string forever, so the field's own state is the only
+      // thing that can say whether anything has been typed since.
+      if (cancelled || !found || urlRef.current) return;
+      setUrl(found);
+      setFilledFromClipboard(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialUrl]);
+
+  // Selecting has to wait for the value to be on the input, which is the render
+  // after `setUrl` -- hence a second effect rather than a call beside it.
+  useEffect(() => {
+    if (filledFromClipboard) inputRef.current?.select();
+  }, [filledFromClipboard]);
+
   // Debounced: pasting a link fires a change per character otherwise, and a
   // probe is at best an HTTP round trip and at worst a yt-dlp spawn.
   useEffect(() => {
-    if (!/^https?:\/\/\S+$/i.test(trimmed) || !isOnline) {
+    if (!looksLikeUrl(link) || !isOnline) {
       setProbe(null);
       return;
     }
@@ -104,14 +152,14 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     setProbing(true);
     const timer = setTimeout(() => {
       void ipc
-        .probeUrl(trimmed)
+        .probeUrl(link)
         // The URL is stored either way, so a result that arrives after the
         // field has moved on is discarded rather than shown under a link it is
         // not about. A failure leaves the preview empty; `start` asks again,
         // which is the right thing to do about a request that may just have
         // caught a bad moment.
-        .then((result) => !cancelled && setProbe({ url: trimmed, info: result }))
-        .catch(() => !cancelled && setProbe({ url: trimmed, info: null }))
+        .then((result) => !cancelled && setProbe({ url: link, info: result }))
+        .catch(() => !cancelled && setProbe({ url: link, info: null }))
         .finally(() => !cancelled && setProbing(false));
     }, 600);
 
@@ -120,23 +168,22 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       clearTimeout(timer);
       setProbing(false);
     };
-  }, [trimmed, isOnline]);
+  }, [link, isOnline]);
 
   const submit = () => {
     void start(
       {
-        url,
+        url: link,
         mediaType,
         quality: settings.quality,
         parallel: settings.parallel,
         link: info,
       },
-      () => setUrl(""),
-    ).then(
-      // The dialog closes on success and the download is already the top row of
-      // the list behind it. Nothing to clear and nowhere to go: the form is
-      // unmounted, and the next link opens a fresh one.
-      (ok) => ok && onDone(),
+      // Closes as soon as the request is accepted, not when the backend has
+      // finished looking the link up. The download appears as the top row of
+      // the list behind it a moment later; the form is unmounted, so there is
+      // nothing left to clear.
+      onDone,
     );
   };
 
@@ -148,7 +195,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         <RunButton
           label={t("start_download")}
           disabled={
-            !trimmed || !savePath || !isOnline || starting || (!toolsReady && !isFile)
+            !link || !savePath || !isOnline || starting || (!toolsReady && !isFile)
           }
           onClick={submit}
         />
@@ -179,6 +226,17 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
             type="url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
+            // A link pasted out of a message arrives with the message around
+            // it. Keeping only the link is what the field would have to be
+            // hand-edited into anyway, and it is what the preview below needs
+            // to have something to show.
+            onPaste={(event) => {
+              const text = event.clipboardData.getData("text");
+              const found = firstUrlIn(text);
+              if (!found || found === text.trim()) return;
+              event.preventDefault();
+              setUrl(found);
+            }}
             onKeyDown={(event) => event.key === "Enter" && submit()}
             placeholder={t("url_placeholder")}
             // Always LTR: a URL reads left to right in every language.

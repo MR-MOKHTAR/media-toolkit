@@ -155,7 +155,14 @@ export function MediaToolForm({
           disabled={!ready}
           onClick={() => {
             const { args, title, detail } = config.toRequest({ ...context, t });
-            void job.run(args, title, detail).then((id) => id && onDone());
+            // Closed before the command is awaited, not after. Every media
+            // command probes its input with ffprobe before it hands back a job
+            // id, and waiting for that left the dialog sitting there for the
+            // best part of a second with the button already pressed. A request
+            // that turns out to be invalid reports itself as a toast, which is
+            // where the job's own failures would have appeared anyway.
+            onDone();
+            void job.run(args, title, detail);
           }}
         />
       }

@@ -188,11 +188,14 @@ export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
-  /** The JavaScript runtime yt-dlp runs YouTube's player challenge in. Without
-   *  it yt-dlp falls back to the clients that skip the challenge, which carry a
-   *  shorter format list -- so a request for 1080p can quietly come back as
-   *  720p. */
-  deno: boolean;
+  /** The JavaScript runtime yt-dlp runs YouTube's player challenge in --
+   *  `deno`, `node`, `bun` or `quickjs` -- or null if this machine has none.
+   *
+   *  Not bundled and not required: measured against a 4K YouTube video, the
+   *  same formats came back either way. It is reported because it is the one
+   *  thing a user can install themselves that removes yt-dlp's "some formats
+   *  may be missing" warning outright. */
+  jsRuntime: string | null;
   /** What yt-dlp reports, or null if it will not run. */
   ytdlpVersion: string | null;
 }

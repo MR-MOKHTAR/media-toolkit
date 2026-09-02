@@ -127,6 +127,25 @@ impl Plan {
     pub fn total_bytes(&self) -> u64 {
         self.streams.iter().map(|stream| stream.size_bytes).sum()
     }
+
+    /// How many separate streams this plan is. The audio path only accepts one
+    /// -- there is nothing to merge in an MP3 -- so the caller has to be able
+    /// to ask before committing.
+    pub fn stream_count(&self) -> usize {
+        self.streams.len()
+    }
+}
+
+/// What the fetched streams are turned into once they are on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// Put them in the container the plan names, copying every stream through.
+    /// A remux: seconds, and not a frame is recompressed.
+    Container,
+    /// One audio stream, re-encoded to MP3 -- what `yt-dlp -x --audio-format
+    /// mp3` does at the end of its own download, done here so the *transfer*
+    /// can still happen on eight connections.
+    Mp3,
 }
 
 /// Asks yt-dlp what this page's chosen formats are, and whether they are ones
@@ -283,6 +302,7 @@ pub async fn run(
     dir: &Path,
     output_name: Option<&str>,
     plan: &Plan,
+    target: Target,
 ) -> AppResult<PathBuf> {
     let stem = output_name
         .map(str::trim)
@@ -348,8 +368,12 @@ pub async fn run(
 
     jobs.clear_partial_output(id).await;
 
-    let output = paths::unique_output(dir, &stem, &plan.ext);
-    if let Err(error) = merge(app, emitters, id, cancel, &parts, &output).await {
+    let ext = match target {
+        Target::Container => plan.ext.as_str(),
+        Target::Mp3 => "mp3",
+    };
+    let output = paths::unique_output(dir, &stem, ext);
+    if let Err(error) = assemble(app, emitters, id, cancel, &parts, &output, target).await {
         if !matches!(error, AppError::Cancelled) {
             discard(&parts).await;
         }
@@ -375,24 +399,30 @@ async fn discard(parts: &[PathBuf]) {
     }
 }
 
-/// Puts the streams into one container.
+/// Turns the fetched streams into the file the user asked for.
 ///
-/// `-c copy` throughout: the streams were chosen to be container-compatible in
-/// the first place (see `format_selector`), so this is a remux and not a
-/// re-encode -- seconds rather than minutes, and not a single frame is
-/// recompressed. `+faststart` moves the index to the front, which is what lets
-/// the file start playing before it has been read to the end.
-async fn merge(
+/// For a video that is `-c copy` throughout: the streams were chosen to be
+/// container-compatible in the first place (see `format_selector`), so this is
+/// a remux and not a re-encode -- seconds rather than minutes, and not a single
+/// frame is recompressed. `+faststart` moves the index to the front, which is
+/// what lets the file start playing before it has been read to the end.
+///
+/// For an MP3 it is a real encode, and the only part of an audio download that
+/// was ever CPU work. yt-dlp does exactly this at the end of `-x`; the
+/// difference is that the megabytes before it arrived on eight connections
+/// rather than one.
+async fn assemble(
     app: &AppHandle,
     emitters: &mut Emitters,
     id: &str,
     cancel: &CancelSignal,
     parts: &[PathBuf],
     output: &Path,
+    target: Target,
 ) -> AppResult<()> {
-    // A single stream is already the file. Renaming beats spending an ffmpeg
-    // pass to copy it to itself.
-    if let [only] = parts {
+    // A single stream that needs no re-encoding is already the file. Renaming
+    // beats spending an ffmpeg pass to copy it to itself.
+    if let ([only], Target::Container) = (parts, target) {
         return tokio::fs::rename(only, output)
             .await
             .map_err(|error| AppError::io(only, error));
@@ -400,7 +430,14 @@ async fn merge(
 
     emitters.progress_now(JobProgress {
         percent: Some(100.0),
-        ..JobProgress::new(id, JobKind::Download, Stage::Merging)
+        ..JobProgress::new(
+            id,
+            JobKind::Download,
+            match target {
+                Target::Container => Stage::Merging,
+                Target::Mp3 => Stage::Encoding,
+            },
+        )
     });
 
     let mut cmd = binaries::command(app, Tool::Ffmpeg)?;
@@ -408,7 +445,19 @@ async fn merge(
     for part in parts {
         cmd.arg("-i").arg(part);
     }
-    cmd.args(["-c", "copy", "-movflags", "+faststart"]);
+    match target {
+        Target::Container => {
+            cmd.args(["-c", "copy", "-movflags", "+faststart"]);
+        }
+        // `-q:a 0` is LAME's best VBR, which is what `--audio-quality 0` asks
+        // yt-dlp for -- so the file this produces is the one the app produced
+        // before, made from the same source stream. `-vn` drops the cover art
+        // some audio formats carry, which would otherwise land as an mp3 video
+        // stream that a few players choke on.
+        Target::Mp3 => {
+            cmd.args(["-vn", "-c:a", "libmp3lame", "-q:a", "0"]);
+        }
+    }
     cmd.arg(output);
 
     // Guarded rather than simply awaited. This ffmpeg is not in the job
@@ -579,6 +628,32 @@ mod tests {
         let plan = plan_from(json).expect("a progressive mp4 is fetchable");
         assert_eq!(plan.streams.len(), 1);
         assert_eq!(plan.total_bytes(), 28_524_544);
+    }
+
+    /// The audio download's shape, and the reason `Target::Mp3` can exist.
+    ///
+    /// Copied from what `yt-dlp -J -f "bestaudio[acodec^=mp4a]/bestaudio/best"`
+    /// returned for a YouTube video on 2026-09-02: no `requested_formats`, so
+    /// the entry itself is the format, `protocol: https` and an exact
+    /// `filesize`. That is precisely what the parallel engine needs, which is
+    /// what an audio download was passing up by going to yt-dlp on one socket.
+    #[test]
+    fn takes_a_single_audio_stream() {
+        let json = r#"{
+            "title": "Big Buck Bunny", "ext": "m4a",
+            "format_id": "140",
+            "url": "https://rr1.googlevideo.com/videoplayback?a=1",
+            "protocol": "https",
+            "filesize": 10271496,
+            "vcodec": "none",
+            "acodec": "mp4a.40.2",
+            "live_status": "not_live",
+            "http_headers": {"User-Agent": "Mozilla/5.0"}
+        }"#;
+        let plan = plan_from(json).expect("an audio-only https stream is fetchable");
+
+        assert_eq!(plan.stream_count(), 1, "an MP3 comes from one stream");
+        assert_eq!(plan.total_bytes(), 10_271_496);
     }
 
     /// A storyboard or a subtitle track has neither codec. Nothing to merge and
