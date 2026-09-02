@@ -106,8 +106,21 @@ pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateRes
 }
 
 #[tauri::command]
-pub async fn probe_url(app: AppHandle, url: String) -> AppResult<UrlInfo> {
-    download::probe_url(&app, &url).await
+pub async fn probe_url(
+    app: AppHandle,
+    url: String,
+    cookies_from: Option<String>,
+) -> AppResult<UrlInfo> {
+    download::probe_url(&app, &url, cookies_from.as_deref()).await
+}
+
+/// The browsers this build can read cookies from, in yt-dlp's own spelling.
+///
+/// Asked for rather than hard-coded in the frontend, so the list Settings offers
+/// and the list the backend accepts cannot drift apart.
+#[tauri::command]
+pub fn cookie_browsers() -> Vec<&'static str> {
+    download::BROWSERS.to_vec()
 }
 
 /// The videos behind a playlist link, for the form to queue one download each.
@@ -116,8 +129,12 @@ pub async fn probe_url(app: AppHandle, url: String) -> AppResult<UrlInfo> {
 /// half: walking a playlist is a second yt-dlp run, and it only happens once the
 /// user has said they want the whole thing.
 #[tauri::command]
-pub async fn list_playlist(app: AppHandle, url: String) -> AppResult<PlaylistListing> {
-    download::list_playlist(&app, &url).await
+pub async fn list_playlist(
+    app: AppHandle,
+    url: String,
+    cookies_from: Option<String>,
+) -> AppResult<PlaylistListing> {
+    download::list_playlist(&app, &url, cookies_from.as_deref()).await
 }
 
 #[tauri::command]

@@ -19,6 +19,7 @@
 //! between the last two, and errs towards yt-dlp whenever it is not certain.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -116,6 +117,52 @@ pub struct DownloadRequest {
     /// Absent means `mp3`, which is what every version before this one did
     /// unconditionally. Meaningless when `media_type` is not audio.
     pub audio_format: Option<String>,
+    /// The browser to borrow cookies from, for links behind a login, an age
+    /// check, or a members-only wall. `None` -- and the default -- is to send
+    /// no cookies at all.
+    ///
+    /// Validated against `BROWSERS` before it reaches a command line: this
+    /// value comes from the webview, and `--cookies-from-browser` takes a
+    /// string with its own `+KEYRING:PROFILE::CONTAINER` syntax that there is
+    /// no reason to let through.
+    pub cookies_from: Option<String>,
+}
+
+/// The browsers yt-dlp can read cookies from, as it names them.
+///
+/// Listed here rather than passed through, because the value arrives from the
+/// webview and lands in an argument. yt-dlp's own syntax allows a keyring, a
+/// profile and a container appended to the name; none of that is offered, so
+/// none of it is accepted.
+pub const BROWSERS: &[&str] = &[
+    "brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale",
+];
+
+/// The browser name, if it is one of `BROWSERS`.
+///
+/// Every path that reaches a yt-dlp command line goes through here, so an
+/// unknown value can never become an argument. Matching case-insensitively and
+/// returning the *listed* spelling rather than the caller's is what makes that
+/// true: what goes on the command line is a `&'static str` from this file.
+pub fn browser_name(requested: Option<&str>) -> Option<&'static str> {
+    let requested = requested?.trim();
+    BROWSERS
+        .iter()
+        .copied()
+        .find(|name| name.eq_ignore_ascii_case(requested))
+}
+
+/// Adds `--cookies-from-browser` when one was asked for.
+///
+/// Every yt-dlp call in the app takes this: the download itself, the probe that
+/// draws the preview, the playlist walk, and `muxed::resolve`. A members-only
+/// video whose *metadata* needs the cookie shows up as "Video unavailable" in
+/// the preview otherwise, which is a confusing way to be told to log in.
+pub fn with_cookies(cmd: &mut Command, browser: Option<&str>) {
+    if let Some(name) = browser_name(browser) {
+        cmd.arg("--cookies-from-browser");
+        cmd.arg(name);
+    }
 }
 
 /// The value the download form sends for "leave the stream alone".
@@ -137,6 +184,18 @@ impl DownloadRequest {
                 .audio_format
                 .as_deref()
                 .is_some_and(|format| format.eq_ignore_ascii_case(ORIGINAL_AUDIO))
+    }
+
+    /// The browser to read cookies from, if it is one yt-dlp knows and this app
+    /// offers. Anything else is dropped rather than refused: a stale setting
+    /// from a build that listed a browser this one does not is a download that
+    /// should still run, without the cookies.
+    fn cookie_browser(&self) -> Option<&'static str> {
+        let requested = self.cookies_from.as_deref()?.trim();
+        BROWSERS
+            .iter()
+            .copied()
+            .find(|name| name.eq_ignore_ascii_case(requested))
     }
 }
 
@@ -533,7 +592,15 @@ async fn run_media(
         // `Ok(None)` is the ordinary answer for most of the web; an extraction
         // error is left to `run_ytdlp` to produce again with its own stderr
         // tail attached, which is the one the user can actually read.
-        let resolved = match cancel.guard(muxed::resolve(app, url, &selector)).await {
+        let resolved = match cancel
+            .guard(muxed::resolve(
+                app,
+                url,
+                &selector,
+                request.cookie_browser(),
+            ))
+            .await
+        {
             Ok(resolved) => resolved,
             Err(_) => return Err(AppError::Cancelled),
         };
@@ -700,6 +767,12 @@ async fn run_ytdlp(
         }
     }
 
+    // Before the `--`, which is where the options stop and the URL begins.
+    if let Some(browser) = request.cookie_browser() {
+        args.push("--cookies-from-browser".into());
+        args.push(browser.to_string());
+    }
+
     args.push("--".into());
     args.push(url.to_string());
 
@@ -845,7 +918,11 @@ fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> 
 /// which is the difference between a preview that appears as you finish
 /// pasting and one that takes two seconds. Only a page falls through to the
 /// extractor, and a page is the only thing the extractor is needed for.
-pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
+pub async fn probe_url(
+    app: &AppHandle,
+    url: &str,
+    cookies_from: Option<&str>,
+) -> AppResult<UrlInfo> {
     let url = validate_url(url)?;
 
     if let Some(file) = direct::probe(&url).await? {
@@ -866,14 +943,12 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
     }
 
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
-    cmd.args([
-        "-J",
-        "--no-warnings",
-        "--flat-playlist",
-        "--no-playlist",
-        "--",
-        &url,
-    ]);
+    cmd.args(["-J", "--no-warnings", "--flat-playlist", "--no-playlist"]);
+    // Before the `--`. A members-only video whose metadata needs the cookie
+    // answers an anonymous probe with "Video unavailable", which is a confusing
+    // way to be told to log in.
+    with_cookies(&mut cmd, cookies_from);
+    cmd.args(["--", &url]);
     binaries::with_js_runtime(app, &mut cmd);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
@@ -968,21 +1043,20 @@ pub struct PlaylistListing {
 /// without extracting each one, so a fifty-video playlist costs a single page
 /// load rather than fifty. Each entry is extracted properly later, by the
 /// download that fetches it.
-pub async fn list_playlist(app: &AppHandle, url: &str) -> AppResult<PlaylistListing> {
+pub async fn list_playlist(
+    app: &AppHandle,
+    url: &str,
+    cookies_from: Option<&str>,
+) -> AppResult<PlaylistListing> {
     let url = validate_url(url)?;
 
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
     // No `--no-playlist` here -- that flag is the whole reason this function
     // exists -- and `--yes-playlist` to override it for a `watch?v=…&list=…`,
     // where yt-dlp's own default is the single video.
-    cmd.args([
-        "-J",
-        "--no-warnings",
-        "--flat-playlist",
-        "--yes-playlist",
-        "--",
-        &url,
-    ]);
+    cmd.args(["-J", "--no-warnings", "--flat-playlist", "--yes-playlist"]);
+    with_cookies(&mut cmd, cookies_from);
+    cmd.args(["--", &url]);
     binaries::with_js_runtime(app, &mut cmd);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
@@ -1036,6 +1110,7 @@ mod tests {
             mode: None,
             parallel: None,
             audio_format: audio_format.map(str::to_string),
+            cookies_from: None,
         }
     }
 
@@ -1060,6 +1135,51 @@ mod tests {
     #[test]
     fn a_video_request_is_never_original_audio() {
         assert!(!request("video", Some("original")).wants_original_audio());
+    }
+
+    /// The value arrives from the webview and lands in an argument, so what is
+    /// accepted is exactly the list and nothing adjacent to it.
+    #[test]
+    fn only_a_listed_browser_reaches_a_command_line() {
+        assert_eq!(browser_name(Some("firefox")), Some("firefox"));
+        assert_eq!(browser_name(Some("Chrome")), Some("chrome"));
+        // Whitespace from a stored setting is trimmed, not treated as a name.
+        assert_eq!(browser_name(Some("  edge  ")), Some("edge"));
+
+        assert_eq!(browser_name(None), None);
+        assert_eq!(browser_name(Some("")), None);
+        assert_eq!(browser_name(Some("netscape")), None);
+    }
+
+    /// yt-dlp's own syntax allows a keyring, a profile and a container appended
+    /// to the browser name. None of that is offered by the UI, so none of it is
+    /// accepted -- and neither is anything that merely starts with a real name.
+    #[test]
+    fn the_browsers_own_extended_syntax_is_refused() {
+        assert_eq!(browser_name(Some("firefox:/etc/passwd")), None);
+        assert_eq!(browser_name(Some("chrome+gnomekeyring")), None);
+        assert_eq!(browser_name(Some("chrome::container")), None);
+        assert_eq!(browser_name(Some("firefox --exec")), None);
+    }
+
+    /// What `browser_name` returns is a `&'static str` from this file, never
+    /// the caller's own string. That is the property that makes the whole
+    /// check hold: a matched name cannot smuggle its own spelling through.
+    #[test]
+    fn a_matched_name_is_the_listed_spelling() {
+        let matched = browser_name(Some("VIVALDI")).unwrap();
+        assert_eq!(matched, "vivaldi");
+        assert!(BROWSERS.contains(&matched));
+    }
+
+    /// A stale setting naming a browser this build no longer lists is a
+    /// download that should still run, without the cookies -- not one that
+    /// fails.
+    #[test]
+    fn an_unknown_browser_is_dropped_rather_than_refused() {
+        let mut request = request("video", None);
+        request.cookies_from = Some("netscape".into());
+        assert_eq!(request.cookie_browser(), None);
     }
 
     /// The shape YouTube's share button produces from inside a playlist, and

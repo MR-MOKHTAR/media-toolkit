@@ -1,10 +1,14 @@
+import { useEffect, useState } from "react";
 import { FileAudio, Music2, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { SectionLabel } from "../../components/ui/Card";
+import { Field, SectionLabel } from "../../components/ui/Card";
 import { CheckRow } from "../../components/ui/CheckRow";
 import { Segmented } from "../../components/ui/Segmented";
+import { Select } from "../../components/ui/Select";
+import * as ipc from "../../lib/ipc";
 import {
+  NO_COOKIES,
   QUALITIES,
   qualityLabel,
   useDownloadSettings,
@@ -35,6 +39,23 @@ import {
 export function DownloadsPanel() {
   const { t } = useTranslation();
   const { settings, update } = useDownloadSettings();
+  /** Asked of the backend rather than listed here, so the browsers Settings
+   *  offers are exactly the ones `download.rs` will accept. Empty until the
+   *  answer lands, which hides the row rather than briefly offering nothing. */
+  const [browsers, setBrowsers] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ipc
+      .getCookieBrowsers()
+      .then((names) => {
+        if (!cancelled) setBrowsers(names);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -124,6 +145,40 @@ export function DownloadsPanel() {
           onChange={(parallel) => update("parallel", parallel)}
         />
       </section>
+
+      {/* Last, and off by default. Reading a browser's cookie jar is a thing
+          to opt into rather than to discover the app has been doing -- and it
+          is the only setting here that touches anything outside this app.
+
+          A Select rather than the Segmented every other choice on this panel
+          uses: nine browsers plus "none" is not a row of buttons, and unlike
+          quality or format this is a list where one entry is right and the
+          other nine are irrelevant to any given machine. */}
+      {browsers.length > 0 && (
+        // `Field`, not the `SectionLabel` the rows above use: this is one
+        // control with a real <label> pointing at it, and a Select needs that
+        // association to be announced at all.
+        <Field
+          label={t("cookies_from")}
+          htmlFor="cookies-from"
+          hint={t("cookies_hint")}
+        >
+          <Select
+            id="cookies-from"
+            value={settings.cookiesFrom}
+            onChange={(value) => update("cookiesFrom", value)}
+            options={[
+              { value: NO_COOKIES, label: t("cookies_none") },
+              ...browsers.map((name) => ({
+                value: name,
+                // yt-dlp's own spelling, capitalised for a label. These are
+                // product names, so they are not translated.
+                label: name.charAt(0).toUpperCase() + name.slice(1),
+              })),
+            ]}
+          />
+        </Field>
+      )}
 
       <p className="text-xs text-fg-muted">{t("download_audio_note")}</p>
     </>

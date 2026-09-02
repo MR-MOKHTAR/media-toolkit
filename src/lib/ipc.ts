@@ -70,15 +70,22 @@ export const setLibraryOrganize = (enabled: boolean) =>
 export const setSaveNextToInput = (enabled: boolean) =>
   invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
-export const probeUrl = (url: string) => invoke<UrlInfo>("probe_url", { url });
+export const probeUrl = (url: string, cookiesFrom?: string) =>
+  invoke<UrlInfo>("probe_url", { url, cookiesFrom });
+
+/** The browsers this build can read cookies from, in yt-dlp's own spelling.
+ *
+ *  Asked for rather than hard-coded here, so the list Settings offers and the
+ *  list the backend accepts cannot drift apart. */
+export const getCookieBrowsers = () => invoke<string[]>("cookie_browsers");
 
 /** The videos behind a playlist link.
  *
  *  Separate from `probeUrl` because it is the slow half -- yt-dlp walking a
  *  whole list -- and it only runs once the user has asked for the whole thing
  *  rather than on every paste. */
-export const listPlaylist = (url: string) =>
-  invoke<PlaylistListing>("list_playlist", { url });
+export const listPlaylist = (url: string, cookiesFrom?: string) =>
+  invoke<PlaylistListing>("list_playlist", { url, cookiesFrom });
 
 /** Returns a job id immediately; the work reports itself through events. */
 export const startDownload = (request: DownloadRequest) =>

@@ -161,7 +161,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     setProbing(true);
     const timer = setTimeout(() => {
       void ipc
-        .probeUrl(link)
+        .probeUrl(link, settings.cookiesFrom || undefined)
         // The URL is stored either way, so a result that arrives after the
         // field has moved on is discarded rather than shown under a link it is
         // not about. A failure leaves the preview empty; `start` asks again,
@@ -177,7 +177,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       clearTimeout(timer);
       setProbing(false);
     };
-  }, [link, isOnline]);
+  }, [link, isOnline, settings.cookiesFrom]);
 
   const submit = () => {
     void start(
@@ -190,6 +190,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         // cannot leak onto the next link -- the effect above resets it -- but
         // the request is the wrong place to rely on that.
         playlist: namesPlaylist ? playlist : "one",
+        cookiesFrom: settings.cookiesFrom,
         parallel: settings.parallel,
         link: info,
       },

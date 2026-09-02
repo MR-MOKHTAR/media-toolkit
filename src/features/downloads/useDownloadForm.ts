@@ -46,6 +46,8 @@ export interface DownloadFormValues {
   /** Whether a link that names a playlist takes the one video or the whole
    *  list. `one` for every link that names no playlist at all. */
   playlist: PlaylistChoice;
+  /** The browser to borrow cookies from, or empty for none. */
+  cookiesFrom: string;
   /** The standing "download on several connections" setting, carried onto the
    *  request so a retry a week later runs the way this one did. */
   parallel: boolean;
@@ -180,7 +182,9 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       // folder, the title, the format and whether yt-dlp is even needed all
       // depend on the answer. One request now is cheaper than a zip filed under
       // Video under the name of its own URL.
-      const resolved = values.link ?? (await ipc.probeUrl(url).catch(() => null));
+      const resolved =
+        values.link ??
+        (await ipc.probeUrl(url, values.cookiesFrom || undefined).catch(() => null));
 
       // The folder is the one part the user can have already decided. Once they
       // have, nothing here may move it.
@@ -242,6 +246,10 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
             // the one that has to be right.
             mode: "auto",
             parallel: values.parallel,
+            // Empty means none. Sent as undefined rather than "" so a request
+            // stored on a retry button reads the same as one from a build
+            // that had no such setting.
+            cookiesFrom: values.cookiesFrom || undefined,
           },
           // The URL is the last resort, not the default. It used to be what
           // every direct download was called, because the name was deliberately
@@ -256,7 +264,9 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         // own job, so each gets its own row, its own progress and its own retry
         // button -- and the network semaphore already runs four at a time
         // rather than forty.
-        const listing = await ipc.listPlaylist(url).catch((error) => {
+        const listing = await ipc
+          .listPlaylist(url, values.cookiesFrom || undefined)
+          .catch((error) => {
           notify("error", describeAppError(ipc.toAppError(error), t));
           return null;
         });

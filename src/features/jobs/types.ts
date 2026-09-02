@@ -116,6 +116,11 @@ export interface DownloadRequest {
    *  build before this one did, and what the requests stored on the retry
    *  button of an older failed download still mean. */
   audioFormat?: "original" | "mp3";
+  /** Which browser to borrow cookies from, in yt-dlp's own spelling. Absent
+   *  means none, which is the default and what every earlier build did. The
+   *  backend validates it against its own list before it reaches a command
+   *  line -- see `BROWSERS` in download.rs. */
+  cookiesFrom?: string;
   /** Which engine to use. `auto` -- what every screen sends -- lets the backend
    *  decide from one HTTP request: a page goes to yt-dlp, a link that already
    *  points at the file goes to the direct downloader. */

@@ -184,17 +184,19 @@ pub enum Target {
 /// it means "fragmented, live, or unmeasured -- run yt-dlp". An `Err` is a real
 /// extraction failure (a dead link, a private video) and the caller reports it
 /// rather than retrying, because yt-dlp is about to fail the same way.
-pub async fn resolve(app: &AppHandle, url: &str, selector: &str) -> AppResult<Option<Plan>> {
+pub async fn resolve(
+    app: &AppHandle,
+    url: &str,
+    selector: &str,
+    cookies_from: Option<&str>,
+) -> AppResult<Option<Plan>> {
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
-    cmd.args([
-        "-J",
-        "--no-warnings",
-        "--no-playlist",
-        "-f",
-        selector,
-        "--",
-        url,
-    ]);
+    cmd.args(["-J", "--no-warnings", "--no-playlist", "-f", selector]);
+    // Without the cookie this resolve sees the formats an anonymous visitor
+    // sees, which for a members-only video is none -- so the fast path would
+    // decline and hand a login-walled link to yt-dlp to fail on slowly.
+    crate::download::with_cookies(&mut cmd, cookies_from);
+    cmd.args(["--", url]);
     binaries::with_js_runtime(app, &mut cmd);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;

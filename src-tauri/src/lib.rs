@@ -51,6 +51,7 @@ pub fn run() {
             library::set_save_next_to_input,
             commands::probe_url,
             commands::list_playlist,
+            commands::cookie_browsers,
             commands::start_download,
             commands::cancel_job,
             commands::cancel_all_jobs,
