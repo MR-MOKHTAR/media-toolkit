@@ -12,11 +12,25 @@ export const QUALITIES = ["best", "2160", "1440", "1080", "720", "480"] as const
 
 export type DownloadQuality = (typeof QUALITIES)[number];
 
+/** What an audio download ends up as.
+ *
+ * `original` hands over the stream the site served -- already a finished AAC or
+ * Opus file -- without decoding it. `mp3` re-encodes, which every version before
+ * this one did unconditionally and which is still what something downstream
+ * occasionally insists on.
+ *
+ * The same two words the extract-audio tool uses, on purpose: it is one promise
+ * made in two places. */
+export const AUDIO_FORMATS = ["original", "mp3"] as const;
+
+export type AudioFormat = (typeof AUDIO_FORMATS)[number];
+
 export interface DownloadSettings {
   quality: DownloadQuality;
-  /** Video or MP3, for the links where that is a question at all. A direct file
-   *  is fetched as whatever it is, so this has nothing to say about one. */
+  /** Video or audio, for the links where that is a question at all. A direct
+   *  file is fetched as whatever it is, so this has nothing to say about one. */
   mediaType: "video" | "audio";
+  audioFormat: AudioFormat;
   /** Fetch a video's streams on many connections instead of letting yt-dlp
    *  fetch them on one. On by default, and the reason downloads are fast; the
    *  switch exists so a site that objects to it can be worked around without
@@ -25,17 +39,26 @@ export interface DownloadSettings {
 }
 
 /**
- * 720p and video.
+ * 720p, video, and the audio left alone.
  *
  * "Best available" is whatever the site happens to serve -- on YouTube that is
  * often 4K, which is a multi-gigabyte file and a long wait for something most
  * people watch on a laptop. 720p is the size everyone can afford; anyone who
  * wants the full thing sets it once in Settings and never thinks about it
  * again.
+ *
+ * `original` is the audio default for the reason the extract-audio tool already
+ * gives: the stream a site serves is a finished AAC or Opus file, and re-encoding
+ * it to MP3 spends a minute to make it measurably worse. MP3 stays one click
+ * away for whatever still insists on it. This is a change in what an audio
+ * download produces -- an `.m4a` where an `.mp3` used to appear -- which is why
+ * it is the default rather than a hidden option: the old behaviour was a loss
+ * nobody asked for.
  */
 const DEFAULTS: DownloadSettings = {
   quality: "720",
   mediaType: "video",
+  audioFormat: "original",
   parallel: true,
 };
 

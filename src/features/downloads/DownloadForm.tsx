@@ -176,6 +176,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         url: link,
         mediaType,
         quality: settings.quality,
+        audioFormat: settings.audioFormat,
         parallel: settings.parallel,
         link: info,
       },

@@ -1,9 +1,12 @@
 {
   "already_smaller": "أصغر بالفعل",
-
   "app_name": "صندوق أدوات الوسائط",
   "appearance": "المظهر",
-  "audio_quality_note": "أفضل جودة متاحة · MP3",
+  "audio_format": "صيغة الصوت",
+  "audio_format_mp3_note": "يعيد الترميز إلى MP3. أبطأ، وأقل قليلاً من الأصل — لما يصرّ عليه.",
+  "audio_format_original": "الأصلية",
+  "audio_format_original_note": "يسلّم المقطع كما قدّمه الموقع — فوري، ودون أي فقد.",
+  "audio_quality_note": "أفضل جودة يوفرها الموقع",
   "back": "رجوع",
   "bundled_tools": "الأدوات المرفقة",
   "cancel_button": "الغاء",
@@ -25,7 +28,7 @@
   "compress_target_too_low": "هذا الحجم صغير جدًا لهذه المدة — ستتأثر جودة الصورة وقد يتجاوز الملف الهدف قليلًا.",
   "compress_was": "حاليًا {{size}}",
   "download_as": "التنزيل بصيغة",
-  "download_audio_note": "يُحفظ الصوت دائمًا بأفضل MP3 يوفره الموقع.",
+  "download_audio_note": "يحتفظ التنزيل الصوتي بالمقطع كما قدّمه الموقع، ما لم يُختَر MP3.",
   "download_file_not_resumable": "هذا الخادم لا يدعم الاستئناف — الانقطاع يعني البدء من جديد",
   "download_file_note": "يُنزّل هذا الرابط كما هو تمامًا — دون أي تحويل",
   "download_file_resumable": "إذا انقطع، يكمل من حيث توقف",
@@ -36,7 +39,6 @@
   "download_type_audio": "صوت (MP3)",
   "download_type_video": "فيديو (MP4)",
   "drop_file": "أفلت ملفًا هنا",
-
   "error_selecting_folder": "خطأ في اختيار المجلد",
   "eta_remaining": "متبقٍ {{time}}",
   "extract_audio_format": "استخراج بصيغة",
@@ -101,7 +103,6 @@
   "settings_general": "عام",
   "settings_general_note": "شكل التطبيق واللغة التي يعمل بها.",
   "settings_sections": "أقسام الإعدادات",
-
   "sidebar_collapse": "طي القائمة",
   "sidebar_expand": "توسيع القائمة",
   "stage_downloading": "جارٍ التنزيل",
@@ -110,7 +111,6 @@
   "stage_merging": "جارٍ الدمج",
   "stage_preparing": "التحضير",
   "stage_queued": "في الانتظار",
-
   "start_download": "بدء التنزيل",
   "status_cancelled": "ملغى",
   "status_completed": "مكتمل",
@@ -140,12 +140,10 @@
   "tool_missing": "غير موجود",
   "tool_optional_absent": "غير مثبّت",
   "tool_ready": "جاهز",
-
   "tool_trim": "قص",
   "tool_trim_about": "احتفظ بالجزء الذي تريده واقطع الباقي.",
   "tool_trim_action": "قص ملف",
   "tools_bundled_note": "هذه مضمّنة داخل التطبيق، فلا حاجة لتثبيت أي شيء.",
-
   "trim_end": "النهاية",
   "trim_exact": "قص دقيق",
   "trim_exact_hint": "أبطأ، لكنه يقص تمامًا حيث طلبت",

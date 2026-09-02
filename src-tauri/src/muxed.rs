@@ -111,6 +111,10 @@ pub struct Stream {
     headers: HeaderMap,
     size_bytes: u64,
     ext: String,
+    /// yt-dlp's own name for the audio codec in this stream, or `None` when it
+    /// carries no audio. Read only by `Target::AudioCopy`, to pick the container
+    /// the packets belong in.
+    acodec: Option<String>,
 }
 
 /// A page resolved into something this engine can fetch.
@@ -134,6 +138,17 @@ impl Plan {
     pub fn stream_count(&self) -> usize {
         self.streams.len()
     }
+
+    /// The container this plan's audio can be copied into, or `None` when the
+    /// app knows no box for that codec.
+    ///
+    /// Only meaningful for a single-stream audio plan; the caller has already
+    /// checked `stream_count` by the time it asks. `None` is what turns a
+    /// request for `original` back into an encode, which always works.
+    pub fn audio_copy_ext(&self) -> Option<&'static str> {
+        let stream = self.streams.first()?;
+        copy_container(stream.acodec.as_deref()?)
+    }
 }
 
 /// What the fetched streams are turned into once they are on disk.
@@ -146,6 +161,20 @@ pub enum Target {
     /// mp3` does at the end of its own download, done here so the *transfer*
     /// can still happen on eight connections.
     Mp3,
+    /// One audio stream, lifted into the container its codec belongs in without
+    /// being decoded.
+    ///
+    /// The stream a site serves as "bestaudio" is already a finished AAC or
+    /// Opus file; running it through LAME spends a minute to make it measurably
+    /// worse. This is the same argument `ops::copy_audio_ext` makes for the
+    /// extract-audio tool, applied to the download that fetched the stream in
+    /// the first place.
+    ///
+    /// Still an ffmpeg pass rather than a rename, because the container and the
+    /// codec are different questions: YouTube's Opus arrives inside a WebM, and
+    /// renaming that to `.opus` produces a file whose extension lies about its
+    /// bytes. `-c:a copy` moves the same packets into the right box.
+    AudioCopy,
 }
 
 /// Asks yt-dlp what this page's chosen formats are, and whether they are ones
@@ -256,7 +285,46 @@ fn usable(format: Format) -> Option<Stream> {
         headers: header_map(format.http_headers.as_ref()),
         size_bytes,
         ext: format.ext.unwrap_or_else(|| "bin".to_string()),
+        acodec: format.acodec.filter(|codec| codec != "none"),
     })
+}
+
+/// The container this audio codec belongs in, for `Target::AudioCopy`.
+///
+/// yt-dlp names codecs the way ffprobe does but with profile suffixes -- `mp4a`
+/// alone, or `mp4a.40.2` -- so this matches on the prefix. The mapping itself is
+/// `ops::copy_audio_ext`'s, minus the PCM flavours no site streams.
+///
+/// `None` means "no container this app is sure of", and the caller falls back to
+/// encoding rather than guessing a box the packets do not fit in.
+fn copy_container(acodec: &str) -> Option<&'static str> {
+    let codec = acodec.to_ascii_lowercase();
+    // mp4a is yt-dlp's spelling of AAC; ffprobe calls the same thing "aac".
+    if codec.starts_with("mp4a") || codec.starts_with("aac") {
+        return Some("m4a");
+    }
+    if codec.starts_with("opus") {
+        return Some("opus");
+    }
+    if codec.starts_with("vorbis") {
+        return Some("ogg");
+    }
+    if codec.starts_with("mp3") {
+        return Some("mp3");
+    }
+    if codec.starts_with("flac") {
+        return Some("flac");
+    }
+    if codec.starts_with("alac") {
+        return Some("m4a");
+    }
+    if codec.starts_with("ec-3") || codec.starts_with("eac3") {
+        return Some("eac3");
+    }
+    if codec.starts_with("ac-3") || codec.starts_with("ac3") {
+        return Some("ac3");
+    }
+    None
 }
 
 /// yt-dlp's header map, minus anything reqwest will not accept.
@@ -378,6 +446,11 @@ pub async fn run(
     let ext = match target {
         Target::Container => plan.ext.as_str(),
         Target::Mp3 => "mp3",
+        // The caller only picks this target after `audio_copy_ext` answered, so
+        // the fallback is unreachable in practice -- but naming a container the
+        // codec does not fit would produce a file that lies about itself, and
+        // m4a is the one every source this path accepts can be muxed into.
+        Target::AudioCopy => plan.audio_copy_ext().unwrap_or("m4a"),
     };
     let output = paths::unique_output(dir, &stem, ext);
     if let Err(error) = assemble(app, emitters, id, cancel, &parts, &output, target).await {
@@ -441,7 +514,9 @@ async fn assemble(
             id,
             JobKind::Download,
             match target {
-                Target::Container => Stage::Merging,
+                // A copy is a remux either way: nothing is being encoded, and
+                // "Encoding" on a step that takes two seconds reads as a lie.
+                Target::Container | Target::AudioCopy => Stage::Merging,
                 Target::Mp3 => Stage::Encoding,
             },
         )
@@ -463,6 +538,13 @@ async fn assemble(
         // stream that a few players choke on.
         Target::Mp3 => {
             cmd.args(["-vn", "-c:a", "libmp3lame", "-q:a", "0"]);
+        }
+        // `-vn` for the same reason as MP3: an audio format's cover art arrives
+        // as a video stream, and copying it into an m4a gives some players a
+        // file they refuse to open. `+faststart` matters for the same reason it
+        // does on video -- an m4a with its index at the end will not stream.
+        Target::AudioCopy => {
+            cmd.args(["-vn", "-c:a", "copy", "-movflags", "+faststart"]);
         }
     }
     cmd.arg(output);
@@ -661,6 +743,79 @@ mod tests {
 
         assert_eq!(plan.stream_count(), 1, "an MP3 comes from one stream");
         assert_eq!(plan.total_bytes(), 10_271_496);
+        // The same stream, asked the other question: it is AAC, so it can be
+        // handed over rather than run through LAME.
+        assert_eq!(plan.audio_copy_ext(), Some("m4a"));
+    }
+
+    /// YouTube's other audio ladder. Opus arrives inside a WebM, which is why
+    /// `Target::AudioCopy` is an ffmpeg pass and not a rename: the container the
+    /// packets came in is not the container they belong in.
+    #[test]
+    fn an_opus_stream_copies_into_opus_and_not_into_webm() {
+        let json = r#"{
+            "title": "Big Buck Bunny", "ext": "webm",
+            "format_id": "251",
+            "url": "https://rr1.googlevideo.com/videoplayback?a=1",
+            "protocol": "https",
+            "filesize": 8123456,
+            "vcodec": "none",
+            "acodec": "opus"
+        }"#;
+        let plan = plan_from(json).expect("an opus stream is fetchable");
+
+        assert_eq!(plan.audio_copy_ext(), Some("opus"));
+        assert_eq!(plan.ext, "webm", "the source container is still webm");
+    }
+
+    /// A codec with no container this app is sure of has to turn back into an
+    /// encode rather than guessing a box the packets do not fit in.
+    #[test]
+    fn an_unknown_audio_codec_has_no_copy_container() {
+        let json = r#"{
+            "title": "Odd", "ext": "mka",
+            "url": "https://cdn.example.com/a.mka", "protocol": "https",
+            "filesize": 4096, "vcodec": "none", "acodec": "truehd"
+        }"#;
+        let plan = plan_from(json).expect("the stream itself is fetchable");
+        assert_eq!(plan.audio_copy_ext(), None);
+    }
+
+    /// A video plan is not an audio plan. `audio_copy_ext` reads the *first*
+    /// stream, which for a merge is the video -- and a video track has no
+    /// business naming an audio container.
+    #[test]
+    fn a_video_stream_offers_no_audio_container() {
+        let json = r#"{
+            "title": "Clip", "ext": "mp4",
+            "url": "https://cdn.example.com/v.mp4", "protocol": "https",
+            "filesize": 123, "vcodec": "avc1.42001E", "acodec": "none"
+        }"#;
+        let plan = plan_from(json).expect("a video-only stream is fetchable");
+        assert_eq!(plan.audio_copy_ext(), None);
+    }
+
+    /// yt-dlp writes codecs with profile suffixes and ffprobe does not, so the
+    /// mapping has to match on the prefix. Every spelling here came off a real
+    /// `-J` response.
+    #[test]
+    fn codec_names_map_to_containers_by_prefix() {
+        assert_eq!(copy_container("mp4a.40.2"), Some("m4a"));
+        assert_eq!(copy_container("mp4a.40.5"), Some("m4a"));
+        assert_eq!(copy_container("aac"), Some("m4a"));
+        assert_eq!(copy_container("opus"), Some("opus"));
+        assert_eq!(copy_container("vorbis"), Some("ogg"));
+        assert_eq!(copy_container("mp3"), Some("mp3"));
+        assert_eq!(copy_container("flac"), Some("flac"));
+        assert_eq!(copy_container("alac"), Some("m4a"));
+        // Dolby, spelled both of the ways the two ecosystems spell it.
+        assert_eq!(copy_container("ec-3"), Some("eac3"));
+        assert_eq!(copy_container("eac3"), Some("eac3"));
+        assert_eq!(copy_container("ac-3"), Some("ac3"));
+
+        assert_eq!(copy_container("truehd"), None);
+        assert_eq!(copy_container("none"), None);
+        assert_eq!(copy_container(""), None);
     }
 
     /// A storyboard or a subtitle track has neither codec. Nothing to merge and

@@ -110,11 +110,33 @@ pub struct DownloadRequest {
     /// expire faster than the transfer takes, needs a way back to the old
     /// behaviour that does not require a new release.
     pub parallel: Option<bool>,
+    /// What an audio download should end up as: `original` to keep the stream
+    /// the site served, `mp3` to re-encode it.
+    ///
+    /// Absent means `mp3`, which is what every version before this one did
+    /// unconditionally. Meaningless when `media_type` is not audio.
+    pub audio_format: Option<String>,
 }
+
+/// The value the download form sends for "leave the stream alone".
+///
+/// The same word the extract-audio tool uses for the same idea, deliberately:
+/// they are one promise made in two places, and a user who has met it once on
+/// the tool screen should not have to learn a second name for it here.
+pub const ORIGINAL_AUDIO: &str = "original";
 
 impl DownloadRequest {
     fn wants_audio(&self) -> bool {
         self.media_type == "audio"
+    }
+
+    /// Whether an audio download should keep the stream it fetched.
+    fn wants_original_audio(&self) -> bool {
+        self.wants_audio()
+            && self
+                .audio_format
+                .as_deref()
+                .is_some_and(|format| format.eq_ignore_ascii_case(ORIGINAL_AUDIO))
     }
 }
 
@@ -486,11 +508,6 @@ async fn run_media(
         } else {
             format_selector(request.quality.as_deref())
         };
-        let target = if audio {
-            muxed::Target::Mp3
-        } else {
-            muxed::Target::Container
-        };
         let cancel = jobs.cancel_signal(id).await;
 
         // Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about
@@ -516,6 +533,18 @@ async fn run_media(
             .filter(|plan| !audio || plan.stream_count() == 1);
 
         if let Some(plan) = usable {
+            // Decided here rather than above, because for `original` the answer
+            // depends on what the resolve actually came back with: a codec this
+            // app has no container for degrades to an encode instead of failing,
+            // which is the same choice `ops::extract_audio` makes.
+            let target = if !audio {
+                muxed::Target::Container
+            } else if request.wants_original_audio() && plan.audio_copy_ext().is_some() {
+                muxed::Target::AudioCopy
+            } else {
+                muxed::Target::Mp3
+            };
+
             match muxed::run(
                 app,
                 jobs,
@@ -570,7 +599,16 @@ async fn run_ytdlp(
         .map(paths::sanitize_stem)
         .unwrap_or_else(|| "%(title).100B".to_string());
 
-    let ext = if is_audio { "mp3" } else { "mp4" };
+    // Only ever a fallback, for the case where yt-dlp's `after_move` print does
+    // not reach us -- see the `unwrap_or_else` at the end of this function. Every
+    // branch of it is a guess, `mp4` included: a webm-only site produces a
+    // `.webm`. m4a is the guess for a copied audio stream because AAC is what
+    // the great majority of sites serve as their best audio.
+    let ext = match (is_audio, request.wants_original_audio()) {
+        (true, true) => "m4a",
+        (true, false) => "mp3",
+        (false, _) => "mp4",
+    };
     let template = dir.join(format!("{stem}.%(ext)s"));
 
     let mut args: Vec<String> = vec![
@@ -609,13 +647,21 @@ async fn run_ytdlp(
     ];
 
     if is_audio {
-        args.extend([
-            "-x".into(),
-            "--audio-format".into(),
-            "mp3".into(),
-            "--audio-quality".into(),
-            "0".into(),
-        ]);
+        args.push("-x".into());
+        args.extend(if request.wants_original_audio() {
+            // `best` is yt-dlp's word for "do not re-encode": it lifts the
+            // stream out of whatever container it arrived in and leaves the
+            // packets alone. The extension follows the codec, which is why the
+            // template below is `%(ext)s` rather than a fixed one.
+            ["--audio-format".into(), "best".into()]
+        } else {
+            ["--audio-format".into(), "mp3".into()]
+        });
+        if !request.wants_original_audio() {
+            // LAME's best VBR. Meaningless for a copy, and yt-dlp warns when it
+            // is passed with `--audio-format best`.
+            args.extend(["--audio-quality".into(), "0".into()]);
+        }
     } else {
         args.extend([
             "-f".into(),
@@ -850,6 +896,44 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A request as the download form sends one, with only the fields a test
+    /// cares about set.
+    fn request(media_type: &str, audio_format: Option<&str>) -> DownloadRequest {
+        DownloadRequest {
+            url: "https://example.com/watch".into(),
+            output_dir: "/tmp".into(),
+            output_name: None,
+            media_type: media_type.into(),
+            quality: None,
+            mode: None,
+            parallel: None,
+            audio_format: audio_format.map(str::to_string),
+        }
+    }
+
+    /// Every install before this one sent no `audioFormat` at all, and those
+    /// requests are still stored on the retry button of any failed download in
+    /// the job list. They have to keep meaning MP3.
+    #[test]
+    fn an_absent_audio_format_still_means_mp3() {
+        assert!(!request("audio", None).wants_original_audio());
+        assert!(request("audio", None).wants_audio());
+    }
+
+    #[test]
+    fn original_is_recognised_whatever_its_case() {
+        assert!(request("audio", Some("original")).wants_original_audio());
+        assert!(request("audio", Some("Original")).wants_original_audio());
+        assert!(!request("audio", Some("mp3")).wants_original_audio());
+    }
+
+    /// The audio format has nothing to say about a video download, and a stray
+    /// value must not send one down the copy path.
+    #[test]
+    fn a_video_request_is_never_original_audio() {
+        assert!(!request("video", Some("original")).wants_original_audio());
+    }
 
     /// `validate_url`'s answer, for the cases that have one. `AppError` is not
     /// `PartialEq` -- deliberately, it carries process output -- so the tests

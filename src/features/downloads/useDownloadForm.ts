@@ -22,6 +22,7 @@ import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
 import type { DownloadRequest, LibrarySlot, UrlInfo } from "../jobs/types";
+import type { AudioFormat } from "./useDownloadSettings";
 
 interface Options {
   isOnline: boolean;
@@ -38,6 +39,9 @@ export interface DownloadFormValues {
   url: string;
   mediaType: "video" | "audio";
   quality: string;
+  /** What an audio download should end up as. Ignored for video, and for a
+   *  direct file link, which is fetched as whatever it already is. */
+  audioFormat: AudioFormat;
   /** The standing "download on several connections" setting, carried onto the
    *  request so a retry a week later runs the way this one did. */
   parallel: boolean;
@@ -205,6 +209,8 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         outputName: isFile ? undefined : name || undefined,
         mediaType: values.mediaType,
         quality: values.mediaType === "audio" ? undefined : values.quality,
+        audioFormat:
+          values.mediaType === "audio" ? values.audioFormat : undefined,
         // Always auto. The probe above is a preview, not a decision: it can be
         // stale by the time the bytes are requested, and the backend is the one
         // that has to be right.
@@ -222,7 +228,14 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
           isFile && resolved
             ? detailFor(resolved, t)
             : values.mediaType === "audio"
-              ? "MP3"
+              ? // Not the container: which one an `original` download lands in
+                // depends on what the site turns out to serve, and the card is
+                // written before a byte has been fetched. The word for the
+                // choice is the honest thing to show, and it is the same word
+                // the setting is labelled with.
+                values.audioFormat === "original"
+                ? t("audio_format_original")
+                : "MP3"
               : values.quality,
       }).catch((error) => notify("error", describeAppError(ipc.toAppError(error), t)));
 

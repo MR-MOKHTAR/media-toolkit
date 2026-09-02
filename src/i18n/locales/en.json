@@ -1,9 +1,12 @@
 {
   "already_smaller": "already smaller",
-
   "app_name": "Media Toolkit",
   "appearance": "Appearance",
-  "audio_quality_note": "MP3 · best quality available",
+  "audio_format": "Audio format",
+  "audio_format_mp3_note": "Re-encodes to MP3. Slower, and slightly worse than the original — for whatever insists on it.",
+  "audio_format_original": "Original",
+  "audio_format_original_note": "Hands over the track as the site served it — instant, and nothing is lost.",
+  "audio_quality_note": "Best quality the site offers",
   "back": "Back",
   "bundled_tools": "Bundled tools",
   "cancel_button": "Cancel",
@@ -25,7 +28,7 @@
   "compress_target_too_low": "That size is very small for this length — the picture will suffer, and the file may end up slightly over.",
   "compress_was": "Currently {{size}}",
   "download_as": "Download as",
-  "download_audio_note": "Audio is always saved as the best MP3 the site offers.",
+  "download_audio_note": "Audio downloads keep the track the site served unless MP3 is chosen.",
   "download_file_not_resumable": "This server cannot resume — an interruption starts it over",
   "download_file_note": "This link is downloaded exactly as it is — nothing is converted",
   "download_file_resumable": "If it stops, it continues from where it left off",
@@ -36,7 +39,6 @@
   "download_type_audio": "Audio (MP3)",
   "download_type_video": "Video (MP4)",
   "drop_file": "Drop a file here",
-
   "error_selecting_folder": "Error selecting folder",
   "eta_remaining": "{{time}} left",
   "extract_audio_format": "Extract as",
@@ -101,7 +103,6 @@
   "settings_general": "General",
   "settings_general_note": "How the app looks and which language it speaks.",
   "settings_sections": "Settings sections",
-
   "sidebar_collapse": "Collapse menu",
   "sidebar_expand": "Expand menu",
   "stage_downloading": "Downloading",
@@ -110,7 +111,6 @@
   "stage_merging": "Merging",
   "stage_preparing": "Preparing",
   "stage_queued": "Waiting",
-
   "start_download": "Start Download",
   "status_cancelled": "Cancelled",
   "status_completed": "Completed",
@@ -140,12 +140,10 @@
   "tool_missing": "Missing",
   "tool_optional_absent": "Not installed",
   "tool_ready": "Ready",
-
   "tool_trim": "Trim",
   "tool_trim_about": "Keep the part you want, cut the rest.",
   "tool_trim_action": "Trim a file",
   "tools_bundled_note": "These ship inside the app, so nothing needs installing.",
-
   "trim_end": "End",
   "trim_exact": "Exact cut",
   "trim_exact_hint": "Slower, cuts exactly where you asked",

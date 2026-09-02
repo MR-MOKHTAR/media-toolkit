@@ -111,6 +111,11 @@ export interface DownloadRequest {
   outputName?: string;
   mediaType: "video" | "audio";
   quality?: string;
+  /** What an audio download ends up as: `original` keeps the stream the site
+   *  served, `mp3` re-encodes it. Absent means `mp3` -- which is what every
+   *  build before this one did, and what the requests stored on the retry
+   *  button of an older failed download still mean. */
+  audioFormat?: "original" | "mp3";
   /** Which engine to use. `auto` -- what every screen sends -- lets the backend
    *  decide from one HTTP request: a page goes to yt-dlp, a link that already
    *  points at the file goes to the direct downloader. */

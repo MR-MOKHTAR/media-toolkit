@@ -1,9 +1,12 @@
 {
   "already_smaller": "از این کوچک‌تر است",
-
   "app_name": "جعبه‌ابزار مدیا",
   "appearance": "ظاهر",
-  "audio_quality_note": "بهترین کیفیت موجود · MP3",
+  "audio_format": "قالب صدا",
+  "audio_format_mp3_note": "به MP3 تبدیل می‌کند. کندتر، و کمی بدتر از فایل اصلی — برای وقتی که چیزی اصرار دارد.",
+  "audio_format_original": "اصلی",
+  "audio_format_original_note": "فایل را همان‌طور که سایت داده تحویل می‌دهد — فوری، و بدون افت کیفیت.",
+  "audio_quality_note": "بهترین کیفیتی که سایت می‌دهد",
   "back": "بازگشت",
   "bundled_tools": "ابزارهای همراه",
   "cancel_button": "لغو",
@@ -25,7 +28,7 @@
   "compress_target_too_low": "این حجم برای این مدت خیلی کم است — کیفیت تصویر افت می‌کند و ممکن است فایل کمی بزرگ‌تر از هدف شود.",
   "compress_was": "الان {{size}}",
   "download_as": "دانلود به شکل",
-  "download_audio_note": "صدا همیشه به شکل بهترین MP3 موجود ذخیره می‌شود.",
+  "download_audio_note": "دانلود صوتی همان فایلی را نگه می‌دارد که سایت داده، مگر MP3 انتخاب شود.",
   "download_file_not_resumable": "این سرور ادامه دادن را پشتیبانی نمی‌کند — قطع شدن یعنی شروع دوباره",
   "download_file_note": "این لینک دقیقاً همان‌طور که هست دانلود می‌شود — چیزی تبدیل نمی‌شود",
   "download_file_resumable": "اگر قطع شود، از همان‌جا ادامه پیدا می‌کند",
@@ -36,7 +39,6 @@
   "download_type_audio": "صوت (MP3)",
   "download_type_video": "ویدیو (MP4)",
   "drop_file": "فایل را اینجا رها کنید",
-
   "error_selecting_folder": "خطا در انتخاب پوشه",
   "eta_remaining": "{{time}} باقی‌مانده",
   "extract_audio_format": "استخراج به‌صورت",
@@ -101,7 +103,6 @@
   "settings_general": "عمومی",
   "settings_general_note": "ظاهر برنامه و زبانی که با آن کار می‌کند.",
   "settings_sections": "بخش‌های تنظیمات",
-
   "sidebar_collapse": "جمع کردن منو",
   "sidebar_expand": "باز کردن منو",
   "stage_downloading": "در حال دانلود",
@@ -110,7 +111,6 @@
   "stage_merging": "در حال ادغام",
   "stage_preparing": "آماده‌سازی",
   "stage_queued": "در صف",
-
   "start_download": "شروع دانلود",
   "status_cancelled": "لغوشده",
   "status_completed": "تکمیل‌شده",
@@ -140,12 +140,10 @@
   "tool_missing": "موجود نیست",
   "tool_optional_absent": "نصب نشده",
   "tool_ready": "آماده",
-
   "tool_trim": "برش",
   "tool_trim_about": "بخشی را که می‌خواهید نگه دارید، بقیه را ببرید.",
   "tool_trim_action": "برش یک فایل",
   "tools_bundled_note": "این‌ها داخل خود اپ هستند، پس نیازی به نصب چیزی نیست.",
-
   "trim_end": "پایان",
   "trim_exact": "برش دقیق",
   "trim_exact_hint": "کندتر، ولی دقیقاً همان‌جا که خواستید می‌برد",
