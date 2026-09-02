@@ -16,10 +16,9 @@ import { useMediaFile, type MediaInfo } from "../useMediaFile";
 import { useMediaJob } from "../useMediaJob";
 import { FileDropZone, OutputFolderRow, RunButton } from "./ToolFormParts";
 
-/** The tools that are a file in, a file out. Download has no input file and
- *  transcribe has a whole second screen for its result, so neither of the two
- *  is one of these. */
-export type MediaToolKind = Exclude<JobKind, "download" | "transcribe">;
+/** The tools that are a file in, a file out. Download is the one job kind that
+ *  is not one of these: it has no input file to pick. */
+export type MediaToolKind = Exclude<JobKind, "download">;
 
 /** What the input has to be before the tool can do anything with it. */
 type Requirement = "media" | "video" | "audio";

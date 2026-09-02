@@ -40,9 +40,9 @@ download that died at 95% costs seconds rather than starting over.
 
 Everything the app produces lands in one folder it owns —
 `~/Downloads/Media Toolkit` — sorted into `Video`, `Audio`, `Files`,
-`Compressed`, `Trimmed`, `Converted`, and `Transcripts`. Extracted audio joins
-audio downloads on the `Audio` shelf — both are audio files this app made, and
-which tool produced one is not what anybody looks for it under.
+`Compressed`, `Trimmed`, and `Converted`. Extracted audio joins audio downloads
+on the `Audio` shelf — both are audio files this app made, and which tool
+produced one is not what anybody looks for it under.
 Nothing is written loose into Downloads beside your own files.
 
 Settings moves that folder, flattens it into a single directory, or switches the
@@ -87,7 +87,7 @@ Environment variables for the build:
 
 ```
 src/
-  app/            routing — a state machine, not a router (9 screens, no URLs)
+  app/            routing — a state machine, not a router (7 screens, no URLs)
   lib/            ipc.ts is the single Tauri boundary
   components/     ui primitives, layout, feedback
   features/

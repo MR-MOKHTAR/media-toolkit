@@ -54,12 +54,11 @@ interface SectionDefinition {
  * General first: theme and language are what people come here for, and they are
  * the only settings that are about the app rather than about a job it runs.
  * Storage second, because it is the one answer every tool depends on -- a
- * download, a compression and a transcript all land in that folder -- and "where
- * did my file go" is the question Settings is opened to answer most. Downloads
- * and Transcription follow: the two tools' own standing preferences, in the
- * order the sidebar lists the tools they belong to. Bundled tools last, because
- * it is a status report and a repair button, not a setting -- nobody comes to it
- * except when something has broken.
+ * download, a compression and a trim all land in that folder -- and "where did
+ * my file go" is the question Settings is opened to answer most. Downloads
+ * follows: the one tool with standing preferences of its own. Bundled tools
+ * last, because it is a status report and a repair button, not a setting --
+ * nobody comes to it except when something has broken.
  */
 const SECTIONS: Record<SettingsSection, SectionDefinition> = {
   general: {
@@ -177,9 +176,8 @@ export function SettingsScreen({
   };
 
   // Each section is its panel and nothing else. The line that explains it is a
-  // property of the section, rendered once under the heading below -- panels are
-  // also used on their own, ApiKeyPanel on the transcribe screen, where a note
-  // about the Settings section it usually sits in would make no sense.
+  // property of the section, rendered once under the heading below rather than
+  // inside each panel, so a panel stays reusable outside this rail.
   const body: Record<SettingsSection, ReactNode> = {
     general: (
       <GeneralPanel

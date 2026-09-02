@@ -55,12 +55,15 @@ pub enum Slot {
     Compressed,
     Trimmed,
     Converted,
-    Transcripts,
 }
 
 impl Slot {
     /// The on-disk name. ASCII, no spaces to quote, stable across releases --
     /// changing one of these strands every file already written under it.
+    ///
+    /// `Transcripts` was one of these until v1.3. Its folder is not deleted on
+    /// upgrade -- an empty one is harmless, and a user who put something there
+    /// would not thank us -- it simply stops being created and referenced.
     pub fn dir_name(self) -> &'static str {
         match self {
             Self::Video => "Video",
@@ -69,12 +72,11 @@ impl Slot {
             Self::Compressed => "Compressed",
             Self::Trimmed => "Trimmed",
             Self::Converted => "Converted",
-            Self::Transcripts => "Transcripts",
         }
     }
 
     /// Every shelf, for creating the layout up front.
-    pub fn all() -> [Slot; 7] {
+    pub fn all() -> [Slot; 6] {
         [
             Self::Video,
             Self::Audio,
@@ -82,7 +84,6 @@ impl Slot {
             Self::Compressed,
             Self::Trimmed,
             Self::Converted,
-            Self::Transcripts,
         ]
     }
 }
@@ -301,7 +302,6 @@ mod tests {
                 "Compressed",
                 "Trimmed",
                 "Converted",
-                "Transcripts",
             ]
         );
     }
@@ -309,11 +309,19 @@ mod tests {
     #[test]
     fn slots_cross_the_bridge_as_camel_case() {
         assert_eq!(
-            serde_json::to_string(&Slot::Transcripts).unwrap(),
-            "\"transcripts\""
+            serde_json::to_string(&Slot::Compressed).unwrap(),
+            "\"compressed\""
         );
         let back: Slot = serde_json::from_str("\"compressed\"").unwrap();
         assert_eq!(back, Slot::Compressed);
+    }
+
+    /// A shelf that no longer exists must be refused rather than silently
+    /// resolving to something else. `transcripts` is the one the frontend could
+    /// still ask for, from a route or a stored job written by an older build.
+    #[test]
+    fn a_retired_slot_is_no_longer_accepted() {
+        assert!(serde_json::from_str::<Slot>("\"transcripts\"").is_err());
     }
 
     #[test]

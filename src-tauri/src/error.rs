@@ -43,43 +43,11 @@ pub enum AppError {
 
     UnknownJob { id: String },
 
-    /// No API key configured for a service that needs one. Recoverable in the
-    /// same way `ToolMissing` is: the UI points at Settings.
-    MissingApiKey { service: String },
-
-    /// The quota is spent. `scope` is the difference between "wait a few
-    /// minutes" and "come back tomorrow", which is the only thing the user can
-    /// act on, so it is carried rather than flattened into a message.
-    RateLimited {
-        scope: RateScope,
-        /// What the service asked us to wait, when it said. Absent for a limit
-        /// we refused locally, before sending anything.
-        retry_after_secs: Option<u64>,
-    },
-
-    /// The service answered, and the answer was a refusal. Distinct from
-    /// `Spawn` (never reached it) and `Tool` (a local binary failed).
-    Api {
-        service: String,
-        status: u16,
-        message: String,
-    },
-
-    /// The request never arrived: DNS, TLS, timeout, or simply offline. Split
-    /// from `Api` because there is no status to report and the advice is
-    /// completely different -- check your connection, not check your key.
+    /// The request never arrived: DNS, TLS, timeout, or simply offline. Its own
+    /// variant rather than an `Io` or a `Spawn`, because there is no path and no
+    /// process to name and the advice is completely different -- check your
+    /// connection, not check your disk.
     Network { message: String },
-}
-
-/// Which window ran out. Both refill on their own; only the wait differs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RateScope {
-    Hour,
-    Day,
-    /// The service said no without telling us which budget it was. Reported as
-    /// "busy, try again" rather than inventing a window.
-    Request,
 }
 
 impl AppError {
@@ -108,14 +76,6 @@ impl AppError {
         }
     }
 
-    pub fn api(service: impl Into<String>, status: u16, message: impl Into<String>) -> Self {
-        Self::Api {
-            service: service.into(),
-            status,
-            message: message.into(),
-        }
-    }
-
     pub fn network(error: impl std::fmt::Display) -> Self {
         Self::Network {
             message: error.to_string(),
@@ -136,20 +96,7 @@ impl std::fmt::Display for AppError {
             Self::Io { path, message } => write!(f, "{path}: {message}"),
             Self::Cancelled => write!(f, "cancelled"),
             Self::UnknownJob { id } => write!(f, "no such job: {id}"),
-            Self::MissingApiKey { service } => write!(f, "no {service} API key configured"),
-            Self::RateLimited {
-                scope,
-                retry_after_secs,
-            } => match retry_after_secs {
-                Some(secs) => write!(f, "rate limited ({scope:?}), retry in {secs}s"),
-                None => write!(f, "rate limited ({scope:?})"),
-            },
-            Self::Api {
-                service,
-                status,
-                message,
-            } => write!(f, "{service} returned {status}: {message}"),
-            Self::Network { message } => write!(f, "could not reach the service: {message}"),
+            Self::Network { message } => write!(f, "could not reach the server: {message}"),
         }
     }
 }
@@ -162,45 +109,48 @@ pub type AppResult<T> = Result<T, AppError>;
 mod tests {
     use super::*;
 
-    /// The frontend switches on `kind` and reads the fields by camelCase name.
-    /// Asserting on the serialized form rather than the attribute is the lesson
-    /// from `output_path`: an attribute can read correctly and still emit
-    /// snake_case, and the only symptom is a `undefined` the UI renders as an
-    /// empty string.
+    /// The frontend switches on `kind`, and every arm of that switch is one of
+    /// these strings spelled in camelCase. A variant renamed on the Rust side
+    /// without its `case` in `errorText.ts` falls through to the generic
+    /// "something went wrong", which is a silent loss of the only useful part of
+    /// a failure -- so the wire names are pinned here rather than assumed from
+    /// the attribute.
     #[test]
-    fn the_new_variants_cross_the_bridge_in_camel_case() {
-        let json = serde_json::to_value(AppError::RateLimited {
-            scope: RateScope::Day,
-            retry_after_secs: Some(90),
-        })
-        .unwrap();
-        assert_eq!(json["kind"], "rateLimited");
-        assert_eq!(json["scope"], "day");
-        assert_eq!(json["retryAfterSecs"], 90);
-        assert!(json.get("retry_after_secs").is_none(), "{json}");
+    fn every_variant_crosses_the_bridge_in_camel_case() {
+        let kind = |error: AppError| serde_json::to_value(error).unwrap()["kind"].clone();
 
-        let json = serde_json::to_value(AppError::MissingApiKey {
-            service: "Groq".into(),
-        })
-        .unwrap();
-        assert_eq!(json["kind"], "missingApiKey");
-        assert_eq!(json["service"], "Groq");
-
-        let json = serde_json::to_value(AppError::api("Groq", 401, "invalid key")).unwrap();
-        assert_eq!(json["kind"], "api");
-        assert_eq!(json["status"], 401);
-        assert_eq!(json["message"], "invalid key");
+        assert_eq!(kind(AppError::tool_missing("yt-dlp")), "toolMissing");
+        assert_eq!(kind(AppError::invalid("url", "empty")), "invalidInput");
+        assert_eq!(kind(AppError::spawn("ffmpeg", "no such file")), "spawn");
+        assert_eq!(
+            kind(AppError::Tool {
+                tool: "ffmpeg".into(),
+                code: Some(1),
+                tail: "Invalid data".into(),
+            }),
+            "tool"
+        );
+        assert_eq!(kind(AppError::io("/tmp/x", "denied")), "io");
+        assert_eq!(kind(AppError::Cancelled), "cancelled");
+        assert_eq!(kind(AppError::UnknownJob { id: "7".into() }), "unknownJob");
+        assert_eq!(kind(AppError::network("dns")), "network");
     }
 
-    /// A locally refused limit has nothing to report as a wait, and inventing
-    /// one would put a countdown on the screen that means nothing.
+    /// `rename_all_fields` as well as `rename_all` -- the lesson from
+    /// `retry_after_secs`, which crossed the bridge in snake_case and left the
+    /// field it fed permanently `undefined`. No variant carries a multi-word
+    /// field today; this pins the container attribute so the next one that does
+    /// cannot repeat it.
     #[test]
-    fn a_preflight_refusal_carries_a_null_retry_after() {
-        let json = serde_json::to_value(AppError::RateLimited {
-            scope: RateScope::Hour,
-            retry_after_secs: None,
+    fn fields_are_renamed_as_well_as_variants() {
+        let json = serde_json::to_value(AppError::Tool {
+            tool: "ffmpeg".into(),
+            code: None,
+            tail: "killed".into(),
         })
         .unwrap();
-        assert!(json["retryAfterSecs"].is_null(), "{json}");
+        assert_eq!(json["tool"], "ffmpeg");
+        assert!(json["code"].is_null(), "{json}");
+        assert_eq!(json["tail"], "killed");
     }
 }

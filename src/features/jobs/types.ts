@@ -24,12 +24,10 @@ export type JobStage =
   | "encoding"
   | "finalizing";
 
-/** Which budget ran out. The hour recovers in minutes and the day does not, so
- *  this is the only part of a rate limit anyone can act on. */
-export type RateScope = "hour" | "day" | "request";
-
 /** Mirrors the Rust `AppError` tagged union, so failures can be translated
- *  rather than dumping Rust text into a toast. */
+ *  rather than dumping Rust text into a toast. Every `kind` here is asserted
+ *  against its serialized spelling in `error.rs`'s tests: a variant that drifts
+ *  falls through `describeAppError` to a generic "something went wrong". */
 export type AppError =
   | { kind: "toolMissing"; tool: string }
   | { kind: "invalidInput"; field: string; reason: string }
@@ -38,9 +36,6 @@ export type AppError =
   | { kind: "io"; path: string; message: string }
   | { kind: "cancelled" }
   | { kind: "unknownJob"; id: string }
-  | { kind: "missingApiKey"; service: string }
-  | { kind: "rateLimited"; scope: RateScope; retryAfterSecs: number | null }
-  | { kind: "api"; service: string; status: number; message: string }
   | { kind: "network"; message: string };
 
 export interface JobProgress {

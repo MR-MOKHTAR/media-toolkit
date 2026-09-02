@@ -248,7 +248,7 @@ fn compress_audio(
         arg("-c:a"),
         arg("aac"),
         arg("-b:a"),
-        arg(&format!("{kbps}k")),
+        arg(format!("{kbps}k")),
         arg("-ac"),
         arg("2"),
         arg("-movflags"),

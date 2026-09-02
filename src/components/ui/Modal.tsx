@@ -28,10 +28,10 @@ interface ModalProps {
  *
  * Three fixed parts -- header, scrolling body, footer -- and the middle one is
  * the only thing that moves. That is the whole reason this exists rather than a
- * taller card: the transcribe form with its advanced section open is longer than
- * the 500px window this app allows, and a run button at the end of a long column
- * ends up below the fold exactly when it is being aimed at. Here it sits on the
- * footer and stays put.
+ * taller card: the compress form with a size target set is longer than the 500px
+ * window this app allows, and a run button at the end of a long column ends up
+ * below the fold exactly when it is being aimed at. Here it sits on the footer
+ * and stays put.
  *
  * The look is `ConfirmDialog`'s, deliberately: same scrim, same glass, same
  * corner, same two keyframes. They are the only two dialogs in the app and they

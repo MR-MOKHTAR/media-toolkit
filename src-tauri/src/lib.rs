@@ -10,7 +10,6 @@ mod muxed;
 mod paths;
 mod process;
 mod settings;
-mod transcribe;
 mod updater;
 
 use jobs::Jobs;
@@ -24,12 +23,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Jobs::default())
         .setup(|app| {
-            // A transcription killed by a SIGKILL or a power cut leaves its
-            // chunk directory behind, and those are large. Nothing else ever
-            // cleans them up, so a stale sweep at startup is the only thing
-            // between a working install and a slowly filling /tmp.
-            sweep_stale_workdirs();
-
             // The library is created here rather than on the first save, so
             // "your files go to ~/Downloads/Media Toolkit" is true from the
             // moment the app is installed and the folder is there to be found.
@@ -71,12 +64,6 @@ pub fn run() {
             media::commands::start_trim,
             media::commands::start_convert,
             media::commands::start_extract_audio,
-            transcribe::commands::start_transcribe,
-            transcribe::commands::read_transcript,
-            transcribe::commands::api_key_status,
-            transcribe::commands::set_api_key,
-            transcribe::commands::clear_api_key,
-            transcribe::commands::test_api_key,
         ])
         .on_window_event(|window, event| {
             // Without this, killing the window leaves yt-dlp and ffmpeg running
@@ -88,31 +75,4 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-/// Removes transcription chunk directories left behind by a previous run.
-///
-/// Only ones over a day old, so a second window -- or a job still running in
-/// another instance -- cannot have its working files pulled out from under it.
-fn sweep_stale_workdirs() {
-    const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(86_400);
-
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if !name.to_string_lossy().starts_with("mt-transcribe-") {
-            continue;
-        }
-        let stale = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .and_then(|at| at.elapsed().map_err(std::io::Error::other))
-            .map(|age| age > MAX_AGE)
-            .unwrap_or(false);
-        if stale {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
 }

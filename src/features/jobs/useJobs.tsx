@@ -93,7 +93,7 @@ export function JobsProvider({
   ) => void;
   children: ReactNode;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // Lazy initialiser: reading localStorage on every render would be wasteful,
   // and the migration inside it must run exactly once.
   const [state, dispatch] = useReducer(jobsReducer, emptyJobsState, loadJobs);
@@ -324,22 +324,11 @@ export function JobsProvider({
     }
 
     if (payload.state === "failed") {
-      // A rate limit is not a broken job, and wrapping it in "X failed:" reads
-      // as one. It is the single failure the user is expected to *act* on -- by
-      // waiting, or by running the other model -- so it gets the sentence to
-      // itself, as a warning rather than an error. This is also the only place
-      // the daily limit is ever mentioned now: the app no longer keeps its own
-      // count of what has been spent, so Groq's own 429 is what says so.
-      if (payload.error.kind === "rateLimited") {
-        notify("warning", describeAppError(payload.error, t, i18n.language));
-        return;
-      }
-
       notify(
         "error",
         t("toast_job_failed", {
           title,
-          reason: describeAppError(payload.error, t, i18n.language),
+          reason: describeAppError(payload.error, t),
         }),
       );
       return;

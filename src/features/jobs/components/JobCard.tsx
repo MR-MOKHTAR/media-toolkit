@@ -299,9 +299,9 @@ function JobCardComponent({
         {job.state === "failed" && job.error && (
           <p
             className="line-clamp-2 text-xs text-danger"
-            title={describeAppError(job.error, t, language)}
+            title={describeAppError(job.error, t)}
           >
-            {describeAppError(job.error, t, language)}
+            {describeAppError(job.error, t)}
           </p>
         )}
       </div>

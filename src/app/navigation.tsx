@@ -1,10 +1,11 @@
 /**
  * Navigation.
  *
- * A state machine, not a router. There are six screens, no deep links, no
- * address bar (the window is undecorated), no SEO and a bundle small enough
- * that code splitting would not pay for itself. react-router would cost about
- * 25 KB and a whole mental model for none of what it is good at.
+ * A state machine, not a router. There are seven screens -- five tools, the job
+ * list and Settings -- no deep links, no address bar (the window is
+ * undecorated), no SEO and a bundle small enough that code splitting would not
+ * pay for itself. react-router would cost about 25 KB and a whole mental model
+ * for none of what it is good at.
  */
 import {
   createContext,
@@ -38,12 +39,11 @@ export type SettingsSection =
  * Whether the tool's form is open over its list.
  *
  * In the route rather than in the screen's own `useState`, and the reason is a
- * flow that already exists: two forms send the user to Settings mid-edit -- the
- * download screen's quality hint and the transcribe screen's model row -- and
- * both expect to be found as they were left on the way back. Local state cannot
- * survive that, because leaving unmounts the screen. Recorded here, `replace`
- * before the trip carries the open form and its half-filled field across, and
- * `back` restores both.
+ * flow that already exists: the download form sends the user to Settings
+ * mid-edit -- the quality hint links there -- and expects to be found as it was
+ * left on the way back. Local state cannot survive that, because leaving
+ * unmounts the screen. Recorded here, `replace` before the trip carries the open
+ * form and its half-filled field across, and `back` restores both.
  *
  * It also means Escape closes the form and then, pressed again, leaves the
  * screen -- one key, two steps, in the order the user expects.
@@ -54,12 +54,12 @@ interface Composing {
 }
 
 /**
- * The six screens that are a tool: a list of what it has done, with its form
+ * The five screens that are a tool: a list of what it has done, with its form
  * over the top when `composing`.
  *
- * Named as a type of its own because `ToolScreen` is written once for all six
+ * Named as a type of its own because `ToolScreen` is written once for all five
  * and has to be able to say what it takes. `ToolRoute["name"]` is exactly
- * `JobKind` -- the same six strings -- which is what lets that screen read the
+ * `JobKind` -- the same five strings -- which is what lets that screen read the
  * tool it is showing off the route rather than being told twice.
  */
 export type ToolRoute =
@@ -85,9 +85,9 @@ interface NavigationValue {
   /** Swaps the current entry without adding to history.
    *
    *  For a screen that wants what it is holding to survive being left and come
-   *  back to: the transcribe form records the chosen file into its own route
-   *  before pushing the result screen, so the entry `back` pops to already
-   *  knows about it. Otherwise returning to a form always means an empty one. */
+   *  back to: a tool form records the chosen file into its own route before
+   *  leaving, so the entry `back` pops to already knows about it. Otherwise
+   *  returning to a form always means an empty one. */
   replace: (route: Route) => void;
   back: () => void;
 }

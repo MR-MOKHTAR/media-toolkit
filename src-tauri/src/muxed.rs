@@ -293,6 +293,13 @@ fn header_map(headers: Option<&std::collections::HashMap<String, String>>) -> He
 /// seconds and costs a connection count that looks like abuse. Sequential also
 /// makes the progress arithmetic honest: a single running total over a known
 /// grand total.
+///
+/// Nine arguments, deliberately. Seven of them are the job's ambient context --
+/// the handle, the registry, the id, the emitters, the cancel signal -- which
+/// every path in this module already takes in exactly this order; bundling them
+/// into a struct here and nowhere else would make this one call site look
+/// different from `download::run_ytdlp` and `direct::run` for no gain.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     app: &AppHandle,
     jobs: &Jobs,

@@ -29,7 +29,7 @@ interface CheckRowProps {
  * toggle takes in this app.
  *
  * There were three copies of this -- one in the storage settings, one on the
- * trim tool, one behind transcribe's advanced disclosure -- and the storage one
+ * trim tool, one behind an advanced disclosure -- and the storage one
  * carried a comment saying a setting should look like a setting wherever it
  * appears. It did not: the three had drifted to different gaps and different
  * border colours, and each was a raw `<input type="checkbox">`, which can be
