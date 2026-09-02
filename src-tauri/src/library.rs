@@ -5,8 +5,8 @@
 //! transcript and a 4K download landed side by side, and nothing in that folder
 //! said which of them this app had produced.
 //!
-//! So the app owns a folder -- `~/Downloads/Media Toolkit` by default -- and
-//! sorts what it writes into one subfolder per tool. Two properties matter more
+//! So the app owns a folder -- `~/Downloads/MediaToolkit` by default, named from
+//! `productName` -- and sorts what it writes into one subfolder per tool. Two properties matter more
 //! than the layout itself:
 //!
 //! * The root is a persisted setting, not a per-session choice. Picking a
@@ -114,8 +114,10 @@ fn app_folder_name(app: &AppHandle) -> String {
     cleaned
 }
 
-/// `<Downloads>/Media Toolkit`, resolved through the platform's real Downloads
-/// folder -- see `paths::default_download_dir`.
+/// `<Downloads>/MediaToolkit`, resolved through the platform's real Downloads
+/// folder -- see `paths::default_download_dir`. The last component is
+/// `productName` sanitized, so it carries no space today; `FALLBACK_FOLDER` is
+/// the only place the spaced spelling is still written.
 pub fn default_root(app: &AppHandle) -> PathBuf {
     PathBuf::from(paths::default_download_dir(app)).join(app_folder_name(app))
 }
@@ -151,7 +153,7 @@ pub fn folder(app: &AppHandle, slot: Slot) -> AppResult<PathBuf> {
 }
 
 /// Creates the library so it exists before the first job -- someone who opens
-/// the app, reads "files are saved to ~/Downloads/Media Toolkit" and goes
+/// the app, reads "files are saved to ~/Downloads/MediaToolkit" and goes
 /// looking should find it there.
 ///
 /// Best effort: a root on a disconnected drive is a real situation, and it is

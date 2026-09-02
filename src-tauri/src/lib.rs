@@ -24,7 +24,7 @@ pub fn run() {
         .manage(Jobs::default())
         .setup(|app| {
             // The library is created here rather than on the first save, so
-            // "your files go to ~/Downloads/Media Toolkit" is true from the
+            // "your files go to ~/Downloads/MediaToolkit" is true from the
             // moment the app is installed and the folder is there to be found.
             library::ensure_layout(app.handle());
 

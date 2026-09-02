@@ -39,7 +39,7 @@ download that died at 95% costs seconds rather than starting over.
 ## Where files go
 
 Everything the app produces lands in one folder it owns —
-`~/Downloads/Media Toolkit` — sorted into `Video`, `Audio`, `Files`,
+`~/Downloads/MediaToolkit` — sorted into `Video`, `Audio`, `Files`,
 `Compressed`, `Trimmed`, and `Converted`. Extracted audio joins audio downloads
 on the `Audio` shelf — both are audio files this app made, and which tool
 produced one is not what anybody looks for it under.
