@@ -47,8 +47,8 @@ Nothing is written loose into Downloads beside your own files.
 
 Settings moves that folder, flattens it into a single directory, or switches the
 editing tools back to writing next to the file they opened. The choice is stored
-in `settings.json` next to the API key, so it survives a restart; picking a
-folder on a tool screen still overrides it for that one job.
+in `settings.json`, so it survives a restart; picking a folder on a tool screen
+still overrides it for that one job.
 
 ## Languages
 
