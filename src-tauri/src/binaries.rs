@@ -136,11 +136,31 @@ fn find_executable_path(app: &AppHandle, file: &str) -> Option<PathBuf> {
 /// passing it. The path is given explicitly so a runtime found somewhere PATH
 /// does not reach -- an app data dir, a bundled resource someone dropped in --
 /// is still used.
-pub fn with_js_runtime(app: &AppHandle, cmd: &mut Command) {
+fn with_js_runtime(app: &AppHandle, cmd: &mut Command) {
     if let Some(runtime) = js_runtime(app) {
         cmd.arg("--js-runtimes");
         cmd.arg(format!("{}:{}", runtime.name, runtime.path.to_string_lossy()));
     }
+}
+
+/// Closes a yt-dlp command: the last options, then `--`, then the URL.
+///
+/// The `--` is not decoration. It is what stops yt-dlp reading a URL that
+/// begins with a dash as an option -- and, in the other direction, what makes
+/// everything after it a URL. An option added past it is not an option any
+/// more: `--js-runtimes node:/usr/bin/node` placed after the URL became two
+/// more downloads, and yt-dlp answered with
+///
+///   ERROR: [generic] '--js-runtimes' is not a valid URL
+///   ERROR: Unable to handle request: Unsupported url scheme: "node"
+///
+/// then exited non-zero, failing a download that had already finished. Every
+/// caller went through this function afterwards so the order is decided in one
+/// place rather than re-established correctly at four call sites.
+pub fn with_url(app: &AppHandle, cmd: &mut Command, url: &str) {
+    with_js_runtime(app, cmd);
+    cmd.arg("--");
+    cmd.arg(url);
 }
 
 /// Where a tool was found, plus the directory it was found in. The directory

@@ -773,12 +773,11 @@ async fn run_ytdlp(
         args.push(browser.to_string());
     }
 
-    args.push("--".into());
-    args.push(url.to_string());
-
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
     cmd.args(&args);
-    binaries::with_js_runtime(app, &mut cmd);
+    // The `--` and the URL come last, from here, because nothing may follow
+    // them -- see `binaries::with_url`.
+    binaries::with_url(app, &mut cmd, url);
 
     // The child goes into the registry so `cancel_job` can reach it, while the
     // reader keeps the pipes. Taking stdout and stderr before the handover is
@@ -948,8 +947,7 @@ pub async fn probe_url(
     // answers an anonymous probe with "Video unavailable", which is a confusing
     // way to be told to log in.
     with_cookies(&mut cmd, cookies_from);
-    cmd.args(["--", &url]);
-    binaries::with_js_runtime(app, &mut cmd);
+    binaries::with_url(app, &mut cmd, &url);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
     let value: serde_json::Value = serde_json::from_str(&stdout)
@@ -1056,8 +1054,7 @@ pub async fn list_playlist(
     // where yt-dlp's own default is the single video.
     cmd.args(["-J", "--no-warnings", "--flat-playlist", "--yes-playlist"]);
     with_cookies(&mut cmd, cookies_from);
-    cmd.args(["--", &url]);
-    binaries::with_js_runtime(app, &mut cmd);
+    binaries::with_url(app, &mut cmd, &url);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
     let value: serde_json::Value = serde_json::from_str(&stdout)

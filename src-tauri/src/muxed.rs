@@ -196,8 +196,7 @@ pub async fn resolve(
     // sees, which for a members-only video is none -- so the fast path would
     // decline and hand a login-walled link to yt-dlp to fail on slowly.
     crate::download::with_cookies(&mut cmd, cookies_from);
-    cmd.args(["--", url]);
-    binaries::with_js_runtime(app, &mut cmd);
+    binaries::with_url(app, &mut cmd, url);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
     let extracted: Extracted = match serde_json::from_str(&stdout) {
