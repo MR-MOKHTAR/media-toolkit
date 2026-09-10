@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager, State};
 
 use crate::binaries::{self, Tool};
-use crate::download::{self, DownloadRequest, UrlInfo};
+use crate::download::{self, DownloadRequest, PlaylistListing, UrlInfo};
 use crate::error::{AppError, AppResult};
 use crate::jobs::{JobKind, JobSummary, Jobs};
 
@@ -22,11 +22,6 @@ pub struct ToolStatus {
     pub ytdlp: bool,
     pub ffmpeg: bool,
     pub ffprobe: bool,
-    /// The JavaScript runtime yt-dlp needs for YouTube. Reported like the
-    /// others because its absence is not silent -- it costs formats -- and
-    /// "some of your downloads came back at a lower quality" is not something
-    /// anyone would think to look for without a row saying so.
-    pub deno: bool,
     /// Shown in Settings next to the update button, so "is it current?" is a
     /// question the user can answer without leaving the app.
     pub ytdlp_version: Option<String>,
@@ -70,11 +65,10 @@ pub async fn warm_tool_status(app: &AppHandle) {
 }
 
 async fn measure_tools(app: &AppHandle) -> ToolStatus {
-    let (ytdlp_version, ffmpeg, ffprobe, deno) = tokio::join!(
+    let (ytdlp_version, ffmpeg, ffprobe) = tokio::join!(
         binaries::probe(app, Tool::YtDlp),
         binaries::probe(app, Tool::Ffmpeg),
         binaries::probe(app, Tool::Ffprobe),
-        binaries::probe(app, Tool::Deno),
     );
 
     ToolStatus {
@@ -84,7 +78,11 @@ async fn measure_tools(app: &AppHandle) -> ToolStatus {
         ytdlp: ytdlp_version.is_some(),
         ffmpeg: ffmpeg.is_some(),
         ffprobe: ffprobe.is_some(),
-        deno: deno.is_some(),
+        // The JavaScript runtime is deliberately not measured here. Nothing is
+        // bundled for it and nothing depends on it -- `binaries::js_runtime`
+        // finds whatever the machine has and points yt-dlp at it, silently --
+        // so a status the app reported to a Settings row that no longer exists
+        // was a PATH walk performed for nobody.
         ytdlp_version,
     }
 }
@@ -101,8 +99,35 @@ pub async fn update_ytdlp(app: AppHandle) -> AppResult<crate::updater::UpdateRes
 }
 
 #[tauri::command]
-pub async fn probe_url(app: AppHandle, url: String) -> AppResult<UrlInfo> {
-    download::probe_url(&app, &url).await
+pub async fn probe_url(
+    app: AppHandle,
+    url: String,
+    cookies_from: Option<String>,
+) -> AppResult<UrlInfo> {
+    download::probe_url(&app, &url, cookies_from.as_deref()).await
+}
+
+/// The browsers this build can read cookies from, in yt-dlp's own spelling.
+///
+/// Asked for rather than hard-coded in the frontend, so the list Settings offers
+/// and the list the backend accepts cannot drift apart.
+#[tauri::command]
+pub fn cookie_browsers() -> Vec<&'static str> {
+    download::BROWSERS.to_vec()
+}
+
+/// The videos behind a playlist link, for the form to queue one download each.
+///
+/// Its own command rather than a field on `probe_url` because it is the slow
+/// half: walking a playlist is a second yt-dlp run, and it only happens once the
+/// user has said they want the whole thing.
+#[tauri::command]
+pub async fn list_playlist(
+    app: AppHandle,
+    url: String,
+    cookies_from: Option<String>,
+) -> AppResult<PlaylistListing> {
+    download::list_playlist(&app, &url, cookies_from.as_deref()).await
 }
 
 #[tauri::command]

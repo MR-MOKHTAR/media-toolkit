@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { Gauge, Link2, ListVideo, RotateCw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  FileAudio,
+  Gauge,
+  Link2,
+  ListVideo,
+  Music2,
+  RotateCw,
+  Video,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
@@ -16,7 +24,8 @@ import {
   type FileKind,
 } from "../../lib/fileKind";
 import * as ipc from "../../lib/ipc";
-import { formatBytes, formatDuration } from "../../lib/format";
+import { formatBytes, formatCount, formatDuration } from "../../lib/format";
+import { firstUrlIn, looksLikeUrl, normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import {
   OutputFolderRow,
@@ -24,7 +33,7 @@ import {
 } from "../media/components/ToolFormParts";
 import { ToolDialog } from "../tools/ToolDialog";
 import type { UrlInfo } from "../jobs/types";
-import { useDownloadForm } from "./useDownloadForm";
+import { useDownloadForm, type PlaylistChoice } from "./useDownloadForm";
 import { qualityLabel, useDownloadSettings } from "./useDownloadSettings";
 
 interface Props {
@@ -56,7 +65,7 @@ interface Props {
  * above an empty field, describing a download nobody had asked for yet.
  */
 export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { go, replace } = useNavigation();
   const [url, setUrl] = useState(initialUrl ?? "");
   // Read on mount, which is every time this screen is opened -- so a quality
@@ -71,10 +80,22 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     null,
   );
   const [probing, setProbing] = useState(false);
+  /** True once the clipboard has put a link in an empty field, so the second
+   *  effect below knows to select it. */
+  const [filledFromClipboard, setFilledFromClipboard] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** What is in the field right now, readable from the clipboard effect --
+   *  which runs once, and whose closure would otherwise never see a keystroke
+   *  that landed while the read was in flight. */
+  const urlRef = useRef(url);
+  urlRef.current = url;
 
-  const trimmed = url.trim();
-  const info = probe?.url === trimmed ? probe.info : null;
+  /** The link the field is holding, as the backend will see it: the URL out of
+   *  whatever was pasted, with a scheme supplied if it had none. Everything
+   *  downstream keys off this rather than the raw text, so the preview, the
+   *  probe and the request are all about the same link. */
+  const link = normalizeUrl(url);
+  const info = probe?.url === link ? probe.info : null;
 
   // A file link has nothing to choose: it is fetched exactly as it is, so the
   // media toggle and the quality picker would both be lying about what is
@@ -83,6 +104,15 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   const fileKind: FileKind | null = info && isFile
     ? fileKindOf(info.title, info.uploader)
     : null;
+
+  /** Whether this link raises the playlist question at all: it either is a
+   *  playlist page, or it is a video that names one. */
+  const namesPlaylist = Boolean(info && (info.isPlaylist || info.inPlaylist));
+  /** Reset per link rather than remembered: "all of them" is an answer about
+   *  one particular playlist, and carrying it to the next link pasted would
+   *  queue a second list nobody asked for. */
+  const [playlist, setPlaylist] = useState<PlaylistChoice>("one");
+  useEffect(() => setPlaylist("one"), [link]);
 
   const { savePath, toolsReady, starting, selectFolder, start } = useDownloadForm({
     isOnline,
@@ -93,10 +123,45 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
 
   useEffect(() => inputRef.current?.focus(), []);
 
+  // The link that is already on the clipboard, put in the field.
+  //
+  // Opening this form is, almost always, the second half of copying a link
+  // somewhere else -- so the field starts holding the thing the user came here
+  // to paste, and the preview for it is already loading by the time they look
+  // at the dialog. Selected rather than left at the caret, so typing over it
+  // costs nothing if the guess was wrong.
+  //
+  // Skipped when arriving from Settings mid-edit: `initialUrl` is the field as
+  // it was left, and the clipboard has no business overwriting it. Skipped too
+  // if anything has been typed while the read was in flight -- reading the
+  // clipboard is IPC, and the user is faster than it sometimes.
+  useEffect(() => {
+    if (initialUrl?.trim()) return;
+    let cancelled = false;
+    void ipc.readClipboardText().then((text) => {
+      const found = text && firstUrlIn(text);
+      // `urlRef` rather than `url`: this effect runs once and its closure would
+      // hold the empty string forever, so the field's own state is the only
+      // thing that can say whether anything has been typed since.
+      if (cancelled || !found || urlRef.current) return;
+      setUrl(found);
+      setFilledFromClipboard(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialUrl]);
+
+  // Selecting has to wait for the value to be on the input, which is the render
+  // after `setUrl` -- hence a second effect rather than a call beside it.
+  useEffect(() => {
+    if (filledFromClipboard) inputRef.current?.select();
+  }, [filledFromClipboard]);
+
   // Debounced: pasting a link fires a change per character otherwise, and a
   // probe is at best an HTTP round trip and at worst a yt-dlp spawn.
   useEffect(() => {
-    if (!/^https?:\/\/\S+$/i.test(trimmed) || !isOnline) {
+    if (!looksLikeUrl(link) || !isOnline) {
       setProbe(null);
       return;
     }
@@ -104,14 +169,14 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     setProbing(true);
     const timer = setTimeout(() => {
       void ipc
-        .probeUrl(trimmed)
+        .probeUrl(link, settings.cookiesFrom || undefined)
         // The URL is stored either way, so a result that arrives after the
         // field has moved on is discarded rather than shown under a link it is
         // not about. A failure leaves the preview empty; `start` asks again,
         // which is the right thing to do about a request that may just have
         // caught a bad moment.
-        .then((result) => !cancelled && setProbe({ url: trimmed, info: result }))
-        .catch(() => !cancelled && setProbe({ url: trimmed, info: null }))
+        .then((result) => !cancelled && setProbe({ url: link, info: result }))
+        .catch(() => !cancelled && setProbe({ url: link, info: null }))
         .finally(() => !cancelled && setProbing(false));
     }, 600);
 
@@ -120,23 +185,28 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       clearTimeout(timer);
       setProbing(false);
     };
-  }, [trimmed, isOnline]);
+  }, [link, isOnline, settings.cookiesFrom]);
 
   const submit = () => {
     void start(
       {
-        url,
+        url: link,
         mediaType,
         quality: settings.quality,
+        audioFormat: settings.audioFormat,
+        // Only ever "all" for a link that raises the question. A stale choice
+        // cannot leak onto the next link -- the effect above resets it -- but
+        // the request is the wrong place to rely on that.
+        playlist: namesPlaylist ? playlist : "one",
+        cookiesFrom: settings.cookiesFrom,
         parallel: settings.parallel,
         link: info,
       },
-      () => setUrl(""),
-    ).then(
-      // The dialog closes on success and the download is already the top row of
-      // the list behind it. Nothing to clear and nowhere to go: the form is
-      // unmounted, and the next link opens a fresh one.
-      (ok) => ok && onDone(),
+      // Closes as soon as the request is accepted, not when the backend has
+      // finished looking the link up. The download appears as the top row of
+      // the list behind it a moment later; the form is unmounted, so there is
+      // nothing left to clear.
+      onDone,
     );
   };
 
@@ -148,7 +218,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         <RunButton
           label={t("start_download")}
           disabled={
-            !trimmed || !savePath || !isOnline || starting || (!toolsReady && !isFile)
+            !link || !savePath || !isOnline || starting || (!toolsReady && !isFile)
           }
           onClick={submit}
         />
@@ -179,6 +249,17 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
             type="url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
+            // A link pasted out of a message arrives with the message around
+            // it. Keeping only the link is what the field would have to be
+            // hand-edited into anyway, and it is what the preview below needs
+            // to have something to show.
+            onPaste={(event) => {
+              const text = event.clipboardData.getData("text");
+              const found = firstUrlIn(text);
+              if (!found || found === text.trim()) return;
+              event.preventDefault();
+              setUrl(found);
+            }}
             onKeyDown={(event) => event.key === "Enter" && submit()}
             placeholder={t("url_placeholder")}
             // Always LTR: a URL reads left to right in every language.
@@ -199,47 +280,114 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         // moment a probe came back.
         <FileNotes resumable={info?.resumable ?? false} />
       ) : (
-        // Only once the probe has answered, and only when the answer is a
-        // media page. That is the only link where video-or-MP3 is a real
-        // question, and it is the moment the user has something to answer it
-        // about -- before that the app would be asking what to do with a link
-        // nobody has pasted. The preview appears in the same beat, so this
-        // costs no extra shift of the form.
+        // As soon as there is a link in the field -- not once the probe has
+        // answered about it.
+        //
+        // It used to wait for `info`, on the reasoning that video-or-audio is
+        // only a real question for a media page. The reasoning holds; making
+        // the probe the gate does not. A probe is a network request and a
+        // yt-dlp spawn, and when it fails -- an extractor that needs cookies, a
+        // rate limit, a slow line, or the version of this app whose yt-dlp
+        // arguments were in the wrong order -- the form quietly lost the one
+        // choice it exists to ask, and every YouTube link downloaded as video
+        // with no way to say otherwise. The choice does not depend on the
+        // answer, so it no longer waits for it.
+        //
+        // A direct file is still the exception, and that one is known rather
+        // than assumed: the branch above only runs on a probe that came back
+        // saying "file".
         //
         // A segmented control, not the two large cards it replaces: it is one
         // line of the form like every other choice in the app, rather than the
         // biggest thing on the screen.
-        info && (
+        looksLikeUrl(link) && (
           <ControlGroup>
             <Segmented
               label={t("download_as")}
               value={mediaType}
               onChange={(value) => update("mediaType", value)}
+              // The same two glyphs the Settings panel puts on this exact
+              // choice, so the control the form asks with and the one that
+              // remembers the answer are recognisably the same control.
               options={[
-                { value: "video", label: t("download_type_video") },
-                { value: "audio", label: t("download_type_audio") },
+                {
+                  value: "video",
+                  label: t("download_type_video"),
+                  icon: <Video size={16} />,
+                },
+                {
+                  value: "audio",
+                  label: t("download_type_audio"),
+                  icon: <Music2 size={16} />,
+                },
               ]}
             />
 
-            {/* The quality, as a hint under the control it qualifies rather
-                than a row of its own. It is not a decision being made here --
-                it was made once in Settings -- so it is written the size of
-                the other things this form states rather than the size of the
-                things it asks. Audio has no quality to state: yt-dlp is asked
-                for the best MP3 it can make either way. */}
-            {mediaType === "video" ? (
-              <QualityHint
-                quality={qualityLabel(settings.quality, t("quality_best"))}
-                // The link and the open form both survive the trip: this entry
-                // is what `back` from Settings returns to, so it has to carry
-                // the field and the fact that the dialog was open with it.
-                onOpenSettings={() => {
-                  replace({ name: "download", link: url, composing: true });
-                  go({ name: "settings", section: "downloads" });
-                }}
-              />
-            ) : (
-              <p className="text-xs text-fg-muted">{t("audio_quality_note")}</p>
+            {/* What the choice above will actually produce, as a hint under
+                the control it qualifies rather than a row of its own. It is
+                not a decision being made here -- it was made once in Settings
+                -- so it is written the size of the other things this form
+                states rather than the size of the things it asks.
+
+                Both halves of the toggle get one. Audio used to get a flat
+                sentence with nothing to press: the form said "best quality the
+                site offers" and left the actual question about an audio
+                download -- the track as it came, or MP3 -- unmentioned and
+                unreachable, three clicks away in a Settings section the user
+                had no reason to know existed. */}
+            <SettingHint
+              icon={mediaType === "video" ? <Gauge size={12} /> : <FileAudio size={12} />}
+              label={mediaType === "video" ? t("video_quality") : t("audio_format")}
+              value={
+                mediaType === "video"
+                  ? qualityLabel(settings.quality, t("quality_best"))
+                  : settings.audioFormat === "mp3"
+                    ? "MP3"
+                    : t("audio_format_original")
+              }
+              // The link and the open form both survive the trip: this entry
+              // is what `back` from Settings returns to, so it has to carry
+              // the field and the fact that the dialog was open with it.
+              onOpenSettings={() => {
+                replace({ name: "download", link: url, composing: true });
+                go({ name: "settings", section: "downloads" });
+              }}
+            />
+
+            {/* The other question this link raises, and only when it raises
+                one. The backend has been reporting that a link is a playlist
+                since the feature existed, to a form that showed a warning and
+                offered nothing -- so the answer was always "the first video",
+                and the other thirty-nine simply never arrived.
+
+                Defaults to the one video. Queueing forty downloads is not what
+                anybody means by pressing Download once, and it is the choice
+                that is expensive to undo. */}
+            {info && namesPlaylist && (
+              <div className="flex flex-col gap-1.5">
+                <Segmented
+                  label={t("playlist_scope")}
+                  value={playlist}
+                  onChange={setPlaylist}
+                  options={[
+                    { value: "one" as const, label: t("playlist_only_this") },
+                    {
+                      value: "all" as const,
+                      label: info.entryCount
+                        ? t("playlist_all_of", {
+                            total: formatCount(info.entryCount, i18n.language),
+                          })
+                        : t("playlist_all"),
+                    },
+                  ]}
+                />
+                {playlist === "all" && (
+                  <p className="flex items-center gap-1.5 text-xs text-fg-muted">
+                    <ListVideo size={12} className="shrink-0" />
+                    <span>{t("playlist_all_hint")}</span>
+                  </p>
+                )}
+              </div>
             )}
           </ControlGroup>
         )
@@ -326,15 +474,14 @@ function LinkPreview({
                     .join(" · ")}
             </p>
 
-            {/* A link to a playlist downloads its first video and nothing else
-                -- `--no-playlist` is passed on every call, deliberately, because
-                queueing forty videos off one paste is not what anyone meant by
-                pressing Download once. The backend has been reporting that this
-                is a playlist, and how long it is, to nobody: the form looked
-                exactly the same as for a single video and the other thirty-nine
-                simply never arrived, with no line anywhere saying so. */}
-            {info?.isPlaylist && (
-              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-warning">
+            {/* That this link carries a playlist. The *choice* about it is a
+                control further down the form -- this line is only the label,
+                sitting with the title and channel it belongs to.
+
+                It used to be a warning, because "the first video and nothing
+                else" was all the app could do. It is not a warning any more. */}
+            {info && (info.isPlaylist || info.inPlaylist) && (
+              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-fg-muted">
                 <ListVideo size={12} className="shrink-0" />
                 {/* Two keys rather than i18next's `count`, which switches on a
                     plural rule and would need one key per form -- two in
@@ -344,8 +491,10 @@ function LinkPreview({
                     not. */}
                 <span className="truncate">
                   {info.entryCount
-                    ? t("playlist_first_only_of", { total: info.entryCount })
-                    : t("playlist_first_only")}
+                    ? t("playlist_of", {
+                        total: formatCount(info.entryCount, i18n.language),
+                      })
+                    : t("playlist_label")}
                 </span>
               </p>
             )}
@@ -357,31 +506,40 @@ function LinkPreview({
 }
 
 /**
- * What quality this download will ask for, and the way to change it.
+ * What this download will ask for, and the way to change it.
  *
  * One line of hint text, not the bordered row this started as. The row was the
  * same size as the controls around it while being the only thing on the form
  * that is not a control -- and it sat there on an empty field, stating the
  * quality of a video nobody had pasted a link to yet. Now it appears with the
  * media choice it belongs to, and says its piece in the space a hint takes.
+ *
+ * One component for both halves of that choice rather than a quality-shaped one
+ * and a sentence: they are the same line saying the same kind of thing -- the
+ * standing setting this download will use, and where it lives.
  */
-function QualityHint({
-  quality,
+function SettingHint({
+  icon,
+  label,
+  value,
   onOpenSettings,
 }: {
-  quality: string;
+  icon: ReactNode;
+  label: string;
+  value: string;
   onOpenSettings: () => void;
 }) {
   const { t } = useTranslation();
 
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
-      <Gauge size={12} className="shrink-0" />
-      {t("video_quality")}
-      {/* ltr: "720p" is a number and a Latin letter, the same in every
-          language the interface speaks. */}
+      <span className="shrink-0">{icon}</span>
+      {label}
+      {/* ltr: "720p" and "MP3" are numbers and Latin letters, the same in every
+          language the interface speaks. A translated word -- "Original" -- is
+          unaffected by the direction of a span that holds one word. */}
       <span dir="ltr" className="font-medium text-fg-soft">
-        {quality}
+        {value}
       </span>
       <span aria-hidden>·</span>
       <button

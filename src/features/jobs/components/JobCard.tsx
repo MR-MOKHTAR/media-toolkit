@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  FileText,
   FolderOpen,
   Loader2,
   RotateCcw,
@@ -45,9 +44,6 @@ interface JobCardProps {
   /** Runs an unfinished download again, continuing from what it already got.
    *  Only offered when the job carries the request that started it. */
   onRetry: (id: string) => void;
-  /** Opens the transcript screen for a finished Whisper job. Optional because
-   *  most lists of jobs have nowhere to navigate to. */
-  onViewTranscript?: (id: string) => void;
 }
 
 /** What a download sets as its detail when the user picked audio. */
@@ -78,10 +74,6 @@ function fileKindOfJob(job: Job): FileKind {
   // Whatever container it landed in, the result of this tool is audio -- and it
   // is known before the file exists, which the extension cannot be.
   if (job.kind === "extractAudio") return "audio";
-  // Before the output path is consulted, not after: a finished transcript is a
-  // .srt, which is a document, but saying so here keeps the icon right from the
-  // moment the job starts.
-  if (job.kind === "transcribe") return "document";
 
   if (job.outputPath) return fileKindOf(job.outputPath);
   const fromTitle = fileKindOf(job.title);
@@ -141,9 +133,16 @@ function JobCardComponent({
   onRemove,
   onReveal,
   onRetry,
-  onViewTranscript,
 }: JobCardProps) {
   const { t } = useTranslation();
+
+  // Nothing has an id yet, so nothing on this row can be acted on -- there is
+  // no process to cancel and no file to reveal. What it can honestly show is
+  // the name of the thing that was asked for; the rest is drawn as the shape
+  // it is about to take. `pending` never changes on a job: the real one arrives
+  // under a new id, which is a different row as far as React is concerned.
+  if (job.pending) return <PendingCard job={job} />;
+
   const active = job.state === "running" || job.state === "queued";
   const kind = fileKindOfJob(job);
   const Icon = FILE_KIND_ICON[kind];
@@ -158,11 +157,6 @@ function JobCardComponent({
   const retryable = Boolean(
     job.request && (job.state === "failed" || job.state === "cancelled"),
   );
-  // The card's stretched target still reveals the file, for every kind. Making
-  // it mean something different for one of them would contradict reveal_hint,
-  // which is on every other card in the same list.
-  const viewable = revealable && job.kind === "transcribe" && onViewTranscript;
-
   /* Whatever is known about the file, as the middle group of the metadata line
      between the status and the date. Built as a list so the `·` separators
      fall between whatever actually turned up, rather than every token having
@@ -313,23 +307,14 @@ function JobCardComponent({
         {job.state === "failed" && job.error && (
           <p
             className="line-clamp-2 text-xs text-danger"
-            title={describeAppError(job.error, t, language)}
+            title={describeAppError(job.error, t)}
           >
-            {describeAppError(job.error, t, language)}
+            {describeAppError(job.error, t)}
           </p>
         )}
       </div>
 
       <div className="relative flex shrink-0 items-center gap-1">
-        {viewable && (
-          <IconButton
-            variant="accent"
-            label={t("transcript_view")}
-            onClick={() => onViewTranscript(job.id)}
-          >
-            <FileText size={16} />
-          </IconButton>
-        )}
         {retryable && (
           <IconButton
             variant="accent"
@@ -383,6 +368,58 @@ function JobCardComponent({
             <Trash2 size={16} />
           </IconButton>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * The row a job gets before it is one.
+ *
+ * Between pressing the button and the backend answering there is a probe, a
+ * folder lookup and a process spawn -- a second or two in which the form has
+ * closed and the list still shows nothing. The list is the whole screen here,
+ * so that gap read as the press having been missed, and the second press it
+ * invited would have started the same download twice.
+ *
+ * So the row appears immediately, at the size and in the position the real one
+ * will occupy, and says only what is actually known: the title if the link had
+ * already been probed, the link itself otherwise. Everything it does not know
+ * yet -- the kind of file, the format, the size, the progress -- is a grey
+ * block rather than a guess, and none of the blocks is a control: there is
+ * nothing here to cancel, remove or open.
+ *
+ * It is replaced in place, not added above, so the moment the id arrives the
+ * row simply fills in -- see the `started` case in `jobsReducer`.
+ */
+function PendingCard({ job }: { job: Job }) {
+  const { t } = useTranslation();
+  const isLink = /^https?:\/\//i.test(job.title);
+
+  return (
+    <Card padding="sm" title={job.title} className="flex items-start gap-3">
+      {/* The type icon's square. Which type it is depends on what the link
+          turns out to be, which is the question being answered right now. */}
+      <span className="size-9 shrink-0 animate-pulse rounded-md bg-line" />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <p className="truncate text-base text-fg-soft" dir={isLink ? "ltr" : undefined}>
+          {displayTitleOf(job.title)}
+        </p>
+
+        <div className="flex items-center gap-x-2 overflow-hidden text-xs text-fg-muted">
+          <span className="flex shrink-0 items-center gap-1 font-medium">
+            <Loader2 size={12} className="animate-spin" />
+            {t("status_starting")}
+          </span>
+          {/* Where the format and the size will be. A short bar, because what
+              goes there is short. */}
+          <span className="h-3 w-16 animate-pulse rounded-sm bg-line" />
+        </div>
+
+        {/* The progress bar's own track, at its own height, so the row does not
+            change size when the real bar takes over. */}
+        <div className="h-1.5 w-full animate-pulse rounded-full bg-line" />
       </div>
     </Card>
   );

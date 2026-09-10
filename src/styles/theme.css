@@ -114,6 +114,16 @@
      and `bg-fg/25` in another, for the same job. */
   --color-scrim: rgba(23, 32, 51, 0.25);
 
+  /* The tooltip. Its own three colours because it is the one surface that has
+     to stand apart from whatever it opens over -- the title bar, the rail, a
+     card, the canvas -- and every other surface token is chosen to sit close to
+     those. It was the glass panel with the soft hairline, and over the white
+     title bar that was white on white. Inverted in light: a dark bubble reads
+     against the surface and the blue-grey canvas alike. */
+  --color-tooltip: #1d2638;
+  --color-tooltip-fg: #f3f6fb;
+  --color-tooltip-line: #3a475e;
+
   /* A step deeper than the teal the fills would have taken on their own.
      `text-accent` is a small-text colour in a dozen places -- nav rows, chips,
      the checked option in a picker -- and at #0d9488 that text sat at 3.7:1 on
@@ -229,6 +239,13 @@
     --color-line-strong: #344258;
     --color-line-soft: #1e2837;
     --color-scrim: rgba(0, 0, 0, 0.5);
+
+    /* Lifted rather than inverted: a white bubble in a dark window is a flash.
+       Two steps above the surface, with an edge well past line-strong so it
+       holds against the canvas and the surface alike. */
+    --color-tooltip: #243044;
+    --color-tooltip-fg: #f4f8fd;
+    --color-tooltip-line: #55657f;
 
     --color-accent: #2dd4bf;
     --color-accent-hover: #5eead4;

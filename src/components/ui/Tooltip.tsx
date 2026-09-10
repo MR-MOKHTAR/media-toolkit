@@ -6,12 +6,18 @@ import { cn } from "../../lib/cn";
 /** Distance between the trigger and the bubble, in px. */
 const GAP = 8;
 
+export type TooltipSide = "top" | "right" | "bottom" | "left";
+
 /**
  * A styled tooltip, for controls that are an icon and nothing else.
  *
- * The native `title` attribute is what the rest of the app uses, and it is fine
- * as a fallback, but it waits about a second, cannot be themed, and is drawn by
- * the OS -- so it looks like a different program in a window with no chrome.
+ * Every IconButton carries one -- see Button.tsx -- so this is wrapped by hand
+ * only around the icon-only controls that are not one, the collapsed sidebar
+ * rows. The native `title` attribute is left to truncated text, where it shows
+ * the rest of a name. On a control it was the wrong thing: it waits about a
+ * second, cannot be themed, and is drawn by the OS -- so it looks like a
+ * different program in a window with no chrome, and it was what every button
+ * in the title bar showed.
  *
  * This replaces a hand-written version whose comments were mostly a list of
  * things it had to solve twice. Radix answers all of them and one it never did:
@@ -24,8 +30,8 @@ const GAP = 8;
  *     tooltips unreadable exactly where they were the only label the user had.
  *   - It closes on scroll, on window blur, on Escape and on pointer-down, which
  *     were four separate listeners and a timer.
- *   - `side="right"` is resolved against the `DirectionProvider` in App, so the
- *     bubble opens toward the middle of the window in both writing directions
+ *   - `side` is resolved against the `DirectionProvider` in App, so "right" on
+ *     the rail opens toward the middle of the window in both writing directions
  *     rather than off its edge.
  *   - New: it collides. The measured-once, fixed-position version pointed at
  *     nothing as soon as it ran out of window, so the bottom icon on the rail
@@ -38,7 +44,16 @@ const GAP = 8;
  * Timing and hover behavior are set once on the provider in App, so every bubble
  * in the window agrees.
  */
-export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+export function Tooltip({
+  label,
+  side = "right",
+  children,
+}: {
+  label: string;
+  /** Beside the trigger by default, for the rail. The title bar wants below. */
+  side?: TooltipSide;
+  children: ReactNode;
+}) {
   return (
     <RadixTooltip.Root>
       {/* asChild: the trigger is the caller's own button, and wrapping it in
@@ -48,7 +63,7 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
 
       <RadixTooltip.Portal>
         <RadixTooltip.Content
-          side="right"
+          side={side}
           sideOffset={GAP}
           // The rail is against the window edge, so a bubble that has run out
           // of room should slide along the icon rather than flip to the far
@@ -57,10 +72,15 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
           collisionPadding={GAP}
           aria-hidden
           className={cn(
-            "pointer-events-none z-50 whitespace-nowrap",
-            "rounded-sm border border-line-soft px-2 py-1 text-xs text-fg",
-            "bg-surface-glass backdrop-blur-glass",
-            "shadow-(--shadow-panel)",
+            "pointer-events-none z-50 whitespace-nowrap select-none",
+            // Solid, not glass. The glass surface and its soft hairline are
+            // made to sit close to what is behind them, which is exactly wrong
+            // for a label that has to be found at a glance -- see the tooltip
+            // tokens in theme.css.
+            "rounded-sm border border-tooltip-line bg-tooltip px-2 py-1",
+            "text-xs font-medium text-tooltip-fg",
+            "shadow-(--shadow-raise)",
+            "animate-[fade-in_var(--duration-fast)_var(--ease-out-quart)]",
           )}
         >
           {label}

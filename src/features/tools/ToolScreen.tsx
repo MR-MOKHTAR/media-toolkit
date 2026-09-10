@@ -87,15 +87,7 @@ export function ToolScreen({ route, language, children }: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [route.composing, open]);
 
-  const action = (
-    <Button
-      variant="primary"
-      onClick={open}
-      icon={<Plus size={17} strokeWidth={2.25} />}
-    >
-      {t(`tool_${kind}_action`)}
-    </Button>
-  );
+  const actionIcon = <Plus size={17} strokeWidth={2.25} />;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -121,7 +113,17 @@ export function ToolScreen({ route, language, children }: Props) {
               {t(`tool_${kind}_about`)}
             </p>
           </div>
-          {action}
+          {/* The screen's one primary action. */}
+          <Button
+            variant="primary"
+            onClick={open}
+            icon={actionIcon}
+            // Nothing on screen shows the Ctrl+N handler above; this at least
+            // tells a screen reader it is there.
+            aria-keyshortcuts="Control+N Meta+N"
+          >
+            {t(`tool_${kind}_action`)}
+          </Button>
         </div>
       </header>
 
@@ -135,12 +137,26 @@ export function ToolScreen({ route, language, children }: Props) {
               <EmptyState
                 icon={Icon ? <Icon size={22} /> : null}
                 title={t("no_jobs_title")}
-                // The tool's own line, not the generic one Tasks uses: this
-                // list is empty because *this* tool has not been used, and the
-                // sentence that explains the tool is the one worth reading
-                // while deciding whether to press the button under it.
-                description={t(`tool_${kind}_about`)}
-                action={action}
+                // How to start, not what the tool is: the header right above
+                // already says that, in the same words. And only what the app
+                // really does -- the download form picks up a copied link when
+                // it opens, and the file tools take a file dropped on this
+                // screen (see the drop handler above). A dropped link does
+                // nothing, so the Download line does not offer one.
+                description={
+                  kind === "download"
+                    ? t("no_jobs_hint_link", { action: t("tool_download_action") })
+                    : t("no_jobs_hint_file")
+                }
+                // Secondary: it opens the same form as the header's button,
+                // which stays the one primary on the screen. Two identical
+                // glowing buttons a hand-span apart split the eye between
+                // them and left neither as *the* action.
+                action={
+                  <Button variant="secondary" onClick={open} icon={actionIcon}>
+                    {t(`tool_${kind}_action`)}
+                  </Button>
+                }
               />
             }
           />

@@ -75,7 +75,16 @@ export function ConfirmDialog({
             /* Gradient top accent, same as FormCard. */
             "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",
             "before:bg-(image:--gradient-accent) before:opacity-40 before:rounded-t-xl",
-            "relative overflow-hidden",
+            // `overflow-hidden` clips the hairline above to the rounded corner.
+            // What used to be here with it was `relative`, and it took the
+            // dialog off the screen: Tailwind emits `.relative` after `.fixed`,
+            // both at the same specificity, so an element carrying the two is
+            // positioned relative -- and `top-1/2 left-1/2` then measured from
+            // this content's static position at the very end of the body rather
+            // than from the viewport. The scrim appeared, the dialog did not,
+            // and "Clear finished" looked like it had hung. `fixed` is already
+            // a containing block for the pseudo-element.
+            "overflow-hidden",
             "focus:outline-none",
           )}
         >

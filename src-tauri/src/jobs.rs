@@ -33,17 +33,13 @@ pub enum JobKind {
     Trim,
     Convert,
     ExtractAudio,
-    Transcribe,
 }
 
 impl JobKind {
     /// Which resource this kind competes for.
     fn lane(self) -> Lane {
         match self {
-            // Transcription runs one cheap ffmpeg extraction and then spends
-            // minutes waiting on HTTPS. Putting it in the CPU lane would park a
-            // compression behind an upload that is not using a core at all.
-            Self::Download | Self::Transcribe => Lane::Network,
+            Self::Download => Lane::Network,
             _ => Lane::Cpu,
         }
     }
@@ -66,10 +62,6 @@ pub enum Stage {
     Downloading,
     Merging,
     Encoding,
-    /// Waiting on Groq. Its own stage because the bar can sit still for a minute
-    /// at a time while a chunk is being transcribed, and "Processing" would
-    /// suggest this machine is the one doing the work.
-    Transcribing,
     Finalizing,
 }
 

@@ -137,7 +137,7 @@ export function Select<T extends string>({
  * it clears a selection to.
  *
  * "No preference" is a real answer in this app rather than the absence of one --
- * auto-detect is what the transcriber does best -- and it is stored as `""`
+ * sending no cookies at all is the download default -- and it is stored as `""`
  * because that is what the backend wants. So the two meet here: callers keep
  * passing `""` and reading `""` back, and only the markup in between sees the
  * placeholder. Keeping it in this file means no screen has to know the rule.

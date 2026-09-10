@@ -12,11 +12,40 @@ export const QUALITIES = ["best", "2160", "1440", "1080", "720", "480"] as const
 
 export type DownloadQuality = (typeof QUALITIES)[number];
 
+/** What an audio download ends up as.
+ *
+ * `original` hands over the stream the site served -- already a finished AAC or
+ * Opus file -- without decoding it. `mp3` re-encodes, which every version before
+ * this one did unconditionally and which is still what something downstream
+ * occasionally insists on.
+ *
+ * The same two words the extract-audio tool uses, on purpose: it is one promise
+ * made in two places. */
+export const AUDIO_FORMATS = ["original", "mp3"] as const;
+
+export type AudioFormat = (typeof AUDIO_FORMATS)[number];
+
+/** The browsers yt-dlp can read cookies from. Kept in step with `BROWSERS` in
+ *  download.rs by `cookie_browsers`, which Settings asks rather than trusting
+ *  this list -- it is here only so a stored value has a type. */
+export type CookieBrowser = string;
+
+/** No browser: send no cookies at all. Stored as the empty string because that
+ *  is what an unset `Select` value is, and it is the default. */
+export const NO_COOKIES = "";
+
 export interface DownloadSettings {
   quality: DownloadQuality;
-  /** Video or MP3, for the links where that is a question at all. A direct file
-   *  is fetched as whatever it is, so this has nothing to say about one. */
+  /** Video or audio, for the links where that is a question at all. A direct
+   *  file is fetched as whatever it is, so this has nothing to say about one.
+   *
+   *  Set on the download form and only there -- this is the memory of what was
+   *  chosen last, not a preference with a screen of its own. */
   mediaType: "video" | "audio";
+  audioFormat: AudioFormat;
+  /** Which browser to borrow cookies from for links behind a login, an age
+   *  check, or a members-only wall. Empty -- the default -- sends none. */
+  cookiesFrom: CookieBrowser;
   /** Fetch a video's streams on many connections instead of letting yt-dlp
    *  fetch them on one. On by default, and the reason downloads are fast; the
    *  switch exists so a site that objects to it can be worked around without
@@ -25,17 +54,29 @@ export interface DownloadSettings {
 }
 
 /**
- * 720p and video.
+ * 720p, video, and the audio left alone.
  *
  * "Best available" is whatever the site happens to serve -- on YouTube that is
  * often 4K, which is a multi-gigabyte file and a long wait for something most
  * people watch on a laptop. 720p is the size everyone can afford; anyone who
  * wants the full thing sets it once in Settings and never thinks about it
  * again.
+ *
+ * `original` is the audio default for the reason the extract-audio tool already
+ * gives: the stream a site serves is a finished AAC or Opus file, and re-encoding
+ * it to MP3 spends a minute to make it measurably worse. MP3 stays one click
+ * away for whatever still insists on it. This is a change in what an audio
+ * download produces -- an `.m4a` where an `.mp3` used to appear -- which is why
+ * it is the default rather than a hidden option: the old behaviour was a loss
+ * nobody asked for.
  */
 const DEFAULTS: DownloadSettings = {
   quality: "720",
   mediaType: "video",
+  audioFormat: "original",
+  // No cookies. Reading a browser's cookie jar is a thing to opt into, not a
+  // thing to discover the app has been doing.
+  cookiesFrom: NO_COOKIES,
   parallel: true,
 };
 
@@ -61,13 +102,14 @@ function load(): DownloadSettings {
  * files", the same one for months at a time -- so it belongs in Settings with
  * the theme and the library folder, and the form is one control shorter for it.
  *
- * Video-or-MP3 is here for the same reason, with one difference: the form can
- * still change it, for the one kind of link where it is a real question. It
- * writes straight through to this store rather than keeping a copy of its own,
- * so the choice is remembered for the next link and the two places can never
- * disagree about which one is set.
+ * Video-or-audio lives here too, but nothing in Settings shows it any more: it
+ * is asked on the download form, where the link it is about is on screen, and
+ * the form writes straight through to this store rather than keeping a copy of
+ * its own. So it is remembered for the next link without being a second place
+ * to set it -- which is what it was, and the two controls only raised the
+ * question of which of them was in charge.
  *
- * localStorage like the theme, the language and the Whisper choices, not the
+ * localStorage like the theme, the language and the job history, not the
  * Rust config file: none of this is a secret, and the webview is the only thing
  * that reads it. The two screens that touch it are never mounted at the same
  * time -- routes swap rather than stack -- so each one reads the stored value

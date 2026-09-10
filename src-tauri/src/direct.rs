@@ -22,8 +22,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use reqwest::header::{
-    HeaderMap, ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
-    ETAG, LAST_MODIFIED, RANGE,
+    HeaderMap, HeaderValue, ACCEPT, ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH,
+    CONTENT_RANGE, CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE,
 };
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -74,7 +74,31 @@ const CHUNK_ATTEMPTS: u32 = 3;
 /// leaving it behind is just litter in the user's folder.
 const KEEP_PARTIAL_ABOVE: u64 = 64 * 1024;
 
-const USER_AGENT: &str = concat!("MediaToolkit/", env!("CARGO_PKG_VERSION"));
+/// How much a worker holds before it writes.
+///
+/// One `write` syscall per 1 MiB rather than one per network read. At eight
+/// workers on a fast line the unbuffered version was several thousand syscalls
+/// a second, all of them for a few tens of kilobytes -- work that competes with
+/// the sockets for the same runtime threads.
+const WRITE_BUFFER: usize = 1024 * 1024;
+
+/// A browser's, not the app's.
+///
+/// `MediaToolkit/1.2.0` was honest and it was also the reason a good number of
+/// perfectly ordinary links did nothing: a CDN or a WAF that does not recognise
+/// a user agent answers 403, the probe reads that as "not a plain file", and
+/// the link falls through to yt-dlp -- which has nothing to extract from a
+/// direct link to a zip and fails. The same request with a browser's string is
+/// served. yt-dlp reaches the same conclusion and sends a Chrome UA of its own;
+/// this is the one that has to match, since these are requests for files a
+/// browser would have downloaded.
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
+
+/// How much of the body a probe reads to work out what the file is. One TCP
+/// segment's worth: every magic number worth knowing sits in the first few
+/// dozen bytes.
+const SNIFF_BYTES: usize = 512;
 
 /// Content types that are a *description* of a stream rather than the stream.
 /// These are yt-dlp's job -- it fetches every segment and muxes them; fetching
@@ -100,8 +124,15 @@ const MANIFEST_EXTENSIONS: &[&str] = &["m3u8", "m3u", "mpd"];
 fn client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
+        // `Accept: */*` on every request. A handful of servers answer a request
+        // with no Accept at all with a 406, and a download is by definition
+        // willing to take whatever bytes come back.
+        let mut default_headers = HeaderMap::new();
+        default_headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+
         Client::builder()
             .user_agent(USER_AGENT)
+            .default_headers(default_headers)
             .connect_timeout(Duration::from_secs(20))
             // Applies to the wait for the *next* chunk of body, not to the
             // download as a whole: a stalled transfer is a failure, a long one
@@ -156,7 +187,8 @@ pub struct FileInfo {
 /// is served by anything that serves ranges at all -- and a 206 coming back is
 /// itself the proof that ranges work, which no header can promise as reliably.
 pub async fn probe(url: &str) -> AppResult<Option<FileInfo>> {
-    let response = match client().get(url).header(RANGE, "bytes=0-0").send().await {
+    let range = format!("bytes=0-{}", SNIFF_BYTES - 1);
+    let response = match client().get(url).header(RANGE, range).send().await {
         Ok(response) => response,
         // Offline, DNS, TLS. Reported rather than swallowed: the caller's
         // fallback would be to spawn yt-dlp, which is about to fail the same
@@ -177,17 +209,19 @@ pub async fn probe(url: &str) -> AppResult<Option<FileInfo>> {
 
     let headers = response.headers().clone();
     let final_url = response.url().clone();
-    // One byte was asked for and none of it is read: dropping the response here
-    // closes the connection without pulling a body down.
-    drop(response);
+    // Half a kilobyte, then the connection is dropped. Capped rather than
+    // trusted: a server that ignores the range answers 200 with the whole file,
+    // and reading that to the end would download a 4 GB installer to find out
+    // what it is.
+    let head = read_head(response).await;
 
     let content_type = header_string(&headers, CONTENT_TYPE)
         .map(|value| value.split(';').next().unwrap_or("").trim().to_lowercase())
         .filter(|value| !value.is_empty());
 
-    let filename = file_name_for(&headers, &final_url, content_type.as_deref());
+    let filename = file_name_for(&headers, &final_url, content_type.as_deref(), sniff(&head));
 
-    if is_web_page(content_type.as_deref(), &filename) {
+    if is_web_page(content_type.as_deref(), &filename, &head) {
         return Ok(None);
     }
 
@@ -592,6 +626,13 @@ async fn copy_range(
         .await
         .map_err(|error| AppError::io(part, error))?;
 
+    // Buffered, and seeked *before* it is wrapped so the buffer never has to be
+    // flushed to move the cursor. reqwest hands back whatever a read returned,
+    // which on a fast line is 16-64 KB at a time -- so an unbuffered writer
+    // makes a syscall per read, times eight workers, for the whole file. The
+    // buffer turns that into one write per 1 MiB.
+    let mut file = tokio::io::BufWriter::with_capacity(WRITE_BUFFER, file);
+
     let mut written = 0u64;
     let mut unreported = 0u64;
     let limit = end - start + 1;
@@ -692,6 +733,9 @@ async fn single(
             .await
             .map_err(|error| AppError::io(part, error))?;
     }
+    // See `WRITE_BUFFER`. Wrapped after the seek, so the buffer starts empty at
+    // the offset the writes belong at.
+    let mut file = tokio::io::BufWriter::with_capacity(WRITE_BUFFER, file);
 
     let mut meter = Meter::new(downloaded);
     report(downloaded, total, None);
@@ -856,8 +900,105 @@ fn total_from_content_range(headers: &HeaderMap) -> Option<u64> {
         .ok()
 }
 
+/// Reads at most `SNIFF_BYTES` of the body, then lets the connection go.
+///
+/// Time-boxed, because this is the one place the probe waits on a *body*
+/// rather than on headers. A host that answers and then goes quiet would
+/// otherwise hold the preview for the client's full 60-second read timeout,
+/// and the sniff is an improvement on the answer, never the answer itself --
+/// so giving up on it early costs an extension at worst.
+async fn read_head(mut response: reqwest::Response) -> Vec<u8> {
+    const BUDGET: Duration = Duration::from_secs(3);
+
+    let read = async {
+        let mut head = Vec::with_capacity(SNIFF_BYTES);
+        // `chunk()` yields whatever has arrived, which for a range this small
+        // is the whole of it in one go. The loop is for the server that splits
+        // it, and the cap is for the one that ignored the range and is sending
+        // the whole file.
+        while head.len() < SNIFF_BYTES {
+            match response.chunk().await {
+                Ok(Some(bytes)) => head.extend_from_slice(&bytes),
+                // A body that ends early, or a read error: whatever arrived is
+                // still worth sniffing, and the headers are what mattered.
+                _ => break,
+            }
+        }
+        head
+    };
+
+    let mut head = tokio::time::timeout(BUDGET, read).await.unwrap_or_default();
+    head.truncate(SNIFF_BYTES);
+    head
+}
+
+/// What the bytes themselves say this is.
+///
+/// The last word on a file's type, and the only honest one for the very common
+/// case of a CDN serving everything as `application/octet-stream` from a URL
+/// with no extension in it. Before this, those arrived as `9f8a7b.bin` and were
+/// filed and drawn as an anonymous blob -- which is exactly the "the app should
+/// work out what the file is" problem, seen from the inside.
+///
+/// Deliberately short. Every entry here is a fixed byte sequence at a fixed
+/// offset that cannot be anything else; a guess that is only usually right
+/// would rename files wrongly, which is worse than `.bin`.
+fn sniff(head: &[u8]) -> Option<&'static str> {
+    let starts = |magic: &[u8]| head.starts_with(magic);
+    // The `ftyp` box that opens every ISO base media file names the brand.
+    let brand = |want: &[u8]| head.len() >= 12 && &head[4..8] == b"ftyp" && head[8..].starts_with(want);
+
+    Some(match () {
+        _ if starts(b"%PDF-") => "pdf",
+        _ if starts(b"\x89PNG\r\n\x1a\n") => "png",
+        _ if starts(b"\xff\xd8\xff") => "jpg",
+        _ if starts(b"GIF87a") || starts(b"GIF89a") => "gif",
+        _ if starts(b"RIFF") && head.len() >= 12 => match &head[8..12] {
+            b"WEBP" => "webp",
+            b"WAVE" => "wav",
+            b"AVI " => "avi",
+            _ => return None,
+        },
+        _ if brand(b"M4A") => "m4a",
+        _ if brand(b"qt") => "mov",
+        _ if brand(b"3g") => "3gp",
+        // isom, mp42, avc1, dash, iso5 ... all of them are mp4.
+        _ if head.len() >= 8 && &head[4..8] == b"ftyp" => "mp4",
+        // Matroska and WebM share a container; the DocType a few bytes in is
+        // what separates them.
+        _ if starts(b"\x1a\x45\xdf\xa3") => {
+            if head.windows(4).take(64).any(|w| w == b"webm") {
+                "webm"
+            } else {
+                "mkv"
+            }
+        }
+        _ if starts(b"OggS") => "ogg",
+        _ if starts(b"fLaC") => "flac",
+        _ if starts(b"ID3") || starts(b"\xff\xfb") || starts(b"\xff\xf3") => "mp3",
+        _ if starts(b"PK\x03\x04") => "zip",
+        _ if starts(b"Rar!\x1a\x07") => "rar",
+        _ if starts(b"7z\xbc\xaf\x27\x1c") => "7z",
+        _ if starts(b"\xfd7zXZ\x00") => "xz",
+        _ if starts(b"\x1f\x8b") => "gz",
+        _ if starts(b"BZh") => "bz2",
+        _ if starts(b"\x28\xb5\x2f\xfd") => "zst",
+        _ if starts(b"MSCF") => "cab",
+        _ if starts(b"\xed\xab\xee\xdb") => "rpm",
+        // `!<arch>` is any ar archive; the first member of a .deb names it.
+        _ if starts(b"!<arch>\n") && head.windows(13).any(|w| w == b"debian-binary") => "deb",
+        // The tar magic sits in the header block rather than at the start.
+        _ if head.len() > 262 && &head[257..262] == b"ustar" => "tar",
+        _ if starts(b"MZ") => "exe",
+        // An AppImage is an ELF with its own magic at offset 8. Plain ELF is
+        // left alone: it is a binary, and `.bin` is what we already call one.
+        _ if starts(b"\x7fELF") && head.len() >= 11 && &head[8..11] == b"AI\x02" => "AppImage",
+        _ => return None,
+    })
+}
+
 /// Whether this is a page to be extracted rather than a file to be fetched.
-fn is_web_page(content_type: Option<&str>, filename: &str) -> bool {
+fn is_web_page(content_type: Option<&str>, filename: &str, head: &[u8]) -> bool {
     let extension = filename
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase());
@@ -865,6 +1006,14 @@ fn is_web_page(content_type: Option<&str>, filename: &str) -> bool {
         .as_deref()
         .is_some_and(|ext| MANIFEST_EXTENSIONS.contains(&ext))
     {
+        return true;
+    }
+
+    // A page is a page whatever the server calls it. Sites that hand out
+    // `application/octet-stream` for their own HTML are not rare, and treating
+    // one as a file saves the markup under the name of its own URL rather than
+    // letting the extractor at it.
+    if looks_like_html(head) {
         return true;
     }
 
@@ -882,10 +1031,34 @@ fn is_web_page(content_type: Option<&str>, filename: &str) -> bool {
     }
 }
 
+/// Whether the first bytes of the body are markup.
+///
+/// Only the openings a document actually starts with, so a `<` inside a subtitle
+/// file or an XML feed is not read as a web page.
+fn looks_like_html(head: &[u8]) -> bool {
+    let start = head
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace() && *byte != 0xef && *byte != 0xbb && *byte != 0xbf)
+        .unwrap_or(head.len());
+    let text = String::from_utf8_lossy(&head[start..]).to_ascii_lowercase();
+    text.starts_with("<!doctype html") || text.starts_with("<html") || text.starts_with("<head")
+}
+
 /// The name to save under: what the server says, then what the URL says, then
-/// a fallback -- and an extension inferred from the content type when the name
-/// has none.
-fn file_name_for(headers: &HeaderMap, url: &Url, content_type: Option<&str>) -> String {
+/// a fallback -- and an extension inferred from the content type, or from the
+/// file's own first bytes, when the name has none.
+///
+/// Three sources in falling order of how often they are right *and* present.
+/// The name is first because it is what the user will see on disk and the one
+/// the server chose deliberately. Sniffing is last but it is the one that
+/// cannot be fooled, so it is what answers the case the other two leave open: a
+/// CDN serving `application/octet-stream` from `/asset/9f8a7b`.
+fn file_name_for(
+    headers: &HeaderMap,
+    url: &Url,
+    content_type: Option<&str>,
+    sniffed: Option<&str>,
+) -> String {
     let raw = disposition_name(headers)
         .or_else(|| {
             // The last segment that is not empty: a trailing slash would
@@ -897,7 +1070,9 @@ fn file_name_for(headers: &HeaderMap, url: &Url, content_type: Option<&str>) -> 
         .unwrap_or_default();
 
     let (stem, ext) = split_name(&raw);
-    let ext = ext.or_else(|| content_type.and_then(extension_for_type).map(str::to_string));
+    let ext = ext
+        .or_else(|| content_type.and_then(extension_for_type).map(str::to_string))
+        .or_else(|| sniffed.map(str::to_string));
 
     match ext {
         Some(ext) => format!("{stem}.{ext}"),
@@ -973,18 +1148,35 @@ fn extension_for_type(content_type: &str) -> Option<&'static str> {
         "video/x-matroska" => "mkv",
         "video/quicktime" => "mov",
         "video/x-msvideo" => "avi",
-        "audio/mpeg" => "mp3",
-        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "video/x-flv" | "video/flv" => "flv",
+        "video/mp2t" => "ts",
+        "video/3gpp" => "3gp",
+        "video/ogg" => "ogv",
+        "video/x-ms-wmv" => "wmv",
+        "video/mpeg" => "mpg",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/mp4" | "audio/x-m4a" | "audio/m4a" => "m4a",
+        "audio/aac" | "audio/aacp" => "aac",
+        "audio/opus" => "opus",
+        "audio/webm" => "weba",
         "audio/ogg" => "ogg",
-        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/wav" | "audio/x-wav" | "audio/wave" => "wav",
         "audio/flac" | "audio/x-flac" => "flac",
+        "audio/x-ms-wma" => "wma",
+        "audio/midi" | "audio/x-midi" => "mid",
         "image/jpeg" => "jpg",
         "image/png" => "png",
         "image/gif" => "gif",
         "image/webp" => "webp",
         "image/svg+xml" => "svg",
+        "image/bmp" | "image/x-ms-bmp" => "bmp",
+        "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
+        "image/tiff" => "tif",
+        "image/avif" => "avif",
+        "image/heic" | "image/heif" => "heic",
         "application/pdf" => "pdf",
-        "application/zip" => "zip",
+        "application/rtf" | "text/rtf" => "rtf",
+        "application/zip" | "application/x-zip-compressed" => "zip",
         "application/x-7z-compressed" => "7z",
         "application/x-rar-compressed" | "application/vnd.rar" => "rar",
         "application/gzip" | "application/x-gzip" => "gz",
@@ -993,14 +1185,21 @@ fn extension_for_type(content_type: &str) -> Option<&'static str> {
         "application/x-xz" => "xz",
         "application/zstd" => "zst",
         "application/x-iso9660-image" => "iso",
-        "application/x-msdownload" | "application/vnd.microsoft.portable-executable" => "exe",
+        "application/x-msdownload"
+        | "application/vnd.microsoft.portable-executable"
+        | "application/x-msdos-program"
+        | "application/exe" => "exe",
         "application/x-msi" | "application/x-ms-installer" => "msi",
         "application/x-apple-diskimage" => "dmg",
-        "application/vnd.debian.binary-package" => "deb",
+        "application/vnd.debian.binary-package" | "application/x-debian-package" => "deb",
         "application/x-rpm" | "application/x-redhat-package-manager" => "rpm",
         "application/vnd.android.package-archive" => "apk",
+        "application/java-archive" => "jar",
+        "application/x-bittorrent" => "torrent",
+        "application/vnd.microsoft.portable-executable-appx" | "application/appx" => "appx",
         "application/json" => "json",
-        "application/xml" => "xml",
+        "application/xml" | "text/xml" => "xml",
+        "application/x-sh" | "application/x-shellscript" => "sh",
         "application/epub+zip" => "epub",
         "application/msword" => "doc",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
@@ -1008,8 +1207,14 @@ fn extension_for_type(content_type: &str) -> Option<&'static str> {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
         "application/vnd.ms-powerpoint" => "ppt",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        "application/vnd.oasis.opendocument.text" => "odt",
+        "application/vnd.oasis.opendocument.spreadsheet" => "ods",
+        "application/vnd.oasis.opendocument.presentation" => "odp",
         "text/csv" => "csv",
+        "text/markdown" => "md",
         "text/plain" => "txt",
+        "text/vtt" => "vtt",
+        "application/x-subrip" => "srt",
         _ => return None,
     })
 }
@@ -1410,28 +1615,92 @@ mod tests {
 
     #[test]
     fn a_page_is_left_to_ytdlp() {
-        assert!(is_web_page(Some("text/html"), "watch"));
-        assert!(is_web_page(Some("application/xhtml+xml"), "watch"));
+        assert!(is_web_page(Some("text/html"), "watch", b""));
+        assert!(is_web_page(Some("application/xhtml+xml"), "watch", b""));
         // No content type and no extension: a route, not a file.
-        assert!(is_web_page(None, "abc123"));
+        assert!(is_web_page(None, "abc123", b""));
+    }
+
+    /// A site that serves its own watch page as a binary blob. Before the body
+    /// was looked at, this was "downloaded" as a few kilobytes of markup saved
+    /// under the name of its own URL.
+    #[test]
+    fn a_page_mislabelled_as_a_file_is_still_a_page() {
+        let html = b"<!DOCTYPE html>\n<html lang=\"en\"><head><title>Watch</title>";
+        assert!(is_web_page(Some("application/octet-stream"), "video", html));
+        assert!(is_web_page(None, "clip.mp4", html));
+        // Leading whitespace and a BOM are not content.
+        assert!(is_web_page(Some("application/octet-stream"), "x", b"\xef\xbb\xbf  <html>"));
     }
 
     #[test]
     fn a_stream_manifest_is_left_to_ytdlp() {
         // Fetching this would save the playlist, not the video.
-        assert!(is_web_page(Some("application/x-mpegurl"), "master.m3u8"));
-        assert!(is_web_page(Some("application/dash+xml"), "manifest.mpd"));
+        assert!(is_web_page(Some("application/x-mpegurl"), "master.m3u8", b""));
+        assert!(is_web_page(Some("application/dash+xml"), "manifest.mpd", b""));
         // Even when the server sends the wrong type for it.
-        assert!(is_web_page(Some("application/octet-stream"), "master.m3u8"));
+        assert!(is_web_page(Some("application/octet-stream"), "master.m3u8", b""));
     }
 
     #[test]
     fn a_file_is_ours() {
-        assert!(!is_web_page(Some("video/mp4"), "clip.mp4"));
-        assert!(!is_web_page(Some("application/zip"), "pack.zip"));
-        assert!(!is_web_page(Some("application/octet-stream"), "setup.exe"));
+        assert!(!is_web_page(Some("video/mp4"), "clip.mp4", b"\0\0\0\x18ftypisom"));
+        assert!(!is_web_page(Some("application/zip"), "pack.zip", b"PK\x03\x04"));
+        assert!(!is_web_page(Some("application/octet-stream"), "setup.exe", b"MZ"));
         // Server said nothing, but the link names a file.
-        assert!(!is_web_page(None, "notes.pdf"));
+        assert!(!is_web_page(None, "notes.pdf", b"%PDF-1.7"));
+        // A subtitle file opens with a tag-shaped line and is not a page.
+        assert!(!is_web_page(Some("text/plain"), "subs.srt", b"1\n00:00:01,000 --> "));
+    }
+
+    /// The answer for the very common CDN that names nothing and declares
+    /// nothing: `/asset/9f8a7b`, `application/octet-stream`, and the bytes.
+    #[test]
+    fn reads_the_type_out_of_the_bytes_themselves() {
+        for (head, want) in [
+            (b"%PDF-1.7\n".as_slice(), "pdf"),
+            (b"PK\x03\x04\x14\0", "zip"),
+            (b"\x89PNG\r\n\x1a\n", "png"),
+            (b"\xff\xd8\xff\xe0", "jpg"),
+            (b"ID3\x04\0\0", "mp3"),
+            (b"fLaC\0\0\0\"", "flac"),
+            (b"OggS\0\x02\0\0", "ogg"),
+            (b"\x1f\x8b\x08\0", "gz"),
+            (b"Rar!\x1a\x07\x01\0", "rar"),
+            (b"MZ\x90\0\x03", "exe"),
+            (b"\0\0\0\x20ftypisom\0\0\x02\0", "mp4"),
+            (b"\0\0\0\x20ftypM4A \0\0\0\0", "m4a"),
+            (b"RIFF\x24\x08\0\0WAVEfmt ", "wav"),
+            (b"RIFF\x24\x08\0\0WEBPVP8 ", "webp"),
+        ] {
+            assert_eq!(sniff(head), Some(want), "{want}");
+        }
+
+        // Matroska and WebM are the same container; only the DocType separates
+        // them, and guessing wrong names a video file after the wrong format.
+        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x01\0\0\0\x1fB\x82\x84webm"), Some("webm"));
+        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x01\0\0\0\x1fB\x82\x88matroska"), Some("mkv"));
+
+        // And it declines rather than guessing, which is what keeps `.bin`
+        // honest for the things it really is.
+        assert_eq!(sniff(b"\0\0\0\0\0\0\0\0"), None);
+        assert_eq!(sniff(b""), None);
+    }
+
+    #[test]
+    fn names_a_file_after_its_own_bytes_when_nothing_else_will() {
+        let url = Url::parse("https://cdn.example.com/asset/9f8a7b").unwrap();
+        assert_eq!(
+            file_name_for(&headers(&[]), &url, Some("application/octet-stream"), Some("pdf")),
+            "9f8a7b.pdf"
+        );
+        // The server's own extension still wins: it is the name the user is
+        // about to see on disk, and it was chosen deliberately.
+        let url = Url::parse("https://cdn.example.com/setup.msi").unwrap();
+        assert_eq!(
+            file_name_for(&headers(&[]), &url, None, Some("exe")),
+            "setup.msi"
+        );
     }
 
     #[test]
@@ -1471,14 +1740,14 @@ mod tests {
     #[test]
     fn names_a_file_after_the_url_when_the_server_does_not() {
         let url = Url::parse("https://example.com/files/my%20setup.exe?token=1").unwrap();
-        assert_eq!(file_name_for(&headers(&[]), &url, None), "my setup.exe");
+        assert_eq!(file_name_for(&headers(&[]), &url, None, None), "my setup.exe");
     }
 
     #[test]
     fn infers_a_missing_extension_from_the_content_type() {
         let url = Url::parse("https://cdn.example.com/asset/9f8a7b").unwrap();
         assert_eq!(
-            file_name_for(&headers(&[]), &url, Some("video/mp4")),
+            file_name_for(&headers(&[]), &url, Some("video/mp4"), None),
             "9f8a7b.mp4"
         );
     }

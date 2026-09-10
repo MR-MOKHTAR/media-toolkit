@@ -5,8 +5,8 @@
 //! transcript and a 4K download landed side by side, and nothing in that folder
 //! said which of them this app had produced.
 //!
-//! So the app owns a folder -- `~/Downloads/Media Toolkit` by default -- and
-//! sorts what it writes into one subfolder per tool. Two properties matter more
+//! So the app owns a folder -- `~/Downloads/MediaToolkit` by default, named from
+//! `productName` -- and sorts what it writes into one subfolder per tool. Two properties matter more
 //! than the layout itself:
 //!
 //! * The root is a persisted setting, not a per-session choice. Picking a
@@ -55,12 +55,15 @@ pub enum Slot {
     Compressed,
     Trimmed,
     Converted,
-    Transcripts,
 }
 
 impl Slot {
     /// The on-disk name. ASCII, no spaces to quote, stable across releases --
     /// changing one of these strands every file already written under it.
+    ///
+    /// `Transcripts` was one of these until v1.3. Its folder is not deleted on
+    /// upgrade -- an empty one is harmless, and a user who put something there
+    /// would not thank us -- it simply stops being created and referenced.
     pub fn dir_name(self) -> &'static str {
         match self {
             Self::Video => "Video",
@@ -69,12 +72,11 @@ impl Slot {
             Self::Compressed => "Compressed",
             Self::Trimmed => "Trimmed",
             Self::Converted => "Converted",
-            Self::Transcripts => "Transcripts",
         }
     }
 
     /// Every shelf, for creating the layout up front.
-    pub fn all() -> [Slot; 7] {
+    pub fn all() -> [Slot; 6] {
         [
             Self::Video,
             Self::Audio,
@@ -82,7 +84,6 @@ impl Slot {
             Self::Compressed,
             Self::Trimmed,
             Self::Converted,
-            Self::Transcripts,
         ]
     }
 }
@@ -113,8 +114,10 @@ fn app_folder_name(app: &AppHandle) -> String {
     cleaned
 }
 
-/// `<Downloads>/Media Toolkit`, resolved through the platform's real Downloads
-/// folder -- see `paths::default_download_dir`.
+/// `<Downloads>/MediaToolkit`, resolved through the platform's real Downloads
+/// folder -- see `paths::default_download_dir`. The last component is
+/// `productName` sanitized, so it carries no space today; `FALLBACK_FOLDER` is
+/// the only place the spaced spelling is still written.
 pub fn default_root(app: &AppHandle) -> PathBuf {
     PathBuf::from(paths::default_download_dir(app)).join(app_folder_name(app))
 }
@@ -150,7 +153,7 @@ pub fn folder(app: &AppHandle, slot: Slot) -> AppResult<PathBuf> {
 }
 
 /// Creates the library so it exists before the first job -- someone who opens
-/// the app, reads "files are saved to ~/Downloads/Media Toolkit" and goes
+/// the app, reads "files are saved to ~/Downloads/MediaToolkit" and goes
 /// looking should find it there.
 ///
 /// Best effort: a root on a disconnected drive is a real situation, and it is
@@ -301,7 +304,6 @@ mod tests {
                 "Compressed",
                 "Trimmed",
                 "Converted",
-                "Transcripts",
             ]
         );
     }
@@ -309,11 +311,19 @@ mod tests {
     #[test]
     fn slots_cross_the_bridge_as_camel_case() {
         assert_eq!(
-            serde_json::to_string(&Slot::Transcripts).unwrap(),
-            "\"transcripts\""
+            serde_json::to_string(&Slot::Compressed).unwrap(),
+            "\"compressed\""
         );
         let back: Slot = serde_json::from_str("\"compressed\"").unwrap();
         assert_eq!(back, Slot::Compressed);
+    }
+
+    /// A shelf that no longer exists must be refused rather than silently
+    /// resolving to something else. `transcripts` is the one the frontend could
+    /// still ask for, from a route or a stored job written by an older build.
+    #[test]
+    fn a_retired_slot_is_no_longer_accepted() {
+        assert!(serde_json::from_str::<Slot>("\"transcripts\"").is_err());
     }
 
     #[test]

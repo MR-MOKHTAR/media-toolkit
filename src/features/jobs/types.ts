@@ -5,8 +5,7 @@ export type JobKind =
   | "compress"
   | "trim"
   | "convert"
-  | "extractAudio"
-  | "transcribe";
+  | "extractAudio";
 
 export type JobState =
   | "queued"
@@ -16,24 +15,19 @@ export type JobState =
   | "cancelled";
 
 /** What the job is doing. `merging` and `finalizing` exist because those phases
- *  sit at 100% for a while, and a stuck bar needs an explanation.
- *  `transcribing` is its own stage because the work is happening on Groq's
- *  machines, not this one, and "Processing" would claim otherwise. */
+ *  sit at 100% for a while, and a stuck bar needs an explanation. */
 export type JobStage =
   | "queued"
   | "preparing"
   | "downloading"
   | "merging"
   | "encoding"
-  | "transcribing"
   | "finalizing";
 
-/** Which budget ran out. The hour recovers in minutes and the day does not, so
- *  this is the only part of a rate limit anyone can act on. */
-export type RateScope = "hour" | "day" | "request";
-
 /** Mirrors the Rust `AppError` tagged union, so failures can be translated
- *  rather than dumping Rust text into a toast. */
+ *  rather than dumping Rust text into a toast. Every `kind` here is asserted
+ *  against its serialized spelling in `error.rs`'s tests: a variant that drifts
+ *  falls through `describeAppError` to a generic "something went wrong". */
 export type AppError =
   | { kind: "toolMissing"; tool: string }
   | { kind: "invalidInput"; field: string; reason: string }
@@ -42,9 +36,6 @@ export type AppError =
   | { kind: "io"; path: string; message: string }
   | { kind: "cancelled" }
   | { kind: "unknownJob"; id: string }
-  | { kind: "missingApiKey"; service: string }
-  | { kind: "rateLimited"; scope: RateScope; retryAfterSecs: number | null }
-  | { kind: "api"; service: string; status: number; message: string }
   | { kind: "network"; message: string };
 
 export interface JobProgress {
@@ -112,6 +103,28 @@ export interface Job {
   endedAt?: number;
   /** Kind-specific detail for the metadata line: "1080p", "Balanced", "MP3". */
   detail?: string;
+  /** A row that exists before the backend has handed back an id.
+   *
+   *  Pressing the button closes the form, and everything between that and a
+   *  real job is a round trip: a probe that can spawn yt-dlp, the library
+   *  folder, then the command itself. That is a second or two of an empty list
+   *  where something was just started, which reads as the press not having
+   *  landed -- so the row is drawn first and given its id afterwards.
+   *
+   *  Never persisted, never cancellable (there is nothing to cancel yet), and
+   *  replaced in place -- same position in the list -- the moment the real job
+   *  exists. If the request never gets that far the row is dropped and the
+   *  failure is a toast, which is where it would have been reported anyway. */
+  pending?: boolean;
+  /** What the list keys this row on, when that is not the job's own id.
+   *
+   *  A job that replaced a pending row keeps the pending row's id here. The id
+   *  is the one thing that really changes when a placeholder becomes a job, and
+   *  a changed React key is a different element: the row would animate out
+   *  while an identical one animated in, which is precisely the flicker the
+   *  placeholder exists to avoid. Keyed on this, it is one element that fills
+   *  itself in. Unique for the same reason job ids are -- it was one. */
+  rowKey?: string;
 }
 
 export interface DownloadRequest {
@@ -120,6 +133,16 @@ export interface DownloadRequest {
   outputName?: string;
   mediaType: "video" | "audio";
   quality?: string;
+  /** What an audio download ends up as: `original` keeps the stream the site
+   *  served, `mp3` re-encodes it. Absent means `mp3` -- which is what every
+   *  build before this one did, and what the requests stored on the retry
+   *  button of an older failed download still mean. */
+  audioFormat?: "original" | "mp3";
+  /** Which browser to borrow cookies from, in yt-dlp's own spelling. Absent
+   *  means none, which is the default and what every earlier build did. The
+   *  backend validates it against its own list before it reaches a command
+   *  line -- see `BROWSERS` in download.rs. */
+  cookiesFrom?: string;
   /** Which engine to use. `auto` -- what every screen sends -- lets the backend
    *  decide from one HTTP request: a page goes to yt-dlp, a link that already
    *  points at the file goes to the direct downloader. */
@@ -144,8 +167,7 @@ export type LibrarySlot =
   | "files"
   | "compressed"
   | "trimmed"
-  | "converted"
-  | "transcripts";
+  | "converted";
 
 /** Which shelf each tool writes to. Kept beside the type so adding a tool has
  *  exactly one place to answer "where does its output go". */
@@ -154,7 +176,6 @@ export const SLOT_FOR_KIND: Record<Exclude<JobKind, "download">, LibrarySlot> = 
   trim: "trimmed",
   convert: "converted",
   extractAudio: "audio",
-  transcribe: "transcripts",
 };
 
 export interface LibraryInfo {
@@ -181,7 +202,14 @@ export interface UrlInfo {
   uploader: string | null;
   durationSecs: number | null;
   thumbnail: string | null;
+  /** The link is a playlist page in its own right. */
   isPlaylist: boolean;
+  /** The link is a video that also names a playlist -- the `list=` on a
+   *  `watch?v=…&list=…`. Read off the URL, so it costs nothing; the playlist
+   *  itself is only walked if the user asks for it. */
+  inPlaylist: boolean;
+  /** How many videos the playlist holds, when the page said. Never known for
+   *  `inPlaylist`, where nothing has looked yet. */
   entryCount: number | null;
   /** Known ahead of time only for a file. */
   sizeBytes: number | null;
@@ -190,15 +218,25 @@ export interface UrlInfo {
   resumable: boolean;
 }
 
+/** One video in a playlist, ready to be queued as its own download. */
+export interface PlaylistEntry {
+  url: string;
+  title: string;
+}
+
+export interface PlaylistListing {
+  entries: PlaylistEntry[];
+  /** How many the playlist holds, before the cap. */
+  total: number;
+  /** Whether `entries` is short of `total`, so the form can say so rather than
+   *  quietly starting the first hundred of a thousand. */
+  truncated: boolean;
+}
+
 export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
-  /** The JavaScript runtime yt-dlp runs YouTube's player challenge in. Without
-   *  it yt-dlp falls back to the clients that skip the challenge, which carry a
-   *  shorter format list -- so a request for 1080p can quietly come back as
-   *  720p. */
-  deno: boolean;
   /** What yt-dlp reports, or null if it will not run. */
   ytdlpVersion: string | null;
 }
@@ -210,35 +248,6 @@ export interface UpdateResult {
   changed: boolean;
 }
 
-/** The two Groq Whisper models. Each has its own audio-seconds budget, which is
- *  why switching model is real advice when one of them runs out. */
-export type TranscribeModel = "whisperLargeV3" | "whisperLargeV3Turbo";
-
-export type TranscriptFormat = "txt" | "srt" | "vtt";
-
-export interface TranscribeRequest {
-  input: string;
-  outputDir: string;
-  outputName?: string;
-  model: TranscribeModel;
-  /** ISO-639-1, or omitted to let Whisper detect it. */
-  language?: string;
-  translate: boolean;
-  format: TranscriptFormat;
-  prompt?: string;
-}
-
-export interface ApiKeyStatus {
-  present: boolean;
-  /** The last four characters, so two keys can be told apart. The key itself
-   *  never crosses into the webview. */
-  hint: string | null;
-}
-
-export interface TranscriptText {
-  text: string;
-  truncated: boolean;
-}
 
 export const isActiveJob = (job: Job) =>
   job.state === "queued" || job.state === "running";

@@ -17,7 +17,7 @@ export function WithAction() {
       icon={<FileVideo2 size={22} />}
       title="No file chosen"
       description="Drop a video anywhere in this window, or pick one from your computer."
-      action={<Button variant="primary">Choose file</Button>}
+      action={<Button variant="secondary">Choose file</Button>}
     />
   );
 }

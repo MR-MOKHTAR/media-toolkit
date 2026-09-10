@@ -185,13 +185,20 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-      <div className="flex size-12 items-center justify-center rounded-lg bg-(image:--gradient-accent) text-on-accent/90 shadow-(--shadow-glow)">
+      {/* Neutral, not the accent tile the screen header carries. A filled,
+          glowing mark in the middle of an empty page read as the thing to
+          press, next to a button that actually was -- this says "nothing
+          here", and leaves the asking to the button. */}
+      <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface-soft text-fg-muted">
         {icon}
       </div>
       <div className="flex flex-col gap-1">
         <p className="text-lg font-medium text-fg">{title}</p>
+        {/* `fg-soft`, not `fg-muted`: this is the sentence that says what to
+            do next, and muted sits at 3.4:1 on the light canvas -- under AA
+            for text this size. */}
         {description && (
-          <p className="max-w-xs text-sm text-fg-muted">{description}</p>
+          <p className="max-w-xs text-sm text-fg-soft">{description}</p>
         )}
       </div>
       {action}

@@ -13,7 +13,16 @@
     "up whatever is current rather than a pin that goes stale. See the note on",
     "the ytdlp entry for why nightly and not stable. Already-installed users are",
     "covered by the in-app updater, which writes to the app data dir and is read",
-    "first (see the resolution order in binaries.rs)."
+    "first (see the resolution order in binaries.rs).",
+    "",
+    "Deno used to be here, for the JavaScript runtime yt-dlp wants to answer",
+    "YouTube's player challenge. It was 40 MB compressed and 95 MB on disk --",
+    "two thirds of the installer -- and measuring it on 2026-09-02 against a 4K",
+    "YouTube video showed `yt-dlp -J` returning the same 53 formats and choosing",
+    "the same 1080p H.264 + m4a pair with it and without it. The only difference",
+    "was a warning line. So it is not shipped: binaries.rs looks for deno, node,",
+    "bun or quickjs on the machine instead and points yt-dlp at whichever it",
+    "finds, and downloads work when it finds none."
   ],
   "tools": {
     "ytdlp": {
@@ -56,47 +65,6 @@
         }
       },
       "$comment": "Nightly, not stable. yt-dlp's stable channel ships every few months while YouTube breaks extractors every few weeks; nightly carries those fixes within days. Measured 2026-07-30: nightly 2026.07.23 vs stable 2026.07.04. For an app whose whole job is downloading, a stale extractor is an outage."
-    },
-    "deno": {
-      "$comment": "yt-dlp needs a JavaScript runtime to answer YouTube's player challenge, and defaults to looking for Deno. Without one it warns that 'YouTube extraction without a JS runtime has been deprecated, and some formats may be missing', then falls back to the clients that skip the challenge -- which carry a shorter format list, so a request for 1080p can quietly come back as 720p. About 40 MB per platform, which is the price of YouTube continuing to work. Pinned to latest/download like yt-dlp: this tracks a moving target and a frozen runtime goes stale the same way a frozen extractor does.",
-      "license": "MIT",
-      "targets": {
-        "windows-x86_64": {
-          "url": "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip",
-          "archive": "zip",
-          "member": "deno.exe",
-          "install_as": "deno.exe",
-          "sha256": null
-        },
-        "linux-x86_64": {
-          "url": "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip",
-          "archive": "zip",
-          "member": "deno",
-          "install_as": "deno",
-          "sha256": null
-        },
-        "linux-aarch64": {
-          "url": "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-unknown-linux-gnu.zip",
-          "archive": "zip",
-          "member": "deno",
-          "install_as": "deno",
-          "sha256": null
-        },
-        "macos-x86_64": {
-          "url": "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip",
-          "archive": "zip",
-          "member": "deno",
-          "install_as": "deno",
-          "sha256": null
-        },
-        "macos-aarch64": {
-          "url": "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip",
-          "archive": "zip",
-          "member": "deno",
-          "install_as": "deno",
-          "sha256": null
-        }
-      }
     },
     "ffmpeg": {
       "license": "GPL-3.0-or-later",

@@ -46,7 +46,25 @@ const shorten = (title: string) =>
 interface JobsContextValue {
   state: JobsState;
   jobs: Job[];
-  startDownload: (request: DownloadRequest, meta: JobMeta) => Promise<string>;
+  /** Puts a row on the list for work that has been asked for but has no id
+   *  yet, and hands back the id it is holding the place with.
+   *
+   *  For the gap between closing a form and the backend answering: a probe, a
+   *  folder lookup and a process spawn, which is a second or two of a list with
+   *  nothing on it. Pass the id back into `startDownload`, or into `discardJob`
+   *  if the request never gets that far. */
+  beginJob: (job: JobMeta & { kind: JobKind }) => string;
+  /** Takes a pending row back off the list. Only for ids from `beginJob`:
+   *  everything else ends through a status event. */
+  discardJob: (id: string) => void;
+  startDownload: (
+    request: DownloadRequest,
+    meta: JobMeta,
+    /** The pending row this download is already being drawn as, from
+     *  `beginJob`. One is made here when it is omitted, so a caller with
+     *  nothing to do before the request does not have to think about it. */
+    placeholderId?: string,
+  ) => Promise<string>;
   /** For jobs whose command was invoked elsewhere -- the media tools each
    *  call their own command and hand the resulting id back here.
    *
@@ -54,7 +72,13 @@ interface JobsContextValue {
    *  status event is ever coming for it, and a row added as "queued" would sit
    *  there for good. */
   addExternalJob: (
-    job: JobMeta & { id: string; kind: JobKind } & (
+    job: JobMeta & {
+      id: string;
+      kind: JobKind;
+      /** The pending row this job was drawn as while its command was running,
+       *  from `beginJob`. Replaced in place rather than added on top. */
+      placeholderId?: string;
+    } & (
         | { done?: false; outputPath?: undefined }
         | { done: true; outputPath: string }
       ),
@@ -93,7 +117,7 @@ export function JobsProvider({
   ) => void;
   children: ReactNode;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // Lazy initialiser: reading localStorage on every render would be wasteful,
   // and the migration inside it must run exactly once.
   const [state, dispatch] = useReducer(jobsReducer, emptyJobsState, loadJobs);
@@ -175,11 +199,50 @@ export function JobsProvider({
     };
   }, []);
 
+  const beginJob = useCallback((job: JobMeta & { kind: JobKind }) => {
+    // Prefixed so it can never be mistaken for -- or collide with -- a backend
+    // job id, which is what every other id in this store is.
+    const id = `pending:${crypto.randomUUID()}`;
+    dispatch({
+      type: "added",
+      job: {
+        id,
+        kind: job.kind,
+        title: job.title,
+        source: job.source,
+        detail: job.detail,
+        state: "queued",
+        // Not "queued": nothing is in a queue yet. What is happening is the
+        // work before the queue, which is the stage that word exists for.
+        stage: "preparing",
+        percent: null,
+        createdAt: Date.now(),
+        pending: true,
+      },
+    });
+    return id;
+  }, []);
+
+  const discardJob = useCallback((id: string) => {
+    dispatch({ type: "discard", id });
+  }, []);
+
   const startDownload = useCallback(
-    async (request: DownloadRequest, meta: JobMeta) => {
-      const id = await ipc.startDownload(request);
+    async (request: DownloadRequest, meta: JobMeta, placeholderId?: string) => {
+      const pendingId =
+        placeholderId ?? beginJob({ kind: "download" as JobKind, ...meta });
+      let id: string;
+      try {
+        id = await ipc.startDownload(request);
+      } catch (error) {
+        // The row was a promise that this download was starting. It is not, so
+        // it goes -- the caller reports why.
+        dispatch({ type: "discard", id: pendingId });
+        throw error;
+      }
       dispatch({
-        type: "added",
+        type: "started",
+        placeholderId: pendingId,
         job: {
           id,
           kind: "download" as JobKind,
@@ -199,7 +262,7 @@ export function JobsProvider({
       });
       return id;
     },
-    [],
+    [beginJob],
   );
 
   /**
@@ -236,6 +299,7 @@ export function JobsProvider({
       job: JobMeta & {
         id: string;
         kind: JobKind;
+        placeholderId?: string;
         done?: boolean;
         outputPath?: string;
       },
@@ -243,7 +307,10 @@ export function JobsProvider({
       const done = job.done === true;
       const now = Date.now();
       dispatch({
-        type: "added",
+        type: "started",
+        // No placeholder means no row to replace, which `started` handles by
+        // adding one at the top -- the same thing "added" did here before.
+        placeholderId: job.placeholderId ?? "",
         job: {
           id: job.id,
           kind: job.kind,
@@ -324,22 +391,11 @@ export function JobsProvider({
     }
 
     if (payload.state === "failed") {
-      // A rate limit is not a broken job, and wrapping it in "X failed:" reads
-      // as one. It is the single failure the user is expected to *act* on -- by
-      // waiting, or by running the other model -- so it gets the sentence to
-      // itself, as a warning rather than an error. This is also the only place
-      // the daily limit is ever mentioned now: the app no longer keeps its own
-      // count of what has been spent, so Groq's own 429 is what says so.
-      if (payload.error.kind === "rateLimited") {
-        notify("warning", describeAppError(payload.error, t, i18n.language));
-        return;
-      }
-
       notify(
         "error",
         t("toast_job_failed", {
           title,
-          reason: describeAppError(payload.error, t, i18n.language),
+          reason: describeAppError(payload.error, t),
         }),
       );
       return;
@@ -352,6 +408,8 @@ export function JobsProvider({
     () => ({
       state,
       jobs: selectJobs(state),
+      beginJob,
+      discardJob,
       startDownload,
       addExternalJob,
       cancel,
@@ -362,7 +420,17 @@ export function JobsProvider({
       reveal,
       open,
     }),
-    [state, startDownload, addExternalJob, cancel, retry, reveal, open],
+    [
+      state,
+      beginJob,
+      discardJob,
+      startDownload,
+      addExternalJob,
+      cancel,
+      retry,
+      reveal,
+      open,
+    ],
   );
 
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;

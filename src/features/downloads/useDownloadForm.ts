@@ -16,11 +16,14 @@ import {
   fileKindOf,
   formatLabelOf,
 } from "../../lib/fileKind";
+import { formatCount } from "../../lib/format";
 import * as ipc from "../../lib/ipc";
+import { normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
-import type { DownloadRequest, LibrarySlot, UrlInfo } from "../jobs/types";
+import type { LibrarySlot, UrlInfo } from "../jobs/types";
+import type { AudioFormat } from "./useDownloadSettings";
 
 interface Options {
   isOnline: boolean;
@@ -37,6 +40,14 @@ export interface DownloadFormValues {
   url: string;
   mediaType: "video" | "audio";
   quality: string;
+  /** What an audio download should end up as. Ignored for video, and for a
+   *  direct file link, which is fetched as whatever it already is. */
+  audioFormat: AudioFormat;
+  /** Whether a link that names a playlist takes the one video or the whole
+   *  list. `one` for every link that names no playlist at all. */
+  playlist: PlaylistChoice;
+  /** The browser to borrow cookies from, or empty for none. */
+  cookiesFrom: string;
   /** The standing "download on several connections" setting, carried onto the
    *  request so a retry a week later runs the way this one did. */
   parallel: boolean;
@@ -76,9 +87,12 @@ function detailFor(link: UrlInfo, t: TFunction): string {
   );
 }
 
+/** The two answers to "this one, or all of them". */
+export type PlaylistChoice = "one" | "all";
+
 export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) {
-  const { t } = useTranslation();
-  const { startDownload } = useJobs();
+  const { t, i18n } = useTranslation();
+  const { beginJob, discardJob, startDownload } = useJobs();
   const [savePath, setSavePath] = useState("");
   const [toolsReady, setToolsReady] = useState(true);
   /** True across the await in `start`, so a second Enter cannot queue the same
@@ -141,8 +155,8 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
   }, [notify, savePath, t]);
 
   const start = useCallback(
-    async (values: DownloadFormValues, onSuccess: () => void): Promise<boolean> => {
-      const url = values.url.trim();
+    async (values: DownloadFormValues, onAccepted: () => void): Promise<boolean> => {
+      const url = normalizeUrl(values.url);
       if (!url) {
         notify("error", t("invalid_url"));
         return false;
@@ -152,12 +166,45 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         return false;
       }
 
+      // The form is done with. Everything below is a round trip to the backend
+      // -- and one of them can be a yt-dlp spawn, which takes two seconds to
+      // unpack itself before it says anything.
+      //
+      // Waiting for all of that before closing is what made the dialog sit
+      // there after the button was pressed, looking like nothing had happened.
+      // Nothing below can send the user back to this form: a link that turns
+      // out to be bad is reported on the list behind it, which is where the
+      // download would have been reported anyway.
+      onAccepted();
+
+      // The row, now, in the same beat as the dialog closing. Everything below
+      // is between one and several seconds -- the probe alone can be a yt-dlp
+      // spawn -- and a list that stays empty for that long after a button was
+      // pressed reads as the press having been missed. What the row can say
+      // this early is the title if the probe already landed, and the link
+      // otherwise; the rest of it is drawn as a placeholder until the real job
+      // takes its place. Every path out of here either hands this id to
+      // `startDownload` or discards it.
+      let placeholder: string | undefined = beginJob({
+        kind: "download",
+        title: values.link?.title.trim() || url,
+        source: url,
+      });
+      /** Frees the pending row for the paths that end without a download. */
+      const abandon = () => {
+        if (placeholder) discardJob(placeholder);
+        placeholder = undefined;
+        return false;
+      };
+
       // The screen's probe is debounced by 600ms, so pasting a link and hitting
       // Enter straight away arrives here knowing nothing about it -- and the
       // folder, the title, the format and whether yt-dlp is even needed all
       // depend on the answer. One request now is cheaper than a zip filed under
       // Video under the name of its own URL.
-      const resolved = values.link ?? (await ipc.probeUrl(url).catch(() => null));
+      const resolved =
+        values.link ??
+        (await ipc.probeUrl(url, values.cookiesFrom || undefined).catch(() => null));
 
       // The folder is the one part the user can have already decided. Once they
       // have, nothing here may move it.
@@ -171,7 +218,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
 
       if (!dir.trim()) {
         notify("error", t("select_location"));
-        return false;
+        return abandon();
       }
 
       // Only for a link that needs the extractor. A direct file is fetched by
@@ -179,7 +226,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       const isFile = resolved?.kind === "file";
       if (!toolsReady && !isFile) {
         notify("warning", t("ytdlp_not_found"));
-        return false;
+        return abandon();
       }
 
       // The server's own name is kept for a file -- it is already the right
@@ -187,49 +234,121 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       // yt-dlp has sanitized it, which is why it is passed for media only.
       const name = resolved?.title.trim();
 
-      const request: DownloadRequest = {
-        url,
-        outputDir: dir,
-        outputName: isFile ? undefined : name || undefined,
-        mediaType: values.mediaType,
-        quality: values.mediaType === "audio" ? undefined : values.quality,
-        // Always auto. The probe above is a preview, not a decision: it can be
-        // stale by the time the bytes are requested, and the backend is the one
-        // that has to be right.
-        mode: "auto",
-        parallel: values.parallel,
+      // What every download off this form carries, whether it is the one link
+      // that was pasted or the fortieth video of a playlist. Only the URL and
+      // the title differ between them.
+      const detail =
+        isFile && resolved
+          ? detailFor(resolved, t)
+          : values.mediaType === "audio"
+            ? // Not the container: which one an `original` download lands in
+              // depends on what the site turns out to serve, and the card is
+              // written before a byte has been fetched. The word for the choice
+              // is the honest thing to show, and it is the same word the setting
+              // is labelled with.
+              values.audioFormat === "original"
+              ? t("audio_format_original")
+              : "MP3"
+            : values.quality;
+
+      /** Hands the pending row over to whoever queues first, and only once:
+       *  every download after that draws its own, from `startDownload`. */
+      const take = () => {
+        const id = placeholder;
+        placeholder = undefined;
+        return id;
       };
 
-      void startDownload(request, {
-        // The URL is the last resort, not the default. It used to be what every
-        // direct download was called, because the name was deliberately left
-        // out of the request and the card read the same field.
-        title: name || url,
-        source: url,
-        detail:
-          isFile && resolved
-            ? detailFor(resolved, t)
-            : values.mediaType === "audio"
-              ? "MP3"
-              : values.quality,
-      }).catch((error) => notify("error", describeAppError(ipc.toAppError(error), t)));
+      const queue = (target: string, title: string, outputName?: string) =>
+        startDownload(
+          {
+            url: target,
+            outputDir: dir,
+            outputName,
+            mediaType: values.mediaType,
+            quality: values.mediaType === "audio" ? undefined : values.quality,
+            audioFormat:
+              values.mediaType === "audio" ? values.audioFormat : undefined,
+            // Always auto. The probe above is a preview, not a decision: it can
+            // be stale by the time the bytes are requested, and the backend is
+            // the one that has to be right.
+            mode: "auto",
+            parallel: values.parallel,
+            // Empty means none. Sent as undefined rather than "" so a request
+            // stored on a retry button reads the same as one from a build
+            // that had no such setting.
+            cookiesFrom: values.cookiesFrom || undefined,
+          },
+          // The URL is the last resort, not the default. It used to be what
+          // every direct download was called, because the name was deliberately
+          // left out of the request and the card read the same field.
+          { title: title || target, source: target, detail },
+          take(),
+        ).catch((error) =>
+          notify("error", describeAppError(ipc.toAppError(error), t)),
+        );
+
+      if (values.playlist === "all") {
+        // The expensive call, made once and only here. Every entry becomes its
+        // own job, so each gets its own row, its own progress and its own retry
+        // button -- and the network semaphore already runs four at a time
+        // rather than forty.
+        const listing = await ipc
+          .listPlaylist(url, values.cookiesFrom || undefined)
+          .catch((error) => {
+          notify("error", describeAppError(ipc.toAppError(error), t));
+          return null;
+        });
+        if (!listing || listing.entries.length === 0) return abandon();
+
+        // `outputName` is left undefined for every entry: the pasted link's
+        // title belongs to the playlist, not to any video in it, and yt-dlp
+        // names each file from its own page.
+        for (const entry of listing.entries) {
+          void queue(entry.url, entry.title);
+        }
+
+        notify(
+          listing.truncated ? "warning" : "info",
+          listing.truncated
+            ? t("playlist_queued_capped", {
+                queued: formatCount(listing.entries.length, i18n.language),
+                total: formatCount(listing.total, i18n.language),
+              })
+            : t("playlist_queued", {
+                queued: formatCount(listing.entries.length, i18n.language),
+              }),
+        );
+        return true;
+      }
+
+      void queue(url, name || url, isFile ? undefined : name || undefined);
 
       notify("info", t("job_started"));
-      onSuccess();
       return true;
     },
-    [isOnline, notify, savePath, startDownload, t, toolsReady],
+    [
+      beginJob,
+      discardJob,
+      i18n.language,
+      isOnline,
+      notify,
+      savePath,
+      startDownload,
+      t,
+      toolsReady,
+    ],
   );
 
   /** Wraps `start` so the screen does not have to own the pending flag it
    *  needs to disable its own button. */
   const submit = useCallback(
-    async (values: DownloadFormValues, onSuccess: () => void) => {
+    async (values: DownloadFormValues, onAccepted: () => void) => {
       if (inFlight.current) return false;
       inFlight.current = true;
       setStarting(true);
       try {
-        return await start(values, onSuccess);
+        return await start(values, onAccepted);
       } finally {
         inFlight.current = false;
         setStarting(false);

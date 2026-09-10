@@ -45,7 +45,7 @@ fn asset_name() -> AppResult<&'static str> {
         (os, arch) => {
             return Err(AppError::invalid(
                 "platform",
-                &format!("no yt-dlp build for {os}-{arch}"),
+                format!("no yt-dlp build for {os}-{arch}"),
             ))
         }
     };
@@ -59,9 +59,10 @@ pub async fn update_ytdlp(app: &AppHandle) -> AppResult<UpdateResult> {
     let staged = dir.join(".yt-dlp.download");
 
     let url = format!("{NIGHTLY}/{}", asset_name()?);
-    download(&url, &staged).await.map_err(|error| {
+    // A failed download leaves a partial file behind, and the next attempt would
+    // otherwise append to -- or be confused by -- whatever arrived this time.
+    download(&url, &staged).await.inspect_err(|_| {
         let _ = std::fs::remove_file(&staged);
-        error
     })?;
 
     make_executable(&staged)?;
@@ -91,8 +92,7 @@ async fn download(url: &str, dest: &Path) -> AppResult<()> {
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .user_agent("media-toolkit")
-        .build()
-        .and_then(|client| Ok(client.get(url)))
+        .build().map(|client| client.get(url))
         .map_err(|e| AppError::spawn("updater", e))?
         .send()
         .await
@@ -111,7 +111,7 @@ async fn download(url: &str, dest: &Path) -> AppResult<()> {
     if bytes.len() < 1024 * 1024 {
         return Err(AppError::invalid(
             "download",
-            &format!("expected several MB, got {} bytes", bytes.len()),
+            format!("expected several MB, got {} bytes", bytes.len()),
         ));
     }
 

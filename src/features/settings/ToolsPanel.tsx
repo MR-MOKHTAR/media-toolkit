@@ -14,12 +14,9 @@ interface Props {
   notify: (type: ToastType, message: string) => void;
 }
 
-const BUNDLED = ["ytdlp", "ffmpeg", "ffprobe", "deno"] as const;
+const BUNDLED = ["ytdlp", "ffmpeg", "ffprobe"] as const;
 
-/** What each row is called, where that is not just the key. `deno` is the
- *  JavaScript runtime yt-dlp runs YouTube's player challenge in, and nobody
- *  installing a media app has any reason to know that -- so the row says what
- *  it is for rather than what it is. */
+/** What each row is called, where that is not just the key. */
 const TOOL_LABEL: Partial<Record<(typeof BUNDLED)[number], string>> = {
   ytdlp: "yt-dlp",
 };
@@ -79,14 +76,6 @@ export function ToolsPanel({ notify }: Props) {
                   {tools.ytdlpVersion}
                 </span>
               )}
-              {/* The one row whose purpose is not obvious from its name.
-                  Written beside it rather than left to a tooltip, because the
-                  moment it matters is the moment it says "Missing". */}
-              {tool === "deno" && (
-                <span className="ms-2 text-xs text-fg-muted">
-                  {t("tool_deno_about")}
-                </span>
-              )}
             </span>
             {tool === "ytdlp" && (
               <Button
@@ -132,3 +121,4 @@ export function ToolsPanel({ notify }: Props) {
     </Card>
   );
 }
+

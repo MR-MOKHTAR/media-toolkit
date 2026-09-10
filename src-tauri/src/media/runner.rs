@@ -247,7 +247,7 @@ impl ProgressBlock {
                 let update = ProgressUpdate {
                     out_time_secs: self.out_time_us.unwrap_or(0) as f64 / 1_000_000.0,
                     total_size: self.total_size,
-                    speed: self.speed.clone(),
+                    speed: self.speed,
                     ended: self.ended,
                 };
                 return Some(update);

@@ -1,7 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
-import { useNavigation } from "../../../app/navigation";
 import type { Job } from "../types";
 import { useJobs } from "../useJobs";
 import { JobCard } from "./JobCard";
@@ -31,7 +30,6 @@ export function JobList({
   empty: ReactNode;
 }) {
   const { state, cancel, remove, reveal, retry } = useJobs();
-  const { go } = useNavigation();
 
   const cancelling = useMemo(() => new Set(state.cancelling), [state.cancelling]);
 
@@ -42,7 +40,10 @@ export function JobList({
       <AnimatePresence initial={false}>
         {jobs.map((job) => (
           <motion.li
-            key={job.id}
+            // Not always the job id: a job that took over a pending row is
+            // drawn as that row still, so it fills in where it stands instead
+            // of animating itself out and back. See `Job.rowKey`.
+            key={job.rowKey ?? job.id}
             layout
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -57,7 +58,6 @@ export function JobList({
               onRemove={remove}
               onReveal={(path) => void reveal(path)}
               onRetry={(id) => void retry(id)}
-              onViewTranscript={(id) => go({ name: "transcript", jobId: id })}
             />
           </motion.li>
         ))}

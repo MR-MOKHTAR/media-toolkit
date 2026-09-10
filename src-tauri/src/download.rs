@@ -19,6 +19,7 @@
 //! between the last two, and errs towards yt-dlp whenever it is not certain.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -110,11 +111,91 @@ pub struct DownloadRequest {
     /// expire faster than the transfer takes, needs a way back to the old
     /// behaviour that does not require a new release.
     pub parallel: Option<bool>,
+    /// What an audio download should end up as: `original` to keep the stream
+    /// the site served, `mp3` to re-encode it.
+    ///
+    /// Absent means `mp3`, which is what every version before this one did
+    /// unconditionally. Meaningless when `media_type` is not audio.
+    pub audio_format: Option<String>,
+    /// The browser to borrow cookies from, for links behind a login, an age
+    /// check, or a members-only wall. `None` -- and the default -- is to send
+    /// no cookies at all.
+    ///
+    /// Validated against `BROWSERS` before it reaches a command line: this
+    /// value comes from the webview, and `--cookies-from-browser` takes a
+    /// string with its own `+KEYRING:PROFILE::CONTAINER` syntax that there is
+    /// no reason to let through.
+    pub cookies_from: Option<String>,
 }
+
+/// The browsers yt-dlp can read cookies from, as it names them.
+///
+/// Listed here rather than passed through, because the value arrives from the
+/// webview and lands in an argument. yt-dlp's own syntax allows a keyring, a
+/// profile and a container appended to the name; none of that is offered, so
+/// none of it is accepted.
+pub const BROWSERS: &[&str] = &[
+    "brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale",
+];
+
+/// The browser name, if it is one of `BROWSERS`.
+///
+/// Every path that reaches a yt-dlp command line goes through here, so an
+/// unknown value can never become an argument. Matching case-insensitively and
+/// returning the *listed* spelling rather than the caller's is what makes that
+/// true: what goes on the command line is a `&'static str` from this file.
+pub fn browser_name(requested: Option<&str>) -> Option<&'static str> {
+    let requested = requested?.trim();
+    BROWSERS
+        .iter()
+        .copied()
+        .find(|name| name.eq_ignore_ascii_case(requested))
+}
+
+/// Adds `--cookies-from-browser` when one was asked for.
+///
+/// Every yt-dlp call in the app takes this: the download itself, the probe that
+/// draws the preview, the playlist walk, and `muxed::resolve`. A members-only
+/// video whose *metadata* needs the cookie shows up as "Video unavailable" in
+/// the preview otherwise, which is a confusing way to be told to log in.
+pub fn with_cookies(cmd: &mut Command, browser: Option<&str>) {
+    if let Some(name) = browser_name(browser) {
+        cmd.arg("--cookies-from-browser");
+        cmd.arg(name);
+    }
+}
+
+/// The value the download form sends for "leave the stream alone".
+///
+/// The same word the extract-audio tool uses for the same idea, deliberately:
+/// they are one promise made in two places, and a user who has met it once on
+/// the tool screen should not have to learn a second name for it here.
+pub const ORIGINAL_AUDIO: &str = "original";
 
 impl DownloadRequest {
     fn wants_audio(&self) -> bool {
         self.media_type == "audio"
+    }
+
+    /// Whether an audio download should keep the stream it fetched.
+    fn wants_original_audio(&self) -> bool {
+        self.wants_audio()
+            && self
+                .audio_format
+                .as_deref()
+                .is_some_and(|format| format.eq_ignore_ascii_case(ORIGINAL_AUDIO))
+    }
+
+    /// The browser to read cookies from, if it is one yt-dlp knows and this app
+    /// offers. Anything else is dropped rather than refused: a stale setting
+    /// from a build that listed a browser this one does not is a download that
+    /// should still run, without the cookies.
+    fn cookie_browser(&self) -> Option<&'static str> {
+        let requested = self.cookies_from.as_deref()?.trim();
+        BROWSERS
+            .iter()
+            .copied()
+            .find(|name| name.eq_ignore_ascii_case(requested))
     }
 }
 
@@ -137,7 +218,21 @@ pub struct UrlInfo {
     pub uploader: Option<String>,
     pub duration_secs: Option<f64>,
     pub thumbnail: Option<String>,
+    /// The link is a playlist page in its own right: it resolves to a list of
+    /// videos rather than to one.
     pub is_playlist: bool,
+    /// The link is a *video* that also names a playlist -- the `list=` on a
+    /// `watch?v=…&list=…`, which is the shape YouTube's share button produces
+    /// from inside a playlist and by far the most common way one is pasted.
+    ///
+    /// Read off the URL rather than from yt-dlp, deliberately. Answering it
+    /// properly would mean a second `-J` without `--no-playlist`, which is two
+    /// more seconds on every paste to answer a question most links do not raise.
+    /// The expensive call is `list_playlist`, and it only happens if the user
+    /// actually asks for the whole thing.
+    pub in_playlist: bool,
+    /// How many videos the playlist holds, when the page said. Never known for
+    /// `in_playlist`, where nothing has looked yet.
     pub entry_count: Option<u64>,
     /// Known ahead of time for a file, never for a media page -- the size there
     /// depends on the format yt-dlp ends up choosing.
@@ -161,21 +256,94 @@ enum Engine {
 /// around a thousand sites. Removing it is the whole feature. A failure on an
 /// unsupported site now explains itself, because the stderr tail comes back
 /// with the error.
+///
+/// A missing scheme is supplied rather than rejected. `youtu.be/abc` and
+/// `www.aparat.com/v/x` are what a share sheet, a chat message and half the
+/// links anyone reads out loud actually look like, and answering one of those
+/// with "must start with http://" is the app declining to do the obvious thing.
+/// Every other scheme is still refused: `file:`, `javascript:` and `data:` are
+/// the ones that would matter, and none of them is a download.
 fn validate_url(url: &str) -> AppResult<String> {
-    let trimmed = url.trim();
+    // Zero-width and bidi marks ride along on anything copied out of a Persian
+    // or Arabic page, and a URL carrying one is not the URL it looks like.
+    // A newline becomes a space rather than vanishing: two links on two lines
+    // must stay two links, so the first one is taken and the second is not
+    // silently glued onto its end.
+    let cleaned: String = url
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|c| !is_invisible(*c))
+        .collect();
+
+    // The link out of whatever it was pasted with. A share sheet writes "Look
+    // at this https://youtu.be/x", and the URL is the part of that anyone
+    // meant. Whitespace ends it -- a real URL has none.
+    let trimmed = match cleaned.find("http://").or_else(|| cleaned.find("https://")) {
+        Some(at) => cleaned[at..].split_whitespace().next().unwrap_or("").to_string(),
+        None => cleaned.split_whitespace().next().unwrap_or("").to_string(),
+    };
+    let trimmed = trim_trailing_punctuation(&trimmed);
     if trimmed.is_empty() {
         return Err(AppError::invalid("url", "empty"));
     }
+
     let lower = trimmed.to_ascii_lowercase();
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return Err(AppError::invalid("url", "must start with http:// or https://"));
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Ok(trimmed);
     }
-    // Anything that would let a crafted URL reach the local filesystem or a
-    // shell is rejected outright rather than handed to a subprocess.
-    if lower.starts_with("file:") || lower.contains('\n') || lower.contains('\r') {
-        return Err(AppError::invalid("url", "unsupported scheme"));
+    // Some other scheme spelled out in full, or a bare host. `example.com:8080`
+    // is the one ambiguous case, and a port is digits -- so a colon followed by
+    // anything else is a scheme, and not one of the two this app speaks.
+    if let Some((head, rest)) = lower.split_once(':') {
+        let is_port = !rest.is_empty()
+            && rest
+                .split(['/', '?', '#'])
+                .next()
+                .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()));
+        let looks_like_scheme = !head.is_empty()
+            && head.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c));
+        if looks_like_scheme && !is_port {
+            return Err(AppError::invalid("url", "unsupported scheme"));
+        }
     }
-    Ok(trimmed.to_string())
+
+    // A host has a dot in it. Without this, a stray word in the field would be
+    // turned into `https://word` and spend two seconds failing DNS.
+    let host = lower.split(['/', '?', '#']).next().unwrap_or("");
+    if !host.contains('.') || host.starts_with('.') || host.ends_with('.') {
+        return Err(AppError::invalid("url", "not a link"));
+    }
+
+    Ok(format!("https://{trimmed}"))
+}
+
+/// Drops the sentence a link was pasted inside of, from its end.
+///
+/// A URL copied out of prose comes with the full stop or the closing quote that
+/// followed it. A closing bracket is only punctuation when nothing opened it --
+/// `en.wikipedia.org/wiki/Bat_(disambiguation)` ends in one on purpose, and
+/// cutting that gives a 404.
+fn trim_trailing_punctuation(url: &str) -> String {
+    let mut end = url.len();
+    while let Some(last) = url[..end].chars().next_back() {
+        let cut = match last {
+            '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\'' | '>' | '»' | '،' => true,
+            ')' => url[..end].matches('(').count() < url[..end].matches(')').count(),
+            ']' => url[..end].matches('[').count() < url[..end].matches(']').count(),
+            _ => false,
+        };
+        if !cut {
+            break;
+        }
+        end -= last.len_utf8();
+    }
+    url[..end].to_string()
+}
+
+/// Characters that are in the string and not on the screen: the bidi marks and
+/// zero-width joiners that come with any copy out of an RTL page, and the BOM.
+fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
 
 /// yt-dlp format selector for a requested height.
@@ -361,6 +529,16 @@ fn is_media_type(info: &FileInfo) -> bool {
         .is_some_and(|value| value.starts_with("video/") || value.starts_with("audio/"))
 }
 
+/// What to ask a site for when the user wants the audio.
+///
+/// AAC first because that is what most sites serve as a plain ranged stream
+/// (YouTube's format 140), which is exactly the shape the parallel engine can
+/// fetch -- and because it is already the audio inside the video, so decoding
+/// it costs nothing. The fallbacks cover Opus-only sources and the sites that
+/// publish nothing but a muxed file, both of which LAME encodes from just as
+/// happily.
+const AUDIO_SELECTOR: &str = "bestaudio[acodec^=mp4a]/bestaudio/best";
+
 /// A media page, on whichever of the two engines can have it.
 ///
 /// The fast path is tried first and is allowed to decline for any reason -- an
@@ -383,18 +561,26 @@ async fn run_media(
     dir: &Path,
     request: &DownloadRequest,
 ) -> AppResult<PathBuf> {
-    // Audio is a transcode, not a transfer: `-x --audio-format mp3` is
-    // yt-dlp's post-processor, the stream is a tenth the size of the video, and
-    // the download is not the slow part. Nothing to gain and a whole second
-    // path to get wrong.
-    let eligible = !request.wants_audio()
-        && request.parallel.unwrap_or(true)
-        // Merging is ffmpeg's, so without ffmpeg this path cannot finish what
-        // it starts. `run_ytdlp` already reports that case properly.
+    let audio = request.wants_audio();
+    let eligible = request.parallel.unwrap_or(true)
+        // Merging and encoding are both ffmpeg's, so without ffmpeg this path
+        // cannot finish what it starts. `run_ytdlp` already reports that case
+        // properly.
         && binaries::resolve(app, Tool::Ffmpeg).is_ok();
 
     if eligible {
-        let selector = format_selector(request.quality.as_deref());
+        // Audio used to be excluded here, on the reasoning that `-x` is a
+        // transcode and the transfer is not the slow part. Half of that is
+        // true: the encode has to happen either way, and it happens below
+        // instead. The transfer is the other half, and a 60-minute podcast is
+        // 90 MB that yt-dlp pulls down one socket at a time -- the same
+        // single-connection transfer, against the same throttled CDN, that the
+        // whole of this module exists to stop doing.
+        let selector = if audio {
+            AUDIO_SELECTOR.to_string()
+        } else {
+            format_selector(request.quality.as_deref())
+        };
         let cancel = jobs.cancel_signal(id).await;
 
         // Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about
@@ -406,12 +592,40 @@ async fn run_media(
         // `Ok(None)` is the ordinary answer for most of the web; an extraction
         // error is left to `run_ytdlp` to produce again with its own stderr
         // tail attached, which is the one the user can actually read.
-        let resolved = match cancel.guard(muxed::resolve(app, url, &selector)).await {
+        let resolved = match cancel
+            .guard(muxed::resolve(
+                app,
+                url,
+                &selector,
+                request.cookie_browser(),
+            ))
+            .await
+        {
             Ok(resolved) => resolved,
             Err(_) => return Err(AppError::Cancelled),
         };
 
-        if let Ok(Some(plan)) = resolved {
+        // An MP3 is made from one audio stream. Two means the selector came
+        // back with a video track as well, which is not something to hand to
+        // an audio encoder -- so that one goes to yt-dlp, as it always did.
+        let usable = resolved
+            .ok()
+            .flatten()
+            .filter(|plan| !audio || plan.stream_count() == 1);
+
+        if let Some(plan) = usable {
+            // Decided here rather than above, because for `original` the answer
+            // depends on what the resolve actually came back with: a codec this
+            // app has no container for degrades to an encode instead of failing,
+            // which is the same choice `ops::extract_audio` makes.
+            let target = if !audio {
+                muxed::Target::Container
+            } else if request.wants_original_audio() && plan.audio_copy_ext().is_some() {
+                muxed::Target::AudioCopy
+            } else {
+                muxed::Target::Mp3
+            };
+
             match muxed::run(
                 app,
                 jobs,
@@ -421,6 +635,7 @@ async fn run_media(
                 dir,
                 request.output_name.as_deref(),
                 &plan,
+                target,
             )
             .await
             {
@@ -465,7 +680,16 @@ async fn run_ytdlp(
         .map(paths::sanitize_stem)
         .unwrap_or_else(|| "%(title).100B".to_string());
 
-    let ext = if is_audio { "mp3" } else { "mp4" };
+    // Only ever a fallback, for the case where yt-dlp's `after_move` print does
+    // not reach us -- see the `unwrap_or_else` at the end of this function. Every
+    // branch of it is a guess, `mp4` included: a webm-only site produces a
+    // `.webm`. m4a is the guess for a copied audio stream because AAC is what
+    // the great majority of sites serve as their best audio.
+    let ext = match (is_audio, request.wants_original_audio()) {
+        (true, true) => "m4a",
+        (true, false) => "mp3",
+        (false, _) => "mp4",
+    };
     let template = dir.join(format!("{stem}.%(ext)s"));
 
     let mut args: Vec<String> = vec![
@@ -504,13 +728,21 @@ async fn run_ytdlp(
     ];
 
     if is_audio {
-        args.extend([
-            "-x".into(),
-            "--audio-format".into(),
-            "mp3".into(),
-            "--audio-quality".into(),
-            "0".into(),
-        ]);
+        args.push("-x".into());
+        args.extend(if request.wants_original_audio() {
+            // `best` is yt-dlp's word for "do not re-encode": it lifts the
+            // stream out of whatever container it arrived in and leaves the
+            // packets alone. The extension follows the codec, which is why the
+            // template below is `%(ext)s` rather than a fixed one.
+            ["--audio-format".into(), "best".into()]
+        } else {
+            ["--audio-format".into(), "mp3".into()]
+        });
+        if !request.wants_original_audio() {
+            // LAME's best VBR. Meaningless for a copy, and yt-dlp warns when it
+            // is passed with `--audio-format best`.
+            args.extend(["--audio-quality".into(), "0".into()]);
+        }
     } else {
         args.extend([
             "-f".into(),
@@ -535,12 +767,17 @@ async fn run_ytdlp(
         }
     }
 
-    args.push("--".into());
-    args.push(url.to_string());
+    // Before the `--`, which is where the options stop and the URL begins.
+    if let Some(browser) = request.cookie_browser() {
+        args.push("--cookies-from-browser".into());
+        args.push(browser.to_string());
+    }
 
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
     cmd.args(&args);
-    binaries::with_js_runtime(app, &mut cmd);
+    // The `--` and the URL come last, from here, because nothing may follow
+    // them -- see `binaries::with_url`.
+    binaries::with_url(app, &mut cmd, url);
 
     // The child goes into the registry so `cancel_job` can reach it, while the
     // reader keeps the pipes. Taking stdout and stderr before the handover is
@@ -680,7 +917,11 @@ fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> 
 /// which is the difference between a preview that appears as you finish
 /// pasting and one that takes two seconds. Only a page falls through to the
 /// extractor, and a page is the only thing the extractor is needed for.
-pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
+pub async fn probe_url(
+    app: &AppHandle,
+    url: &str,
+    cookies_from: Option<&str>,
+) -> AppResult<UrlInfo> {
     let url = validate_url(url)?;
 
     if let Some(file) = direct::probe(&url).await? {
@@ -693,6 +934,7 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
             duration_secs: None,
             thumbnail: None,
             is_playlist: false,
+            in_playlist: false,
             entry_count: None,
             size_bytes: file.size_bytes,
             resumable: file.resumable,
@@ -700,15 +942,12 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
     }
 
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
-    cmd.args([
-        "-J",
-        "--no-warnings",
-        "--flat-playlist",
-        "--no-playlist",
-        "--",
-        &url,
-    ]);
-    binaries::with_js_runtime(app, &mut cmd);
+    cmd.args(["-J", "--no-warnings", "--flat-playlist", "--no-playlist"]);
+    // Before the `--`. A members-only video whose metadata needs the cookie
+    // answers an anonymous probe with "Video unavailable", which is a confusing
+    // way to be told to log in.
+    with_cookies(&mut cmd, cookies_from);
+    binaries::with_url(app, &mut cmd, &url);
 
     let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
     let value: serde_json::Value = serde_json::from_str(&stdout)
@@ -733,6 +972,11 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
             .and_then(|v| v.as_str())
             .map(str::to_string),
         is_playlist: entries.is_some(),
+        // Only worth saying for a link that is not already a playlist page:
+        // `/playlist?list=X` carries the parameter too, and offering "this one
+        // or all of them" twice over for the same list would be one choice
+        // wearing two hats.
+        in_playlist: entries.is_none() && names_a_playlist(&url),
         entry_count: entries.map(|e| e.len() as u64),
         // yt-dlp cannot say: the size depends on the format it ends up
         // choosing, which it does not decide until the download starts.
@@ -742,9 +986,230 @@ pub async fn probe_url(app: &AppHandle, url: &str) -> AppResult<UrlInfo> {
     })
 }
 
+/// Whether this URL names a playlist alongside whatever else it points at.
+///
+/// A string check on the query, not a parse: `list=` is the parameter every
+/// extractor that has the concept spells the same way, and the alternative is
+/// pulling in a URL crate to answer one question. A `list=` with an empty value
+/// -- which YouTube emits on some share links -- names nothing and is ignored.
+fn names_a_playlist(url: &str) -> bool {
+    let Some((_, query)) = url.split_once('?') else {
+        return false;
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .any(|(key, value)| key.eq_ignore_ascii_case("list") && !value.is_empty())
+}
+
+/// One video in a playlist, as `list_playlist` reports it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    /// The watch URL, ready to hand back to `start_download` unchanged.
+    pub url: String,
+    pub title: String,
+}
+
+/// The most videos one press of "download all" will queue.
+///
+/// A channel URL is a playlist too, and some of them are five thousand videos.
+/// Queueing that many is not a download, it is an accident with a progress bar
+/// -- and the job list persists a hundred rows, so the other four thousand nine
+/// hundred would not even be visible. The cap is reported rather than silently
+/// applied; see `PlaylistListing::truncated`.
+const MAX_PLAYLIST_ENTRIES: usize = 100;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistListing {
+    pub entries: Vec<PlaylistEntry>,
+    /// How many the playlist actually holds, before the cap.
+    pub total: u64,
+    /// Whether `entries` is short of `total`, so the form can say so rather
+    /// than quietly starting the first hundred of a thousand.
+    pub truncated: bool,
+}
+
+/// Expands a playlist link into the videos it holds.
+///
+/// Deliberately not part of `probe_url`: this is the expensive call -- yt-dlp
+/// walking a whole list -- and most pasted links never need it. It runs when the
+/// user has actually asked for the whole playlist.
+///
+/// `--flat-playlist` is what keeps it to one request: yt-dlp lists the entries
+/// without extracting each one, so a fifty-video playlist costs a single page
+/// load rather than fifty. Each entry is extracted properly later, by the
+/// download that fetches it.
+pub async fn list_playlist(
+    app: &AppHandle,
+    url: &str,
+    cookies_from: Option<&str>,
+) -> AppResult<PlaylistListing> {
+    let url = validate_url(url)?;
+
+    let mut cmd = binaries::command(app, Tool::YtDlp)?;
+    // No `--no-playlist` here -- that flag is the whole reason this function
+    // exists -- and `--yes-playlist` to override it for a `watch?v=…&list=…`,
+    // where yt-dlp's own default is the single video.
+    cmd.args(["-J", "--no-warnings", "--flat-playlist", "--yes-playlist"]);
+    with_cookies(&mut cmd, cookies_from);
+    binaries::with_url(app, &mut cmd, &url);
+
+    let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|error| AppError::invalid("url", format!("could not read playlist: {error}")))?;
+
+    let Some(raw) = value.get("entries").and_then(|e| e.as_array()) else {
+        return Err(AppError::invalid("url", "not a playlist"));
+    };
+
+    let total = raw.len() as u64;
+    let entries: Vec<PlaylistEntry> = raw
+        .iter()
+        // An entry with no URL is one yt-dlp could not resolve -- a deleted or
+        // private video, which every long playlist has a few of. Skipped rather
+        // than queued as a download that is certain to fail.
+        .filter_map(|entry| {
+            let url = entry.get("url").and_then(|v| v.as_str())?;
+            Some(PlaylistEntry {
+                url: url.to_string(),
+                title: entry
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Untitled")
+                    .to_string(),
+            })
+        })
+        .take(MAX_PLAYLIST_ENTRIES)
+        .collect();
+
+    Ok(PlaylistListing {
+        truncated: total > entries.len() as u64,
+        entries,
+        total,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A request as the download form sends one, with only the fields a test
+    /// cares about set.
+    fn request(media_type: &str, audio_format: Option<&str>) -> DownloadRequest {
+        DownloadRequest {
+            url: "https://example.com/watch".into(),
+            output_dir: "/tmp".into(),
+            output_name: None,
+            media_type: media_type.into(),
+            quality: None,
+            mode: None,
+            parallel: None,
+            audio_format: audio_format.map(str::to_string),
+            cookies_from: None,
+        }
+    }
+
+    /// Every install before this one sent no `audioFormat` at all, and those
+    /// requests are still stored on the retry button of any failed download in
+    /// the job list. They have to keep meaning MP3.
+    #[test]
+    fn an_absent_audio_format_still_means_mp3() {
+        assert!(!request("audio", None).wants_original_audio());
+        assert!(request("audio", None).wants_audio());
+    }
+
+    #[test]
+    fn original_is_recognised_whatever_its_case() {
+        assert!(request("audio", Some("original")).wants_original_audio());
+        assert!(request("audio", Some("Original")).wants_original_audio());
+        assert!(!request("audio", Some("mp3")).wants_original_audio());
+    }
+
+    /// The audio format has nothing to say about a video download, and a stray
+    /// value must not send one down the copy path.
+    #[test]
+    fn a_video_request_is_never_original_audio() {
+        assert!(!request("video", Some("original")).wants_original_audio());
+    }
+
+    /// The value arrives from the webview and lands in an argument, so what is
+    /// accepted is exactly the list and nothing adjacent to it.
+    #[test]
+    fn only_a_listed_browser_reaches_a_command_line() {
+        assert_eq!(browser_name(Some("firefox")), Some("firefox"));
+        assert_eq!(browser_name(Some("Chrome")), Some("chrome"));
+        // Whitespace from a stored setting is trimmed, not treated as a name.
+        assert_eq!(browser_name(Some("  edge  ")), Some("edge"));
+
+        assert_eq!(browser_name(None), None);
+        assert_eq!(browser_name(Some("")), None);
+        assert_eq!(browser_name(Some("netscape")), None);
+    }
+
+    /// yt-dlp's own syntax allows a keyring, a profile and a container appended
+    /// to the browser name. None of that is offered by the UI, so none of it is
+    /// accepted -- and neither is anything that merely starts with a real name.
+    #[test]
+    fn the_browsers_own_extended_syntax_is_refused() {
+        assert_eq!(browser_name(Some("firefox:/etc/passwd")), None);
+        assert_eq!(browser_name(Some("chrome+gnomekeyring")), None);
+        assert_eq!(browser_name(Some("chrome::container")), None);
+        assert_eq!(browser_name(Some("firefox --exec")), None);
+    }
+
+    /// What `browser_name` returns is a `&'static str` from this file, never
+    /// the caller's own string. That is the property that makes the whole
+    /// check hold: a matched name cannot smuggle its own spelling through.
+    #[test]
+    fn a_matched_name_is_the_listed_spelling() {
+        let matched = browser_name(Some("VIVALDI")).unwrap();
+        assert_eq!(matched, "vivaldi");
+        assert!(BROWSERS.contains(&matched));
+    }
+
+    /// A stale setting naming a browser this build no longer lists is a
+    /// download that should still run, without the cookies -- not one that
+    /// fails.
+    #[test]
+    fn an_unknown_browser_is_dropped_rather_than_refused() {
+        let mut request = request("video", None);
+        request.cookies_from = Some("netscape".into());
+        assert_eq!(request.cookie_browser(), None);
+    }
+
+    /// The shape YouTube's share button produces from inside a playlist, and
+    /// the reason `in_playlist` exists: the app used to take the video and say
+    /// nothing at all about the other thirty-nine.
+    #[test]
+    fn spots_a_playlist_named_alongside_a_video() {
+        assert!(names_a_playlist(
+            "https://www.youtube.com/watch?v=abc123&list=PLxyz"
+        ));
+        assert!(names_a_playlist("https://www.youtube.com/playlist?list=PLxyz"));
+        // Order in the query is not fixed, and neither is case.
+        assert!(names_a_playlist("https://example.com/v?list=A&t=30"));
+        assert!(names_a_playlist("https://example.com/v?LIST=A"));
+    }
+
+    #[test]
+    fn a_plain_link_names_no_playlist() {
+        assert!(!names_a_playlist("https://www.youtube.com/watch?v=abc123"));
+        assert!(!names_a_playlist("https://example.com/video.mp4"));
+        assert!(!names_a_playlist("https://example.com/"));
+        // A parameter that merely starts with the same letters.
+        assert!(!names_a_playlist("https://example.com/v?listing=7"));
+        // YouTube emits this on some share links, and it names nothing.
+        assert!(!names_a_playlist("https://example.com/v?list="));
+    }
+
+    /// `validate_url`'s answer, for the cases that have one. `AppError` is not
+    /// `PartialEq` -- deliberately, it carries process output -- so the tests
+    /// that are about the accepted form unwrap rather than compare a `Result`.
+    fn normalized(url: &str) -> String {
+        validate_url(url).unwrap_or_else(|_| panic!("{url} should be accepted"))
+    }
 
     #[test]
     fn accepts_any_http_url() {
@@ -763,14 +1228,69 @@ mod tests {
 
     #[test]
     fn rejects_non_http_schemes() {
-        for url in ["file:///etc/passwd", "javascript:alert(1)", "", "  "] {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>",
+            "magnet:?xt=urn:btih:abc",
+            "",
+            "  ",
+            // Not a link at all: turning this into https://nonsense would cost
+            // two seconds of DNS to say so.
+            "nonsense",
+        ] {
             assert!(validate_url(url).is_err(), "{url} should be rejected");
         }
     }
 
+    /// A missing scheme is the normal shape of a link people read out, share
+    /// and retype. Supplying it is the difference between a link that works and
+    /// an error message about a prefix nobody types.
     #[test]
-    fn rejects_embedded_newlines() {
-        assert!(validate_url("https://a.com\nhttps://b.com").is_err());
+    fn supplies_a_missing_scheme() {
+        for (input, want) in [
+            ("youtu.be/dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ"),
+            ("www.aparat.com/v/abc", "https://www.aparat.com/v/abc"),
+            (
+                "example.com:8080/file.zip",
+                "https://example.com:8080/file.zip",
+            ),
+        ] {
+            assert_eq!(normalized(input), want, "{input}");
+        }
+    }
+
+    /// What is actually on the clipboard after copying out of a chat: the link
+    /// with a sentence around it, and the invisible marks an RTL page leaves
+    /// behind.
+    #[test]
+    fn takes_the_link_out_of_the_text_around_it() {
+        assert_eq!(
+            normalized("ببین این ویدیو https://youtu.be/abc خیلی خوبه"),
+            "https://youtu.be/abc"
+        );
+        assert_eq!(
+            normalized("see https://example.com/a.zip."),
+            "https://example.com/a.zip"
+        );
+        // A bracket that something opened stays: cutting it gives a 404.
+        assert_eq!(
+            normalized("https://en.wikipedia.org/wiki/Bat_(animal)"),
+            "https://en.wikipedia.org/wiki/Bat_(animal)"
+        );
+        // A zero-width mark from a copied RTL page is not part of the URL.
+        assert_eq!(
+            normalized("https://example.com/\u{200f}file.mp4"),
+            "https://example.com/file.mp4"
+        );
+    }
+
+    /// Two links on two lines is one link and some noise, not a URL containing
+    /// a newline. The point is that the second one can never be glued onto the
+    /// end of the first.
+    #[test]
+    fn a_second_line_is_not_part_of_the_first_url() {
+        assert_eq!(normalized("https://a.com/x\nhttps://b.com/y"), "https://a.com/x");
     }
 
     #[test]

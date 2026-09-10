@@ -1,0 +1,84 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# A second push to the same branch makes the first run pointless. Cancel it
+# rather than queueing behind it -- these are the checks people wait on.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Locale parity is the cheapest check in the repo and catches the failure
+      # nothing else does: a key added in English and missing in Persian renders
+      # as the key itself, in Latin script, inside an RTL layout.
+      - name: Check translations
+        run: bun run check:i18n
+
+      # `bun run build` is tsc followed by vite. Type errors are the point; the
+      # bundle is thrown away.
+      - name: Typecheck and build
+        run: bun run build
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # libwebkit2gtk-4.1 is the Tauri v2 webview. Needed to *compile* against
+      # tauri even though nothing here launches a window.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # This is the whole reason CI can be fast. Without it, build.rs pulls
+      # ~215 MB of yt-dlp and ffmpeg on every run to satisfy a test suite that
+      # does not need them: `binaries::tests` skips any tool that is not
+      # provisioned, and nothing else shells out to one. The release workflow
+      # sets DOWNLOADER_REQUIRE_TOOLS instead, which is where it matters.
+      - name: Test
+        working-directory: src-tauri
+        env:
+          DOWNLOADER_SKIP_TOOL_FETCH: "1"
+        run: cargo test
+
+      - name: Clippy
+        working-directory: src-tauri
+        env:
+          DOWNLOADER_SKIP_TOOL_FETCH: "1"
+        run: cargo clippy --all-targets -- -D warnings
+
+      # No `cargo fmt --check` here, deliberately. This codebase has never been
+      # rustfmt'd -- it is 76 diffs across 12 files -- and much of what rustfmt
+      # would rewrap is hand-laid comment prose that reads worse afterwards.
+      # Turning it on is a decision and a commit of its own, not a side effect of
+      # adding CI.

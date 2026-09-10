@@ -8,12 +8,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from "./mediaKind";
 import type {
-  ApiKeyStatus,
   AppError,
   DownloadRequest,
   JobProgress,
@@ -21,8 +20,8 @@ import type {
   JobSummary,
   LibraryInfo,
   LibrarySlot,
+  PlaylistListing,
   ToolStatus,
-  TranscriptText,
   UpdateResult,
   UrlInfo,
 } from "../features/jobs/types";
@@ -71,7 +70,22 @@ export const setLibraryOrganize = (enabled: boolean) =>
 export const setSaveNextToInput = (enabled: boolean) =>
   invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
-export const probeUrl = (url: string) => invoke<UrlInfo>("probe_url", { url });
+export const probeUrl = (url: string, cookiesFrom?: string) =>
+  invoke<UrlInfo>("probe_url", { url, cookiesFrom });
+
+/** The browsers this build can read cookies from, in yt-dlp's own spelling.
+ *
+ *  Asked for rather than hard-coded here, so the list Settings offers and the
+ *  list the backend accepts cannot drift apart. */
+export const getCookieBrowsers = () => invoke<string[]>("cookie_browsers");
+
+/** The videos behind a playlist link.
+ *
+ *  Separate from `probeUrl` because it is the slow half -- yt-dlp walking a
+ *  whole list -- and it only runs once the user has asked for the whole thing
+ *  rather than on every paste. */
+export const listPlaylist = (url: string, cookiesFrom?: string) =>
+  invoke<PlaylistListing>("list_playlist", { url, cookiesFrom });
 
 /** Returns a job id immediately; the work reports itself through events. */
 export const startDownload = (request: DownloadRequest) =>
@@ -109,27 +123,6 @@ export async function chooseMediaFile(defaultPath?: string) {
   return typeof selected === "string" ? selected : null;
 }
 
-// ------------------------------------------------------------- transcribe
-
-/** Reads a finished transcript back for display. Narrow by design -- the
- *  backend checks the extension and the size, because the webview names the
- *  path and a general file read would be an arbitrary-read primitive. */
-export const readTranscript = (path: string) =>
-  invoke<TranscriptText>("read_transcript", { path });
-
-/** Whether a Groq key is stored, and its last four characters. The key itself
- *  is never returned: Rust makes every HTTP call, so it has no reason to exist
- *  on this side of the bridge. */
-export const apiKeyStatus = () => invoke<ApiKeyStatus>("api_key_status");
-
-export const setApiKey = (key: string) => invoke<void>("set_api_key", { key });
-
-export const clearApiKey = () => invoke<void>("clear_api_key");
-
-/** Checks the key that is actually stored, not one passed in -- the saved key
- *  is the thing that can be wrong. */
-export const testApiKey = () => invoke<void>("test_api_key");
-
 /**
  * Copies text to the system clipboard.
  *
@@ -140,6 +133,25 @@ export const testApiKey = () => invoke<void>("test_api_key");
  * test and is dead for every user.
  */
 export const copyText = (text: string) => writeText(text);
+
+/**
+ * What is on the clipboard, or null.
+ *
+ * Through the plugin for the same reason as `copyText`, plus one of its own:
+ * `navigator.clipboard.readText()` needs a user gesture and a permission prompt
+ * in a browser, and the download form wants to look the moment it opens.
+ *
+ * Never throws. An empty clipboard, a clipboard holding an image, no native
+ * window at all in `vite dev` -- all of them are "nothing to paste", which is
+ * not a failure worth a toast when nobody asked for anything.
+ */
+export const readClipboardText = async (): Promise<string | null> => {
+  try {
+    return (await readText()) ?? null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Paints the native window and the webview's own base layer in the theme's

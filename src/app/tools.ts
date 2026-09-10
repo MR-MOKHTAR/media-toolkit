@@ -1,6 +1,5 @@
 import {
   AudioLines,
-  Captions,
   Download,
   Repeat2,
   Scissors,
@@ -18,11 +17,10 @@ export interface ToolDefinition {
 }
 
 /**
- * The six tools, in the order the sidebar lists them.
+ * The five tools, in the order the sidebar lists them.
  *
  * Download first because it is where the app opens and the only one that needs
- * no file; the four ffmpeg tools next, roughly by how often they are reached;
- * then transcribe, the only one that talks to a server.
+ * no file; the four ffmpeg tools next, roughly by how often they are reached.
  */
 export const TOOLS: ToolDefinition[] = [
   { route: { name: "download" }, key: "download", icon: Download },
@@ -30,9 +28,6 @@ export const TOOLS: ToolDefinition[] = [
   { route: { name: "trim" }, key: "trim", icon: Scissors },
   { route: { name: "convert" }, key: "convert", icon: Repeat2 },
   { route: { name: "extractAudio" }, key: "extractAudio", icon: AudioLines },
-  // `Captions` rather than `Mic`: a microphone reads as "record", which is the
-  // one thing this tool does not do.
-  { route: { name: "transcribe" }, key: "transcribe", icon: Captions },
 ];
 
 /**

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  Captions,
   Download,
   FolderOpen,
   SlidersHorizontal,
@@ -15,12 +14,10 @@ import { navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
 import type { AppLanguage } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
-import { ApiKeyPanel } from "./ApiKeyPanel";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { GeneralPanel } from "./GeneralPanel";
 import { StoragePanel } from "./StoragePanel";
 import { ToolsPanel } from "./ToolsPanel";
-import { TranscriptionPanel } from "./TranscriptionPanel";
 import { SETTINGS_SECTIONS, useSettingsSection } from "./useSettingsSection";
 
 interface Props {
@@ -57,12 +54,11 @@ interface SectionDefinition {
  * General first: theme and language are what people come here for, and they are
  * the only settings that are about the app rather than about a job it runs.
  * Storage second, because it is the one answer every tool depends on -- a
- * download, a compression and a transcript all land in that folder -- and "where
- * did my file go" is the question Settings is opened to answer most. Downloads
- * and Transcription follow: the two tools' own standing preferences, in the
- * order the sidebar lists the tools they belong to. Bundled tools last, because
- * it is a status report and a repair button, not a setting -- nobody comes to it
- * except when something has broken.
+ * download, a compression and a trim all land in that folder -- and "where did
+ * my file go" is the question Settings is opened to answer most. Downloads
+ * follows: the one tool with standing preferences of its own. Bundled tools
+ * last, because it is a status report and a repair button, not a setting --
+ * nobody comes to it except when something has broken.
  */
 const SECTIONS: Record<SettingsSection, SectionDefinition> = {
   general: {
@@ -72,8 +68,6 @@ const SECTIONS: Record<SettingsSection, SectionDefinition> = {
   },
   storage: {
     labelKey: "storage",
-    // The folder note, promoted: it says what the panel is for *and* the one
-    // caveat about it, which is exactly what a description under the heading is.
     noteKey: "library_note",
     icon: FolderOpen,
   },
@@ -81,11 +75,6 @@ const SECTIONS: Record<SettingsSection, SectionDefinition> = {
     labelKey: "settings_downloads",
     noteKey: "settings_downloads_note",
     icon: Download,
-  },
-  transcription: {
-    labelKey: "transcription",
-    noteKey: "settings_transcription_note",
-    icon: Captions,
   },
   tools: {
     labelKey: "bundled_tools",
@@ -187,9 +176,8 @@ export function SettingsScreen({
   };
 
   // Each section is its panel and nothing else. The line that explains it is a
-  // property of the section, rendered once under the heading below -- panels are
-  // also used on their own, ApiKeyPanel on the transcribe screen, where a note
-  // about the Settings section it usually sits in would make no sense.
+  // property of the section, rendered once under the heading below rather than
+  // inside each panel, so a panel stays reusable outside this rail.
   const body: Record<SettingsSection, ReactNode> = {
     general: (
       <GeneralPanel
@@ -201,13 +189,6 @@ export function SettingsScreen({
     ),
     storage: <StoragePanel notify={notify} />,
     downloads: <DownloadsPanel />,
-    transcription: (
-      <>
-        <TranscriptionPanel />
-        <ApiKeyPanel notify={notify} />
-        <p className="text-xs text-fg-muted">{t("api_key_note")}</p>
-      </>
-    ),
     tools: (
       <>
         <ToolsPanel notify={notify} />
