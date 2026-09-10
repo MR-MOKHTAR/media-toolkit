@@ -97,18 +97,15 @@ export function AppSidebar({
       >
         {!collapsed && <AppIdentity className="flex-1" />}
 
-        <Tooltip
+        <IconButton
           label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
+          tooltipSide="right"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className="no-drag"
         >
-          <IconButton
-            label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
-            onClick={onToggle}
-            aria-expanded={!collapsed}
-            className="no-drag"
-          >
-            <CollapseIcon size={16} />
-          </IconButton>
-        </Tooltip>
+          <CollapseIcon size={16} />
+        </IconButton>
       </div>
 
       {/* Scrolls rather than pushing the bottom group off: nine rows plus the

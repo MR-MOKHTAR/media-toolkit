@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "../../lib/cn";
+import { Tooltip, type TooltipSide } from "./Tooltip";
 
 type Variant =
   | "primary"
@@ -80,33 +81,42 @@ export function Button({
 }
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** Required: an icon alone tells a screen reader nothing. */
+  /** Required: an icon alone tells a screen reader nothing. It is also the
+   *  text of the tooltip. */
   label: string;
   variant?: Variant;
+  /** Where the tooltip opens. Below by default; the sidebar's rail wants it
+   *  beside the icon. */
+  tooltipSide?: TooltipSide;
 }
 
 export function IconButton({
   label,
   variant = "ghost",
+  tooltipSide = "bottom",
   className,
   children,
   ...props
 }: IconButtonProps) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      className={cn(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-sm",
-        "transition-colors duration-(--duration-fast)",
-        "disabled:opacity-disabled disabled:cursor-not-allowed",
-        VARIANTS[variant],
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </button>
+    // The styled tooltip rather than `title`. The OS one waited a second, could
+    // not be themed, and was what the title bar's window buttons showed -- and
+    // where a caller also wrapped this in a Tooltip, it drew on top of it.
+    <Tooltip label={label} side={tooltipSide}>
+      <button
+        type="button"
+        aria-label={label}
+        className={cn(
+          "inline-flex size-8 shrink-0 items-center justify-center rounded-sm",
+          "transition-colors duration-(--duration-fast)",
+          "disabled:opacity-disabled disabled:cursor-not-allowed",
+          VARIANTS[variant],
+          className,
+        )}
+        {...props}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }

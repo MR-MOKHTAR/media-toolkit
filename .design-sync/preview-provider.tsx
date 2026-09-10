@@ -10,6 +10,7 @@
  * instance react-i18next falls back to when there is no <I18nextProvider>.
  */
 import type { ReactNode } from "react";
+import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
 
 import "../src/i18n";
 import { NavigationProvider } from "../src/app/navigation";
@@ -50,10 +51,14 @@ if (!host.__TAURI_INTERNALS__) {
 
 export function DesignSystemProvider({ children }: { children: ReactNode }) {
   return (
-    <NavigationProvider>
-      {/* Jobs reports failures through a toast the harness has nowhere to put,
-          so notifications are swallowed here rather than rendered twice. */}
-      <JobsProvider notify={() => {}}>{children}</JobsProvider>
-    </NavigationProvider>
+    // Every IconButton carries a Radix tooltip, and Radix throws outside its
+    // provider. Same settings as App, so a preview bubble behaves like the app's.
+    <TooltipProvider delayDuration={0} disableHoverableContent>
+      <NavigationProvider>
+        {/* Jobs reports failures through a toast the harness has nowhere to put,
+            so notifications are swallowed here rather than rendered twice. */}
+        <JobsProvider notify={() => {}}>{children}</JobsProvider>
+      </NavigationProvider>
+    </TooltipProvider>
   );
 }
