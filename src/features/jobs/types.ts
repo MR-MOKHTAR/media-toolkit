@@ -103,6 +103,28 @@ export interface Job {
   endedAt?: number;
   /** Kind-specific detail for the metadata line: "1080p", "Balanced", "MP3". */
   detail?: string;
+  /** A row that exists before the backend has handed back an id.
+   *
+   *  Pressing the button closes the form, and everything between that and a
+   *  real job is a round trip: a probe that can spawn yt-dlp, the library
+   *  folder, then the command itself. That is a second or two of an empty list
+   *  where something was just started, which reads as the press not having
+   *  landed -- so the row is drawn first and given its id afterwards.
+   *
+   *  Never persisted, never cancellable (there is nothing to cancel yet), and
+   *  replaced in place -- same position in the list -- the moment the real job
+   *  exists. If the request never gets that far the row is dropped and the
+   *  failure is a toast, which is where it would have been reported anyway. */
+  pending?: boolean;
+  /** What the list keys this row on, when that is not the job's own id.
+   *
+   *  A job that replaced a pending row keeps the pending row's id here. The id
+   *  is the one thing that really changes when a placeholder becomes a job, and
+   *  a changed React key is a different element: the row would animate out
+   *  while an identical one animated in, which is precisely the flicker the
+   *  placeholder exists to avoid. Keyed on this, it is one element that fills
+   *  itself in. Unique for the same reason job ids are -- it was one. */
+  rowKey?: string;
 }
 
 export interface DownloadRequest {
@@ -215,14 +237,6 @@ export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;
   ffprobe: boolean;
-  /** The JavaScript runtime yt-dlp runs YouTube's player challenge in --
-   *  `deno`, `node`, `bun` or `quickjs` -- or null if this machine has none.
-   *
-   *  Not bundled and not required: measured against a 4K YouTube video, the
-   *  same formats came back either way. It is reported because it is the one
-   *  thing a user can install themselves that removes yt-dlp's "some formats
-   *  may be missing" warning outright. */
-  jsRuntime: string | null;
   /** What yt-dlp reports, or null if it will not run. */
   ytdlpVersion: string | null;
 }

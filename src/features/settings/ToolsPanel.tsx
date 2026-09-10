@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Loader2, MinusCircle, RefreshCw, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
@@ -118,63 +118,7 @@ export function ToolsPanel({ notify }: Props) {
           </div>
         );
       })}
-
-      <JsRuntimeRow name={tools ? tools.jsRuntime : undefined} />
     </Card>
   );
 }
 
-/**
- * The JavaScript runtime, which is the one row here that is not a promise.
- *
- * Deno used to be bundled for this and it was 95 MB unpacked -- two thirds of
- * the installer -- so it is not shipped any more. yt-dlp uses whichever of
- * deno, node, bun or quickjs it finds on the machine, and works without any of
- * them: measured against a 4K YouTube video, the same 53 formats came back
- * either way, and the only difference was a warning.
- *
- * So a missing one is not an error and is not drawn as one. It reads as what it
- * is -- an optional thing that is not here -- because a red "Missing" on a row
- * nothing depends on teaches people to ignore the red on the rows that matter.
- */
-function JsRuntimeRow({ name }: { name?: string | null }) {
-  const { t } = useTranslation();
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-fg">
-          {t("tool_js_runtime")}
-        </span>
-        <span className="block truncate text-xs text-fg-muted">
-          {t("tool_js_runtime_about")}
-        </span>
-      </span>
-      <span
-        className={cn(
-          "flex shrink-0 items-center gap-1.5 text-sm",
-          name === undefined ? "text-fg-muted" : name ? "text-success" : "text-fg-muted",
-        )}
-      >
-        {name === undefined ? (
-          <>
-            <Loader2 size={15} className="animate-spin" />
-            {t("tool_checking")}
-          </>
-        ) : name ? (
-          <>
-            <CheckCircle2 size={15} />
-            {/* The engine's own name, ltr: "node" is a program, not a word to
-                be laid out right to left in Persian. */}
-            <span dir="ltr">{name}</span>
-          </>
-        ) : (
-          <>
-            <MinusCircle size={15} />
-            {t("tool_optional_absent")}
-          </>
-        )}
-      </span>
-    </div>
-  );
-}

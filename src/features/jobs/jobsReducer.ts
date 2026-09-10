@@ -21,6 +21,13 @@ export interface JobsState {
 
 export type JobsAction =
   | { type: "added"; job: Job }
+  /** The real job, in the place its pending row was holding. */
+  | { type: "started"; placeholderId: string; job: Job }
+  /** Drops a row unconditionally. `remove` refuses to touch anything queued or
+   *  running -- rightly, it would orphan a process -- and a pending row is
+   *  queued by every test the reducer can make while having no process at all
+   *  behind it. This is the one thing that can take one back off the list. */
+  | { type: "discard"; id: string }
   | { type: "progress"; payload: JobProgress }
   | { type: "status"; payload: JobStatusEvent }
   | { type: "cancelRequested"; id: string }
@@ -63,6 +70,51 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
         order: [action.job.id, ...state.order.filter((id) => id !== action.job.id)],
         selectedId: action.job.id,
       };
+
+    /**
+     * The placeholder becomes the job it was standing in for.
+     *
+     * In place, rather than "remove the old row, add a new one": the pending
+     * row is already on screen and already animated in, and re-adding it at the
+     * top would slide the list under the pointer for a change the user cannot
+     * see. The id is the only thing that really changes -- which is exactly why
+     * this cannot be a `patch`.
+     *
+     * Falls back to `added` when the placeholder is gone (cleared history, or a
+     * caller that never made one), so nothing depends on it having survived.
+     */
+    case "started": {
+      const { placeholderId, job } = action;
+      const byId = { ...state.byId };
+      const replaced = Boolean(byId[placeholderId]);
+      delete byId[placeholderId];
+      // Keyed on the row it is taking over, so the list sees the same element
+      // gaining an id rather than one row leaving and another arriving.
+      byId[job.id] = replaced ? { ...job, rowKey: placeholderId } : job;
+
+      // The real id cannot already be in `order` -- the backend has just minted
+      // it -- but filtering is what keeps that from being an assumption.
+      const order = state.order.filter((id) => id !== job.id);
+      const at = order.indexOf(placeholderId);
+      if (at === -1) order.unshift(job.id);
+      else order[at] = job.id;
+
+      // The same selection `added` makes: the newest job is the one a screen
+      // would point at, and the placeholder it replaces was already it.
+      return { ...state, byId, order, selectedId: job.id };
+    }
+
+    case "discard": {
+      if (!state.byId[action.id]) return state;
+      const byId = { ...state.byId };
+      delete byId[action.id];
+      return {
+        ...state,
+        byId,
+        order: state.order.filter((id) => id !== action.id),
+        selectedId: state.selectedId === action.id ? null : state.selectedId,
+      };
+    }
 
     case "progress": {
       const { id, percent, stage, speed, encodeRate, etaSecs, bytes, totalBytes } =

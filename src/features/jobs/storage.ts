@@ -35,7 +35,13 @@ export function loadJobs(): JobsState {
 
 export function saveJobs(state: JobsState) {
   try {
-    const order = state.order.slice(0, MAX_ITEMS);
+    // Pending rows are not history. They stand for a request that is still on
+    // its way to the backend, so one written here would come back after a
+    // restart as a failed download that never existed -- with a retry button
+    // and no request behind it.
+    const order = state.order
+      .filter((id) => !state.byId[id]?.pending)
+      .slice(0, MAX_ITEMS);
     const byId: Record<string, Job> = {};
     for (const id of order) byId[id] = trimForStorage(state.byId[id]);
     localStorage.setItem(KEY, JSON.stringify({ byId, order }));

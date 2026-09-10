@@ -136,10 +136,13 @@ fn find_executable_path(app: &AppHandle, file: &str) -> Option<PathBuf> {
 /// passing it. The path is given explicitly so a runtime found somewhere PATH
 /// does not reach -- an app data dir, a bundled resource someone dropped in --
 /// is still used.
-fn with_js_runtime(app: &AppHandle, cmd: &mut Command) {
-    if let Some(runtime) = js_runtime(app) {
-        cmd.arg("--js-runtimes");
-        cmd.arg(format!("{}:{}", runtime.name, runtime.path.to_string_lossy()));
+fn js_runtime_args(runtime: Option<&JsRuntime>) -> Vec<String> {
+    match runtime {
+        Some(runtime) => vec![
+            "--js-runtimes".to_string(),
+            format!("{}:{}", runtime.name, runtime.path.to_string_lossy()),
+        ],
+        None => Vec::new(),
     }
 }
 
@@ -158,9 +161,20 @@ fn with_js_runtime(app: &AppHandle, cmd: &mut Command) {
 /// caller went through this function afterwards so the order is decided in one
 /// place rather than re-established correctly at four call sites.
 pub fn with_url(app: &AppHandle, cmd: &mut Command, url: &str) {
-    with_js_runtime(app, cmd);
-    cmd.arg("--");
-    cmd.arg(url);
+    cmd.args(closing_args(js_runtime(app).as_ref(), url));
+}
+
+/// The tail of every yt-dlp command line, as plain strings.
+///
+/// Split out from `with_url` so the ordering above can be asserted in a test.
+/// The bug it guards produced a perfectly valid-looking command that downloaded
+/// the file and then failed the job, which is the kind of thing a person reads
+/// past and an assertion does not.
+fn closing_args(runtime: Option<&JsRuntime>, url: &str) -> Vec<String> {
+    let mut args = js_runtime_args(runtime);
+    args.push("--".to_string());
+    args.push(url.to_string());
+    args
 }
 
 /// Where a tool was found, plus the directory it was found in. The directory
@@ -392,6 +406,51 @@ pub fn hide_console(cmd: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The URL is last, `--` is immediately before it, and the JS runtime is on
+    /// the option side of that separator.
+    ///
+    /// yt-dlp reads everything after `--` as a URL, so an option appended past
+    /// one becomes a download of a link named `--js-runtimes`, and its value
+    /// becomes a download of `node:/usr/bin/node`:
+    ///
+    ///   ERROR: [generic] '--js-runtimes' is not a valid URL
+    ///   ERROR: Unable to handle request: Unsupported url scheme: "node"
+    ///
+    /// The real video downloaded fine in between those two, so the file was on
+    /// disk and the job was marked failed -- the one failure mode that looks
+    /// like a mystery rather than a bug.
+    #[test]
+    fn the_url_is_the_last_argument() {
+        let runtime = JsRuntime {
+            name: "node",
+            path: PathBuf::from("/usr/bin/node"),
+        };
+        let url = "https://youtu.be/RXP9dCr3t-c";
+
+        for runtime in [Some(&runtime), None] {
+            let args = closing_args(runtime, url);
+            let separator = args
+                .iter()
+                .position(|arg| arg == "--")
+                .expect("the option/URL separator must be there");
+
+            assert_eq!(args.last().map(String::as_str), Some(url));
+            assert_eq!(separator, args.len() - 2, "nothing may follow the URL");
+            assert!(
+                !args[..separator].contains(&url.to_string()),
+                "the URL must not also appear among the options",
+            );
+        }
+
+        // And the runtime, when there is one, is passed as an option -- before
+        // the separator, where yt-dlp still reads it as one.
+        let args = closing_args(Some(&runtime), url);
+        assert_eq!(
+            &args[..2],
+            &["--js-runtimes".to_string(), "node:/usr/bin/node".to_string()],
+        );
+    }
 
     /// Runs each bundled tool with the flag `is_available` uses.
     ///

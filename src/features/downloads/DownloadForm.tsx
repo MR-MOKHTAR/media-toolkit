@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { Gauge, Link2, ListVideo, RotateCw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  FileAudio,
+  Gauge,
+  Link2,
+  ListVideo,
+  Music2,
+  RotateCw,
+  Video,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
@@ -272,48 +280,79 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         // moment a probe came back.
         <FileNotes resumable={info?.resumable ?? false} />
       ) : (
-        // Only once the probe has answered, and only when the answer is a
-        // media page. That is the only link where video-or-MP3 is a real
-        // question, and it is the moment the user has something to answer it
-        // about -- before that the app would be asking what to do with a link
-        // nobody has pasted. The preview appears in the same beat, so this
-        // costs no extra shift of the form.
+        // As soon as there is a link in the field -- not once the probe has
+        // answered about it.
+        //
+        // It used to wait for `info`, on the reasoning that video-or-audio is
+        // only a real question for a media page. The reasoning holds; making
+        // the probe the gate does not. A probe is a network request and a
+        // yt-dlp spawn, and when it fails -- an extractor that needs cookies, a
+        // rate limit, a slow line, or the version of this app whose yt-dlp
+        // arguments were in the wrong order -- the form quietly lost the one
+        // choice it exists to ask, and every YouTube link downloaded as video
+        // with no way to say otherwise. The choice does not depend on the
+        // answer, so it no longer waits for it.
+        //
+        // A direct file is still the exception, and that one is known rather
+        // than assumed: the branch above only runs on a probe that came back
+        // saying "file".
         //
         // A segmented control, not the two large cards it replaces: it is one
         // line of the form like every other choice in the app, rather than the
         // biggest thing on the screen.
-        info && (
+        looksLikeUrl(link) && (
           <ControlGroup>
             <Segmented
               label={t("download_as")}
               value={mediaType}
               onChange={(value) => update("mediaType", value)}
+              // The same two glyphs the Settings panel puts on this exact
+              // choice, so the control the form asks with and the one that
+              // remembers the answer are recognisably the same control.
               options={[
-                { value: "video", label: t("download_type_video") },
-                { value: "audio", label: t("download_type_audio") },
+                {
+                  value: "video",
+                  label: t("download_type_video"),
+                  icon: <Video size={16} />,
+                },
+                {
+                  value: "audio",
+                  label: t("download_type_audio"),
+                  icon: <Music2 size={16} />,
+                },
               ]}
             />
 
-            {/* The quality, as a hint under the control it qualifies rather
-                than a row of its own. It is not a decision being made here --
-                it was made once in Settings -- so it is written the size of
-                the other things this form states rather than the size of the
-                things it asks. Audio has no quality to state: yt-dlp is asked
-                for the best MP3 it can make either way. */}
-            {mediaType === "video" ? (
-              <QualityHint
-                quality={qualityLabel(settings.quality, t("quality_best"))}
-                // The link and the open form both survive the trip: this entry
-                // is what `back` from Settings returns to, so it has to carry
-                // the field and the fact that the dialog was open with it.
-                onOpenSettings={() => {
-                  replace({ name: "download", link: url, composing: true });
-                  go({ name: "settings", section: "downloads" });
-                }}
-              />
-            ) : (
-              <p className="text-xs text-fg-muted">{t("audio_quality_note")}</p>
-            )}
+            {/* What the choice above will actually produce, as a hint under
+                the control it qualifies rather than a row of its own. It is
+                not a decision being made here -- it was made once in Settings
+                -- so it is written the size of the other things this form
+                states rather than the size of the things it asks.
+
+                Both halves of the toggle get one. Audio used to get a flat
+                sentence with nothing to press: the form said "best quality the
+                site offers" and left the actual question about an audio
+                download -- the track as it came, or MP3 -- unmentioned and
+                unreachable, three clicks away in a Settings section the user
+                had no reason to know existed. */}
+            <SettingHint
+              icon={mediaType === "video" ? <Gauge size={12} /> : <FileAudio size={12} />}
+              label={mediaType === "video" ? t("video_quality") : t("audio_format")}
+              value={
+                mediaType === "video"
+                  ? qualityLabel(settings.quality, t("quality_best"))
+                  : settings.audioFormat === "mp3"
+                    ? "MP3"
+                    : t("audio_format_original")
+              }
+              // The link and the open form both survive the trip: this entry
+              // is what `back` from Settings returns to, so it has to carry
+              // the field and the fact that the dialog was open with it.
+              onOpenSettings={() => {
+                replace({ name: "download", link: url, composing: true });
+                go({ name: "settings", section: "downloads" });
+              }}
+            />
 
             {/* The other question this link raises, and only when it raises
                 one. The backend has been reporting that a link is a playlist
@@ -324,7 +363,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
                 Defaults to the one video. Queueing forty downloads is not what
                 anybody means by pressing Download once, and it is the choice
                 that is expensive to undo. */}
-            {namesPlaylist && (
+            {info && namesPlaylist && (
               <div className="flex flex-col gap-1.5">
                 <Segmented
                   label={t("playlist_scope")}
@@ -467,31 +506,40 @@ function LinkPreview({
 }
 
 /**
- * What quality this download will ask for, and the way to change it.
+ * What this download will ask for, and the way to change it.
  *
  * One line of hint text, not the bordered row this started as. The row was the
  * same size as the controls around it while being the only thing on the form
  * that is not a control -- and it sat there on an empty field, stating the
  * quality of a video nobody had pasted a link to yet. Now it appears with the
  * media choice it belongs to, and says its piece in the space a hint takes.
+ *
+ * One component for both halves of that choice rather than a quality-shaped one
+ * and a sentence: they are the same line saying the same kind of thing -- the
+ * standing setting this download will use, and where it lives.
  */
-function QualityHint({
-  quality,
+function SettingHint({
+  icon,
+  label,
+  value,
   onOpenSettings,
 }: {
-  quality: string;
+  icon: ReactNode;
+  label: string;
+  value: string;
   onOpenSettings: () => void;
 }) {
   const { t } = useTranslation();
 
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
-      <Gauge size={12} className="shrink-0" />
-      {t("video_quality")}
-      {/* ltr: "720p" is a number and a Latin letter, the same in every
-          language the interface speaks. */}
+      <span className="shrink-0">{icon}</span>
+      {label}
+      {/* ltr: "720p" and "MP3" are numbers and Latin letters, the same in every
+          language the interface speaks. A translated word -- "Original" -- is
+          unaffected by the direction of a span that holds one word. */}
       <span dir="ltr" className="font-medium text-fg-soft">
-        {quality}
+        {value}
       </span>
       <span aria-hidden>·</span>
       <button

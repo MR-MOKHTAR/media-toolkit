@@ -22,14 +22,6 @@ pub struct ToolStatus {
     pub ytdlp: bool,
     pub ffmpeg: bool,
     pub ffprobe: bool,
-    /// The JavaScript runtime yt-dlp runs YouTube's player challenge in --
-    /// `deno`, `node`, `bun` or `quickjs` -- or `None` if this machine has
-    /// none.
-    ///
-    /// Not bundled and not required: downloads work without one. Reported
-    /// because it is the one thing a user can install themselves that removes
-    /// yt-dlp's "some formats may be missing" warning entirely.
-    pub js_runtime: Option<String>,
     /// Shown in Settings next to the update button, so "is it current?" is a
     /// question the user can answer without leaving the app.
     pub ytdlp_version: Option<String>,
@@ -86,10 +78,11 @@ async fn measure_tools(app: &AppHandle) -> ToolStatus {
         ytdlp: ytdlp_version.is_some(),
         ffmpeg: ffmpeg.is_some(),
         ffprobe: ffprobe.is_some(),
-        // A PATH walk, not a spawn: this one is optional, so paying a process
-        // launch to confirm a `node` that yt-dlp will re-check for itself buys
-        // nothing.
-        js_runtime: binaries::js_runtime(app).map(|runtime| runtime.name.to_string()),
+        // The JavaScript runtime is deliberately not measured here. Nothing is
+        // bundled for it and nothing depends on it -- `binaries::js_runtime`
+        // finds whatever the machine has and points yt-dlp at it, silently --
+        // so a status the app reported to a Settings row that no longer exists
+        // was a PATH walk performed for nobody.
         ytdlp_version,
     }
 }

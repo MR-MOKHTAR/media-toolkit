@@ -40,7 +40,10 @@ export function JobList({
       <AnimatePresence initial={false}>
         {jobs.map((job) => (
           <motion.li
-            key={job.id}
+            // Not always the job id: a job that took over a pending row is
+            // drawn as that row still, so it fills in where it stands instead
+            // of animating itself out and back. See `Job.rowKey`.
+            key={job.rowKey ?? job.id}
             layout
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}

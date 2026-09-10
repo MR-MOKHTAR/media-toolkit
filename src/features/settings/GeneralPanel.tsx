@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { SectionLabel } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
-import type { AppLanguage } from "../../hooks/useAppPreferences";
+import { LANGUAGES, type AppLanguage } from "../../hooks/useAppPreferences";
 
 interface Props {
   darkMode: boolean;
@@ -51,11 +51,10 @@ export function GeneralPanel({
           label={t("language")}
           value={language}
           onChange={(value) => onLanguageChange(value as AppLanguage)}
-          options={[
-            { value: "en", label: "English" },
-            { value: "fa", label: "فارسی" },
-            { value: "ar", label: "العربية" },
-          ]}
+          // The same list the first-run dialog offers, from one place -- two
+          // hand-written copies of three languages are two chances to add a
+          // fourth to only one of them.
+          options={LANGUAGES.map(({ value, label }) => ({ value, label }))}
         />
       </section>
     </>

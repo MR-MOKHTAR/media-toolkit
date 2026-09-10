@@ -15,8 +15,9 @@ answer YouTube's player challenge. It was 95 MB unpacked — two thirds of the
 installer — and measuring it against a 4K YouTube video showed `yt-dlp -J`
 returning the same 53 formats and choosing the same 1080p H.264 + m4a pair with
 it and without it. So it is not bundled. The app looks for `deno`, `node`, `bun`
-or `quickjs` on the machine and points yt-dlp at whichever it finds; Settings
-shows which one that was, and downloads work when it finds none.
+or `quickjs` on the machine and points yt-dlp at whichever it finds, silently —
+nothing is shown about it, because nothing depends on it and downloads work when
+it finds none.
 
 ## Tools
 

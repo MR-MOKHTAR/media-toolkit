@@ -92,7 +92,7 @@ export type PlaylistChoice = "one" | "all";
 
 export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) {
   const { t, i18n } = useTranslation();
-  const { startDownload } = useJobs();
+  const { beginJob, discardJob, startDownload } = useJobs();
   const [savePath, setSavePath] = useState("");
   const [toolsReady, setToolsReady] = useState(true);
   /** True across the await in `start`, so a second Enter cannot queue the same
@@ -177,6 +177,26 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       // download would have been reported anyway.
       onAccepted();
 
+      // The row, now, in the same beat as the dialog closing. Everything below
+      // is between one and several seconds -- the probe alone can be a yt-dlp
+      // spawn -- and a list that stays empty for that long after a button was
+      // pressed reads as the press having been missed. What the row can say
+      // this early is the title if the probe already landed, and the link
+      // otherwise; the rest of it is drawn as a placeholder until the real job
+      // takes its place. Every path out of here either hands this id to
+      // `startDownload` or discards it.
+      let placeholder: string | undefined = beginJob({
+        kind: "download",
+        title: values.link?.title.trim() || url,
+        source: url,
+      });
+      /** Frees the pending row for the paths that end without a download. */
+      const abandon = () => {
+        if (placeholder) discardJob(placeholder);
+        placeholder = undefined;
+        return false;
+      };
+
       // The screen's probe is debounced by 600ms, so pasting a link and hitting
       // Enter straight away arrives here knowing nothing about it -- and the
       // folder, the title, the format and whether yt-dlp is even needed all
@@ -198,7 +218,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
 
       if (!dir.trim()) {
         notify("error", t("select_location"));
-        return false;
+        return abandon();
       }
 
       // Only for a link that needs the extractor. A direct file is fetched by
@@ -206,7 +226,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       const isFile = resolved?.kind === "file";
       if (!toolsReady && !isFile) {
         notify("warning", t("ytdlp_not_found"));
-        return false;
+        return abandon();
       }
 
       // The server's own name is kept for a file -- it is already the right
@@ -230,6 +250,14 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
               ? t("audio_format_original")
               : "MP3"
             : values.quality;
+
+      /** Hands the pending row over to whoever queues first, and only once:
+       *  every download after that draws its own, from `startDownload`. */
+      const take = () => {
+        const id = placeholder;
+        placeholder = undefined;
+        return id;
+      };
 
       const queue = (target: string, title: string, outputName?: string) =>
         startDownload(
@@ -255,6 +283,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
           // every direct download was called, because the name was deliberately
           // left out of the request and the card read the same field.
           { title: title || target, source: target, detail },
+          take(),
         ).catch((error) =>
           notify("error", describeAppError(ipc.toAppError(error), t)),
         );
@@ -270,7 +299,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
           notify("error", describeAppError(ipc.toAppError(error), t));
           return null;
         });
-        if (!listing || listing.entries.length === 0) return false;
+        if (!listing || listing.entries.length === 0) return abandon();
 
         // `outputName` is left undefined for every entry: the pasted link's
         // title belongs to the playlist, not to any video in it, and yt-dlp
@@ -298,7 +327,17 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       notify("info", t("job_started"));
       return true;
     },
-    [i18n.language, isOnline, notify, savePath, startDownload, t, toolsReady],
+    [
+      beginJob,
+      discardJob,
+      i18n.language,
+      isOnline,
+      notify,
+      savePath,
+      startDownload,
+      t,
+      toolsReady,
+    ],
   );
 
   /** Wraps `start` so the screen does not have to own the pending flag it

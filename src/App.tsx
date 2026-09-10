@@ -14,6 +14,7 @@ import { isMediaToolRoute, MEDIA_TOOLS } from "./features/media/tools";
 import { DragDropProvider } from "./features/media/useDragDrop";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ToolScreen } from "./features/tools/ToolScreen";
+import { WelcomeDialog } from "./features/welcome/WelcomeDialog";
 
 import { useAppPreferences } from "./hooks/useAppPreferences";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
@@ -23,8 +24,14 @@ import { useWindowControls } from "./hooks/useWindowControls";
 
 function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
   const { route } = useNavigation();
-  const { darkMode, toggleDarkMode, language, setLanguage } =
-    useAppPreferences();
+  const {
+    darkMode,
+    toggleDarkMode,
+    language,
+    setLanguage,
+    needsWelcome,
+    completeWelcome,
+  } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
   const isRtl = language === "fa" || language === "ar";
@@ -129,6 +136,18 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
           </div>
 
           <Toast toasts={toasts} isRtl={isRtl} onDismiss={dismiss} />
+
+          {/* First launch only, and mounted here rather than on a screen: it is
+              about the whole window -- its language and, for two of the three,
+              its direction -- and it has to be the first thing shown whichever
+              screen the app happens to open on. */}
+          {needsWelcome && (
+            <WelcomeDialog
+              language={language}
+              onLanguageChange={setLanguage}
+              onDone={completeWelcome}
+            />
+          )}
         </div>
       </TooltipProvider>
     </DirectionProvider>

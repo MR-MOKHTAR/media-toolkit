@@ -6,6 +6,10 @@ import * as ipc from "../lib/ipc";
  *  before the bundle exists. Renaming it means renaming it there too. */
 const THEME_STORAGE_KEY = "downloader-theme";
 const LANGUAGE_STORAGE_KEY = "downloader-language";
+/** Set once the first-run dialog has been answered. Its own key rather than
+ *  "is there a language stored": the language is written on the first render
+ *  whether anybody chose it or not, so it cannot say whether it was chosen. */
+const WELCOME_STORAGE_KEY = "downloader-welcomed";
 
 /** `--color-canvas` in both themes, as literals.
  *
@@ -15,6 +19,29 @@ const LANGUAGE_STORAGE_KEY = "downloader-language";
 const CANVAS = { dark: "#0c111a", light: "#f3f5f9" } as const;
 
 export type AppLanguage = "en" | "fa" | "ar";
+
+/**
+ * The languages the app speaks, each named in its own script.
+ *
+ * Endonyms, not translations: a language is named to the person who reads it,
+ * and "Persian" is no help to somebody looking for فارسی. It is also what makes
+ * the list work on the first-run dialog, where the interface is in a language
+ * the user has not chosen yet.
+ *
+ * One list, shared by Settings and that dialog, so the two can never come to
+ * offer different sets.
+ */
+export const LANGUAGES: {
+  value: AppLanguage;
+  /** The language's own name for itself. */
+  label: string;
+  /** The tag, as a second line no script can make ambiguous. */
+  code: string;
+}[] = [
+  { value: "en", label: "English", code: "EN" },
+  { value: "fa", label: "فارسی", code: "FA" },
+  { value: "ar", label: "العربية", code: "AR" },
+];
 
 function isAppLanguage(value: unknown): value is AppLanguage {
   return value === "en" || value === "fa" || value === "ar";
@@ -39,9 +66,35 @@ function getInitialLanguage(): AppLanguage {
   return isAppLanguage(i18n.language) ? i18n.language : "en";
 }
 
+/**
+ * Whether this is the first time the app has been opened on this machine.
+ *
+ * Read during the first render rather than in an effect, because the effect
+ * below writes the language key on mount -- so by the time effects run, a fresh
+ * install is indistinguishable from one that has been asked already.
+ *
+ * An install from before this dialog existed is not asked: it has a language,
+ * chosen or defaulted, and its user has been living with it. Storage that
+ * cannot be written is not asked either -- a question whose answer cannot be
+ * kept would be asked again at every launch.
+ */
+function getInitialWelcome(): boolean {
+  try {
+    if (localStorage.getItem(WELCOME_STORAGE_KEY)) return false;
+    if (localStorage.getItem(LANGUAGE_STORAGE_KEY)) {
+      localStorage.setItem(WELCOME_STORAGE_KEY, "1");
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function useAppPreferences() {
   const [darkMode, setDarkMode] = useState(getInitialDarkMode);
   const [language, setLanguage] = useState<AppLanguage>(getInitialLanguage);
+  const [needsWelcome, setNeedsWelcome] = useState(getInitialWelcome);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -81,5 +134,25 @@ export function useAppPreferences() {
     setDarkMode((current) => !current);
   }, []);
 
-  return { darkMode, setDarkMode, toggleDarkMode, language, setLanguage };
+  /** The first-run dialog is done with -- whichever language it is leaving
+   *  behind, including the default nobody touched. */
+  const completeWelcome = useCallback(() => {
+    setNeedsWelcome(false);
+    try {
+      localStorage.setItem(WELCOME_STORAGE_KEY, "1");
+    } catch {
+      // Then it is asked again next launch, which is the best a session with
+      // no storage can do -- and `getInitialWelcome` never gets here anyway.
+    }
+  }, []);
+
+  return {
+    darkMode,
+    setDarkMode,
+    toggleDarkMode,
+    language,
+    setLanguage,
+    needsWelcome,
+    completeWelcome,
+  };
 }

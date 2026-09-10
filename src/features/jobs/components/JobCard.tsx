@@ -135,6 +135,14 @@ function JobCardComponent({
   onRetry,
 }: JobCardProps) {
   const { t } = useTranslation();
+
+  // Nothing has an id yet, so nothing on this row can be acted on -- there is
+  // no process to cancel and no file to reveal. What it can honestly show is
+  // the name of the thing that was asked for; the rest is drawn as the shape
+  // it is about to take. `pending` never changes on a job: the real one arrives
+  // under a new id, which is a different row as far as React is concerned.
+  if (job.pending) return <PendingCard job={job} />;
+
   const active = job.state === "running" || job.state === "queued";
   const kind = fileKindOfJob(job);
   const Icon = FILE_KIND_ICON[kind];
@@ -360,6 +368,58 @@ function JobCardComponent({
             <Trash2 size={16} />
           </IconButton>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * The row a job gets before it is one.
+ *
+ * Between pressing the button and the backend answering there is a probe, a
+ * folder lookup and a process spawn -- a second or two in which the form has
+ * closed and the list still shows nothing. The list is the whole screen here,
+ * so that gap read as the press having been missed, and the second press it
+ * invited would have started the same download twice.
+ *
+ * So the row appears immediately, at the size and in the position the real one
+ * will occupy, and says only what is actually known: the title if the link had
+ * already been probed, the link itself otherwise. Everything it does not know
+ * yet -- the kind of file, the format, the size, the progress -- is a grey
+ * block rather than a guess, and none of the blocks is a control: there is
+ * nothing here to cancel, remove or open.
+ *
+ * It is replaced in place, not added above, so the moment the id arrives the
+ * row simply fills in -- see the `started` case in `jobsReducer`.
+ */
+function PendingCard({ job }: { job: Job }) {
+  const { t } = useTranslation();
+  const isLink = /^https?:\/\//i.test(job.title);
+
+  return (
+    <Card padding="sm" title={job.title} className="flex items-start gap-3">
+      {/* The type icon's square. Which type it is depends on what the link
+          turns out to be, which is the question being answered right now. */}
+      <span className="size-9 shrink-0 animate-pulse rounded-md bg-line" />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <p className="truncate text-base text-fg-soft" dir={isLink ? "ltr" : undefined}>
+          {displayTitleOf(job.title)}
+        </p>
+
+        <div className="flex items-center gap-x-2 overflow-hidden text-xs text-fg-muted">
+          <span className="flex shrink-0 items-center gap-1 font-medium">
+            <Loader2 size={12} className="animate-spin" />
+            {t("status_starting")}
+          </span>
+          {/* Where the format and the size will be. A short bar, because what
+              goes there is short. */}
+          <span className="h-3 w-16 animate-pulse rounded-sm bg-line" />
+        </div>
+
+        {/* The progress bar's own track, at its own height, so the row does not
+            change size when the real bar takes over. */}
+        <div className="h-1.5 w-full animate-pulse rounded-full bg-line" />
       </div>
     </Card>
   );

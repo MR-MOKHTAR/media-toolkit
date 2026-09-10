@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileAudio, Music2, Video } from "lucide-react";
+import { FileAudio, Music2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Field, SectionLabel } from "../../components/ui/Card";
@@ -22,19 +22,19 @@ import {
  * big you want your files -- so it is set here once, and the form shows the
  * answer instead of asking the question.
  *
- * Video-or-MP3 is the same preference for the other half of the question, and
- * the same default: what a link is taken as unless the form says otherwise for
- * one particular link. The form can still say otherwise, because that is the
- * one choice here that genuinely changes between two videos -- and whatever it
- * says lands back in this setting.
+ * Video-or-audio is *not* here, though it was. It is the one choice on this
+ * panel that genuinely changes from link to link -- this video as a file, that
+ * lecture as a track -- so it belongs on the form, where the link it is about
+ * is on screen; asking it twice, in two places, only raised the question of
+ * which of the two was in charge. The setting itself still exists and is still
+ * remembered between links: the form writes straight into it.
  *
  * Audio has no *resolution* to choose, but it does have a format, and that is a
  * real question rather than a technicality: `Original` is the stream the site
  * served, handed over without being decoded, and MP3 is a re-encode that loses
- * something to produce a file some other program insists on. The row appears
- * only when audio is the selected type -- it has nothing to say about a video
- * download, and a control that is permanently irrelevant is worse than one that
- * comes and goes.
+ * something to produce a file some other program insists on. It is always
+ * shown, because with the type chosen on the form there is nothing here to make
+ * it conditional on any more -- and the form's audio hint links straight to it.
  */
 export function DownloadsPanel() {
   const { t } = useTranslation();
@@ -60,55 +60,32 @@ export function DownloadsPanel() {
   return (
     <>
       <section className="flex flex-col gap-2">
-        <SectionLabel>{t("download_as")}</SectionLabel>
+        <SectionLabel>{t("audio_format")}</SectionLabel>
         <Segmented
-          label={t("download_as")}
-          value={settings.mediaType}
-          onChange={(mediaType) => update("mediaType", mediaType)}
+          label={t("audio_format")}
+          value={settings.audioFormat}
+          onChange={(audioFormat) => update("audioFormat", audioFormat)}
           options={[
             {
-              value: "video" as const,
-              label: t("download_type_video"),
-              icon: <Video size={16} />,
+              value: "original" as const,
+              label: t("audio_format_original"),
+              icon: <FileAudio size={16} />,
             },
             {
-              value: "audio" as const,
-              label: t("download_type_audio"),
+              value: "mp3" as const,
+              label: "MP3",
               icon: <Music2 size={16} />,
             },
           ]}
         />
+        <p className="text-xs text-fg-muted">
+          {t(
+            settings.audioFormat === "original"
+              ? "audio_format_original_note"
+              : "audio_format_mp3_note",
+          )}
+        </p>
       </section>
-
-      {settings.mediaType === "audio" && (
-        <section className="flex flex-col gap-2">
-          <SectionLabel>{t("audio_format")}</SectionLabel>
-          <Segmented
-            label={t("audio_format")}
-            value={settings.audioFormat}
-            onChange={(audioFormat) => update("audioFormat", audioFormat)}
-            options={[
-              {
-                value: "original" as const,
-                label: t("audio_format_original"),
-                icon: <FileAudio size={16} />,
-              },
-              {
-                value: "mp3" as const,
-                label: "MP3",
-                icon: <Music2 size={16} />,
-              },
-            ]}
-          />
-          <p className="text-xs text-fg-muted">
-            {t(
-              settings.audioFormat === "original"
-                ? "audio_format_original_note"
-                : "audio_format_mp3_note",
-            )}
-          </p>
-        </section>
-      )}
 
       <section className="flex flex-col gap-2">
         <SectionLabel>{t("video_quality")}</SectionLabel>
@@ -179,8 +156,6 @@ export function DownloadsPanel() {
           />
         </Field>
       )}
-
-      <p className="text-xs text-fg-muted">{t("download_audio_note")}</p>
     </>
   );
 }

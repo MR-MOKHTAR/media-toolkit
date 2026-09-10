@@ -37,7 +37,10 @@ export const NO_COOKIES = "";
 export interface DownloadSettings {
   quality: DownloadQuality;
   /** Video or audio, for the links where that is a question at all. A direct
-   *  file is fetched as whatever it is, so this has nothing to say about one. */
+   *  file is fetched as whatever it is, so this has nothing to say about one.
+   *
+   *  Set on the download form and only there -- this is the memory of what was
+   *  chosen last, not a preference with a screen of its own. */
   mediaType: "video" | "audio";
   audioFormat: AudioFormat;
   /** Which browser to borrow cookies from for links behind a login, an age
@@ -99,11 +102,12 @@ function load(): DownloadSettings {
  * files", the same one for months at a time -- so it belongs in Settings with
  * the theme and the library folder, and the form is one control shorter for it.
  *
- * Video-or-MP3 is here for the same reason, with one difference: the form can
- * still change it, for the one kind of link where it is a real question. It
- * writes straight through to this store rather than keeping a copy of its own,
- * so the choice is remembered for the next link and the two places can never
- * disagree about which one is set.
+ * Video-or-audio lives here too, but nothing in Settings shows it any more: it
+ * is asked on the download form, where the link it is about is on screen, and
+ * the form writes straight through to this store rather than keeping a copy of
+ * its own. So it is remembered for the next link without being a second place
+ * to set it -- which is what it was, and the two controls only raised the
+ * question of which of them was in charge.
  *
  * localStorage like the theme, the language and the job history, not the
  * Rust config file: none of this is a secret, and the webview is the only thing
