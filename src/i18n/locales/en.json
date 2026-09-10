@@ -83,6 +83,8 @@
   "needs_video": "This tool needs a video file",
   "no_internet": "No internet connection. Please check your connection.",
   "no_jobs_description": "Anything you download or convert shows up here.",
+  "no_jobs_hint_file": "Drop a file anywhere in this window, or pick one with the button below.",
+  "no_jobs_hint_link": "Copy a link, then press {{action}} — it will already be filled in.",
   "no_jobs_title": "Nothing here yet",
   "no_video_track": "no video track",
   "open_file_failed": "Could not open that file.",
