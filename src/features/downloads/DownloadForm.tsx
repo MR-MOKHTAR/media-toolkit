@@ -66,6 +66,7 @@ interface Props {
  */
 export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   const { t, i18n } = useTranslation();
+  const isRtl = i18n.dir() === "rtl";
   const { go, replace } = useNavigation();
   const [url, setUrl] = useState(initialUrl ?? "");
   // Read on mount, which is every time this screen is opened -- so a quality
@@ -262,9 +263,21 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
             }}
             onKeyDown={(event) => event.key === "Enter" && submit()}
             placeholder={t("url_placeholder")}
-            // Always LTR: a URL reads left to right in every language.
-            dir="ltr"
-            className="h-12 ps-11"
+            // A URL reads left to right in every language, so text that is
+            // actually in the field is pinned LTR -- mirroring it makes it
+            // unreadable and impossible to edit.
+            //
+            // An *empty* field holds no URL, only the Persian or Arabic
+            // sentence asking for one -- and pinned LTR that sentence sat at
+            // the far end of the box from the icon the field starts at, facing
+            // the wrong way in an interface reading the other way. So the
+            // direction follows the interface until there is something in the
+            // field for it to be about.
+            dir={url ? "ltr" : i18n.dir()}
+            // Physical, not `ps-11`: the padding has to stay on the side the
+            // icon is on, and the icon follows the interface while the input's
+            // own direction flips with its content.
+            className={cn("h-12", isRtl ? "pr-11" : "pl-11")}
           />
         </div>
       </Field>
