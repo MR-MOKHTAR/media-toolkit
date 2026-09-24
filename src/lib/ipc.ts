@@ -15,6 +15,7 @@ import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from "./mediaKind";
 import type {
   AppError,
   DownloadRequest,
+  JobMetaEvent,
   JobProgress,
   JobStatusEvent,
   JobSummary,
@@ -28,6 +29,7 @@ import type {
 
 export const PROGRESS_EVENT = "job-progress";
 export const STATUS_EVENT = "job-status";
+export const META_EVENT = "job-meta";
 
 /** Rust rejects with a serialized `AppError`. Anything else is a bug in the
  *  bridge itself, so it is wrapped rather than silently swallowed. */
@@ -184,3 +186,8 @@ export const onJobStatus = (
   handler: (payload: JobStatusEvent) => void,
 ): Promise<UnlistenFn> =>
   listen<JobStatusEvent>(STATUS_EVENT, ({ payload }) => handler(payload));
+
+export const onJobMeta = (
+  handler: (payload: JobMetaEvent) => void,
+): Promise<UnlistenFn> =>
+  listen<JobMetaEvent>(META_EVENT, ({ payload }) => handler(payload));

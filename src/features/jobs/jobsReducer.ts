@@ -1,5 +1,13 @@
+import { fileKindOf } from "../../lib/fileKind";
 import { fileNameOf } from "../../lib/format";
-import type { Job, JobProgress, JobStatusEvent, JobSummary } from "./types";
+import type {
+  Job,
+  JobFileKind,
+  JobMetaEvent,
+  JobProgress,
+  JobStatusEvent,
+  JobSummary,
+} from "./types";
 
 /**
  * Jobs are keyed rather than kept in an array.
@@ -30,6 +38,7 @@ export type JobsAction =
   | { type: "discard"; id: string }
   | { type: "progress"; payload: JobProgress }
   | { type: "status"; payload: JobStatusEvent }
+  | { type: "meta"; payload: JobMetaEvent }
   | { type: "cancelRequested"; id: string }
   | { type: "select"; id: string | null }
   | { type: "remove"; id: string }
@@ -52,10 +61,27 @@ function patch(state: JobsState, id: string, next: Partial<Job>): JobsState {
   return { ...state, byId: { ...state.byId, [id]: { ...current, ...next } } };
 }
 
+const isBareUrl = (title: string) => /^https?:\/\//i.test(title);
+
 /** Keeps the job's own title unless it is a bare URL, which is never what
  *  anyone recognises a finished file by. */
 function titleFor(job: Job, outputPath: string): string {
-  return /^https?:\/\//i.test(job.title) ? fileNameOf(outputPath) : job.title;
+  return isBareUrl(job.title) ? fileNameOf(outputPath) : job.title;
+}
+
+/**
+ * The kind a meta event establishes.
+ *
+ * A media download is whichever of the two the backend says. A file fetched
+ * verbatim is classified the same way the form classifies a probed one -- by
+ * its name, then its content type -- and comes out as whatever it is: an
+ * archive stays an archive. `other` is a real answer here, not a failure: it is
+ * a file that was looked at and is none of the named kinds.
+ */
+function kindFromMeta(meta: JobMetaEvent): JobFileKind | undefined {
+  if (meta.media) return meta.media;
+  if (meta.fileName) return fileKindOf(meta.fileName, meta.contentType);
+  return undefined;
 }
 
 export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
@@ -197,6 +223,32 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
             cancelling,
           };
       }
+    }
+
+    /**
+     * What the backend found the download to be, once it looked.
+     *
+     * This is where a job that started as "unknown" gets its type: the form's
+     * probe failed or had not landed, so nothing was guessed, and the engine
+     * that is now fetching the link says for certain. A job the form did know
+     * about is corrected too -- a page asked for as video that turns out to be
+     * sound alone is drawn as audio, because that is what is being saved.
+     *
+     * The title changes only when all it had was the link itself.
+     */
+    case "meta": {
+      const { id } = action.payload;
+      const current = state.byId[id];
+      if (!current) return state;
+
+      const next: Partial<Job> = {};
+      const kind = kindFromMeta(action.payload);
+      if (kind && kind !== current.fileKind) next.fileKind = kind;
+
+      const name = action.payload.title?.trim() || action.payload.fileName?.trim();
+      if (name && isBareUrl(current.title)) next.title = name;
+
+      return Object.keys(next).length ? patch(state, id, next) : state;
     }
 
     case "cancelRequested":

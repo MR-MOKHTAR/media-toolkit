@@ -32,7 +32,10 @@ import { loadJobs, saveJobs } from "./storage";
 import type {
   DownloadRequest,
   Job,
+  JobFileKind,
   JobKind,
+  JobMetaEvent,
+  JobProgress,
   JobStatusEvent,
 } from "./types";
 
@@ -42,6 +45,26 @@ const TITLE_LIMIT = 40;
 
 const shorten = (title: string) =>
   title.length > TITLE_LIMIT ? `${title.slice(0, TITLE_LIMIT - 1)}…` : title;
+
+/** Events that arrived for a job before its id did. See `earlyRef`. */
+interface EarlyEvents {
+  progress?: JobProgress;
+  /** Every one, in order: each can say something the others did not -- the
+   *  engine's verdict, then the page's real title -- and the reducer takes
+   *  what each one adds. */
+  metas?: JobMetaEvent[];
+  status?: JobStatusEvent;
+}
+
+/** How many not-yet-known jobs to hold events for. Only ever a handful in
+ *  practice -- a playlist queues a hundred at most, and each is claimed within
+ *  a round trip -- so this is a bound on a leak, not a working limit. */
+const EARLY_LIMIT = 200;
+
+const isTerminal = (status: JobStatusEvent) =>
+  status.state === "completed" ||
+  status.state === "failed" ||
+  status.state === "cancelled";
 
 interface JobsContextValue {
   state: JobsState;
@@ -99,6 +122,9 @@ export interface JobMeta {
   title: string;
   source: string;
   detail?: string;
+  /** What the file is, if that was known before the job started. Leave it
+   *  `unknown` rather than guessing: the backend says once it has looked. */
+  fileKind?: JobFileKind;
 }
 
 const JobsContext = createContext<JobsContextValue | null>(null);
@@ -148,6 +174,48 @@ export function JobsProvider({
   /** Ids already reported, so a repeated terminal event cannot toast twice. */
   const announcedRef = useRef(new Set<string>());
 
+  /**
+   * Events for jobs this store has not been handed yet.
+   *
+   * A job's id comes back as the answer to the command that started it, and
+   * its events arrive on a different channel -- and the backend starts sending
+   * them the instant the job exists, before that answer has been written.
+   * "Queued", "running" and the first progress tick routinely got here first,
+   * found no row with their id, and were dropped. Mostly that was invisible;
+   * a job that failed at once -- a bad link, an unwritable folder -- lost its
+   * only status event and sat on "queued" for good, with no toast to say why.
+   *
+   * So they are kept here, by id, and replayed the moment the id is known.
+   */
+  const earlyRef = useRef(new Map<string, EarlyEvents>());
+  /** Ids handed to the reducer, so an event landing in the gap before the
+   *  next render -- when `stateRef` has not caught up -- is not held back. */
+  const claimedRef = useRef(new Set<string>());
+
+  const isKnown = (id: string) =>
+    Boolean(stateRef.current.byId[id]) || claimedRef.current.has(id);
+
+  /** Holds an event for a job not known yet. Keeps the newest of each kind --
+   *  except that a finished status is never replaced by an earlier-sounding
+   *  one arriving late. */
+  const holdEarly = (id: string, event: EarlyEvents) => {
+    const early = earlyRef.current;
+    const held = early.get(id) ?? {};
+    early.delete(id);
+    early.set(id, {
+      progress: event.progress ?? held.progress,
+      metas: [...(held.metas ?? []), ...(event.metas ?? [])].slice(-4),
+      status:
+        held.status && isTerminal(held.status) ? held.status : (event.status ?? held.status),
+    });
+    // Oldest first, so the ones dropped are the ones least likely to be claimed.
+    while (early.size > EARLY_LIMIT) {
+      const oldest = early.keys().next().value;
+      if (oldest === undefined) break;
+      early.delete(oldest);
+    }
+  };
+
   // One subscription for the whole app. Events carry their own job id, so
   // there is no need to track which job is "the active one" -- that assumption
   // is what limited the app to a single download.
@@ -159,9 +227,23 @@ export function JobsProvider({
       promise.then((off) => (disposed ? off() : unlisteners.push(off)));
     };
 
-    attach(ipc.onJobProgress((payload) => dispatch({ type: "progress", payload })));
+    // Each listener dispatches either way -- the reducer ignores an id it has
+    // never seen -- and holds a copy for a job not known yet.
+    attach(
+      ipc.onJobProgress((payload) => {
+        if (!isKnown(payload.id)) holdEarly(payload.id, { progress: payload });
+        dispatch({ type: "progress", payload });
+      }),
+    );
+    attach(
+      ipc.onJobMeta((payload) => {
+        if (!isKnown(payload.id)) holdEarly(payload.id, { metas: [payload] });
+        dispatch({ type: "meta", payload });
+      }),
+    );
     attach(
       ipc.onJobStatus((payload) => {
+        if (!isKnown(payload.id)) holdEarly(payload.id, { status: payload });
         dispatch({ type: "status", payload });
         // Every job kind ends through this one event, so the whole app gets
         // completion feedback from here -- including for work whose screen the
@@ -199,6 +281,35 @@ export function JobsProvider({
     };
   }, []);
 
+  /**
+   * Hands a real job to the reducer, then replays whatever arrived for it
+   * before its id did -- see `earlyRef`. The announcement is replayed too: a
+   * job that finished in that gap reached the listener while it had no row,
+   * so nothing was said about it.
+   */
+  const claim = useCallback((placeholderId: string, job: Job) => {
+    claimedRef.current.add(job.id);
+    dispatch({ type: "started", placeholderId, job });
+
+    const early = earlyRef.current.get(job.id);
+    if (!early) return;
+    earlyRef.current.delete(job.id);
+    // Progress before status, so a replayed "completed" is not undone by the
+    // progress tick that came before it.
+    if (early.progress) dispatch({ type: "progress", payload: early.progress });
+    for (const meta of early.metas ?? []) dispatch({ type: "meta", payload: meta });
+    if (early.status) {
+      dispatch({ type: "status", payload: early.status });
+      // The reducer has not re-rendered yet, so `stateRef` does not have this
+      // row -- which the announcement needs for the title.
+      stateRef.current = {
+        ...stateRef.current,
+        byId: { ...stateRef.current.byId, [job.id]: job },
+      };
+      announceRef.current(early.status);
+    }
+  }, []);
+
   const beginJob = useCallback((job: JobMeta & { kind: JobKind }) => {
     // Prefixed so it can never be mistaken for -- or collide with -- a backend
     // job id, which is what every other id in this store is.
@@ -211,6 +322,7 @@ export function JobsProvider({
         title: job.title,
         source: job.source,
         detail: job.detail,
+        fileKind: job.fileKind,
         state: "queued",
         // Not "queued": nothing is in a queue yet. What is happening is the
         // work before the queue, which is the stage that word exists for.
@@ -240,29 +352,26 @@ export function JobsProvider({
         dispatch({ type: "discard", id: pendingId });
         throw error;
       }
-      dispatch({
-        type: "started",
-        placeholderId: pendingId,
-        job: {
-          id,
-          kind: "download" as JobKind,
-          title: meta.title,
-          source: meta.source,
-          state: "queued",
-          stage: "queued",
-          percent: null,
-          detail: meta.detail,
-          createdAt: Date.now(),
-          // Kept so the row can offer a button instead of asking the user to
-          // find the link again. It survives a restart with the rest of the
-          // history, which is exactly when it is most needed: everything that
-          // was in flight when the app closed comes back as failed.
-          request,
-        },
+      claim(pendingId, {
+        id,
+        kind: "download" as JobKind,
+        title: meta.title,
+        source: meta.source,
+        state: "queued",
+        stage: "queued",
+        percent: null,
+        detail: meta.detail,
+        fileKind: meta.fileKind,
+        createdAt: Date.now(),
+        // Kept so the row can offer a button instead of asking the user to
+        // find the link again. It survives a restart with the rest of the
+        // history, which is exactly when it is most needed: everything that
+        // was in flight when the app closed comes back as failed.
+        request,
       });
       return id;
     },
-    [beginJob],
+    [beginJob, claim],
   );
 
   /**
@@ -285,6 +394,9 @@ export function JobsProvider({
           title: job.title,
           source: job.source,
           detail: job.detail,
+          // What the last attempt learned about the file still holds: it is
+          // the same link, and the backend confirms it again either way.
+          fileKind: job.fileKind,
         });
         dispatch({ type: "remove", id });
       } catch (error) {
@@ -306,33 +418,56 @@ export function JobsProvider({
     ) => {
       const done = job.done === true;
       const now = Date.now();
-      dispatch({
-        type: "started",
-        // No placeholder means no row to replace, which `started` handles by
-        // adding one at the top -- the same thing "added" did here before.
-        placeholderId: job.placeholderId ?? "",
-        job: {
-          id: job.id,
-          kind: job.kind,
-          title: job.title,
-          source: job.source,
-          state: done ? "completed" : "queued",
-          stage: done ? "finalizing" : "queued",
-          percent: done ? 100 : null,
-          outputPath: job.outputPath,
-          detail: job.detail,
-          createdAt: now,
-          endedAt: done ? now : undefined,
-        },
+      // No placeholder means no row to replace, which `started` handles by
+      // adding one at the top -- the same thing "added" did here before.
+      claim(job.placeholderId ?? "", {
+        id: job.id,
+        kind: job.kind,
+        title: job.title,
+        source: job.source,
+        state: done ? "completed" : "queued",
+        stage: done ? "finalizing" : "queued",
+        percent: done ? 100 : null,
+        outputPath: job.outputPath,
+        detail: job.detail,
+        fileKind: job.fileKind,
+        createdAt: now,
+        endedAt: done ? now : undefined,
       });
     },
-    [],
+    [claim],
   );
 
-  const cancel = useCallback(async (id: string) => {
-    dispatch({ type: "cancelRequested", id });
-    await ipc.cancelJob(id);
-  }, []);
+  /**
+   * Stops a job. The row goes quiet at once; the backend's "cancelled" event
+   * is what settles it.
+   *
+   * Unless the backend has no such job. Then no event is ever coming -- the
+   * job ended and its last event went missing, or it belonged to a run of the
+   * app that is gone -- and the row used to sit on "cancelling" for good, with
+   * its button disabled. It is settled here instead, as the cancel the user
+   * asked for.
+   */
+  const cancel = useCallback(
+    async (id: string) => {
+      dispatch({ type: "cancelRequested", id });
+      try {
+        await ipc.cancelJob(id);
+      } catch (error) {
+        const appError = ipc.toAppError(error);
+        const job = stateRef.current.byId[id];
+        if (appError.kind === "unknownJob" && job) {
+          dispatch({
+            type: "status",
+            payload: { id, kind: job.kind, state: "cancelled" },
+          });
+          return;
+        }
+        notify("error", describeAppError(appError, t));
+      }
+    },
+    [notify, t],
+  );
 
   // Reporting rather than rethrowing: the caller is a button on a card with
   // nowhere to put an error, and a rejected promise nobody awaits is silence.

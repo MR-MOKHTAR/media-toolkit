@@ -106,14 +106,21 @@ pub struct ExtractAudioRequest {
 /// not the user's -- see `copy_audio_ext`.
 const ORIGINAL: &str = "original";
 
-fn output_for(dir: &str, name: &Option<String>, input: &Path, ext: &str) -> AppResult<PathBuf> {
+/// The job's output path, claimed for as long as the plan lives -- see
+/// `paths::OutputClaim` for the overwrite this prevents.
+fn output_for(
+    dir: &str,
+    name: &Option<String>,
+    input: &Path,
+    ext: &str,
+) -> AppResult<paths::OutputClaim> {
     let dir = paths::ensure_dir(dir)?;
     let stem = name
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| paths::stem_of(input));
-    Ok(paths::unique_output(&dir, &stem, ext))
+    Ok(paths::claim_output(&dir, &stem, ext))
 }
 
 /// Even dimensions: yuv420p subsamples chroma by two, so an odd width or
@@ -161,7 +168,7 @@ pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> 
         return compress_audio(request, info, &input);
     }
 
-    let output = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
+    let claim = output_for(&request.output_dir, &request.output_name, &input, "mp4")?;
     let duration = Some(info.duration_secs);
 
     // The request is the only thing that decides resolution. The Small preset
@@ -175,9 +182,10 @@ pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> 
         .map(scale_to_height);
 
     if let Some(target_mb) = request.target_size_mb {
-        return two_pass(request, info, &input, output, target_mb, scale);
+        return two_pass(request, info, &input, claim, target_mb, scale);
     }
 
+    let output = claim.path().to_path_buf();
     let mut args = vec![arg("-i"), path_arg(&input)];
     if let Some(scale) = scale {
         args.extend([arg("-vf"), scale]);
@@ -204,6 +212,7 @@ pub fn compress(request: &CompressRequest, info: &MediaInfo) -> AppResult<Plan> 
         passes: vec![Pass { args, duration_secs: duration, label: "compress" }],
         output,
         temp_files: Vec::new(),
+        claim: Some(claim),
     })
 }
 
@@ -218,7 +227,8 @@ fn compress_audio(
     info: &MediaInfo,
     input: &Path,
 ) -> AppResult<Plan> {
-    let output = output_for(&request.output_dir, &request.output_name, input, "m4a")?;
+    let claim = output_for(&request.output_dir, &request.output_name, input, "m4a")?;
+    let output = claim.path().to_path_buf();
 
     let kbps = match request.target_size_mb {
         Some(target_mb) if info.duration_secs > 0.0 => {
@@ -264,6 +274,7 @@ fn compress_audio(
         }],
         output,
         temp_files: Vec::new(),
+        claim: Some(claim),
     })
 }
 
@@ -271,10 +282,11 @@ fn two_pass(
     request: &CompressRequest,
     info: &MediaInfo,
     input: &Path,
-    output: PathBuf,
+    claim: paths::OutputClaim,
     target_mb: f64,
     scale: Option<String>,
 ) -> AppResult<Plan> {
+    let output = claim.path().to_path_buf();
     if info.duration_secs <= 0.0 {
         return Err(AppError::invalid("file", "duration unknown, cannot target a size"));
     }
@@ -288,7 +300,15 @@ fn two_pass(
     // file than a smear.
     let video_kbps = video_kbps.max(100.0).round() as u64;
 
-    let log = std::env::temp_dir().join(format!("mt-2pass-{}", std::process::id()));
+    // One prefix per job, not per process. With the process id alone, two
+    // target-size compressions running side by side -- the CPU lane allows up to
+    // three -- wrote their first-pass statistics into the same file, and each
+    // second pass then read a log that described the other video.
+    let log = std::env::temp_dir().join(format!(
+        "mt-2pass-{}-{}",
+        std::process::id(),
+        crate::jobs::new_id()
+    ));
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
     let mut first = vec![arg("-i"), path_arg(input)];
@@ -337,11 +357,25 @@ fn two_pass(
             Pass { args: second, duration_secs: Some(info.duration_secs), label: "encode" },
         ],
         output,
-        temp_files: vec![
-            log.with_extension("log"),
-            log.with_extension("log.mbtree"),
-        ],
+        temp_files: two_pass_logs(&log),
+        claim: Some(claim),
     })
+}
+
+/// The files a two-pass encode leaves behind for `-passlogfile <prefix>`.
+///
+/// ffmpeg appends the output stream's index -- `<prefix>-0.log`, not
+/// `<prefix>.log` -- and x264 keeps its macroblock tree beside that, writing both
+/// under a `.temp` name until the pass ends. The list used to name
+/// `<prefix>.log`, which ffmpeg never writes, so every target-size compression
+/// left its statistics in the temp directory for good, and a cancelled one left
+/// the `.temp` pair as well.
+fn two_pass_logs(prefix: &Path) -> Vec<PathBuf> {
+    let base = prefix.to_string_lossy();
+    ["-0.log", "-0.log.mbtree", "-0.log.temp", "-0.log.mbtree.temp"]
+        .iter()
+        .map(|suffix| PathBuf::from(format!("{base}{suffix}")))
+        .collect()
 }
 
 // ------------------------------------------------------------------ trim
@@ -364,7 +398,8 @@ pub fn trim(request: &TrimRequest, info: &MediaInfo) -> AppResult<Plan> {
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mp4".to_string());
     let ext = if request.exact { "mp4".to_string() } else { ext };
-    let output = output_for(&request.output_dir, &request.output_name, &input, &ext)?;
+    let claim = output_for(&request.output_dir, &request.output_name, &input, &ext)?;
+    let output = claim.path().to_path_buf();
 
     // -ss before -i is an input seek: ffmpeg jumps straight there instead of
     // decoding from the start.
@@ -395,6 +430,7 @@ pub fn trim(request: &TrimRequest, info: &MediaInfo) -> AppResult<Plan> {
         passes: vec![Pass { args, duration_secs: Some(duration), label: "trim" }],
         output,
         temp_files: Vec::new(),
+        claim: Some(claim),
     })
 }
 
@@ -420,7 +456,8 @@ pub fn can_stream_copy(info: &MediaInfo, format: &str) -> bool {
 pub fn convert(request: &ConvertRequest, info: &MediaInfo) -> AppResult<Plan> {
     let input = paths::require_file(&request.input)?;
     let format = request.format.to_ascii_lowercase();
-    let output = output_for(&request.output_dir, &request.output_name, &input, &format)?;
+    let claim = output_for(&request.output_dir, &request.output_name, &input, &format)?;
+    let output = claim.path().to_path_buf();
 
     let mut args = vec![arg("-i"), path_arg(&input)];
 
@@ -470,6 +507,7 @@ pub fn convert(request: &ConvertRequest, info: &MediaInfo) -> AppResult<Plan> {
         }],
         output,
         temp_files: Vec::new(),
+        claim: Some(claim),
     })
 }
 
@@ -547,7 +585,8 @@ pub fn extract_audio(request: &ExtractAudioRequest, info: &MediaInfo) -> AppResu
         (format, encode)
     };
 
-    let output = output_for(&request.output_dir, &request.output_name, &input, &extension)?;
+    let claim = output_for(&request.output_dir, &request.output_name, &input, &extension)?;
+    let output = claim.path().to_path_buf();
     args.extend(encode);
     args.push(path_arg(&output));
 
@@ -559,6 +598,7 @@ pub fn extract_audio(request: &ExtractAudioRequest, info: &MediaInfo) -> AppResu
         }],
         output,
         temp_files: Vec::new(),
+        claim: Some(claim),
     })
 }
 

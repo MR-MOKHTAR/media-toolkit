@@ -6,7 +6,8 @@ use tauri::AppHandle;
 
 use crate::binaries::{self, Tool};
 use crate::error::{AppError, AppResult};
-use crate::jobs::{Emitters, JobKind, JobProgress, JobStatus, Jobs, Stage};
+use crate::jobs::{CancelSignal, Emitters, JobKind, JobProgress, JobStatus, Jobs, Stage};
+use crate::paths;
 use crate::process::{self, Line, StderrTail};
 
 /// Options every invocation gets.
@@ -42,6 +43,11 @@ pub struct Plan {
     pub output: PathBuf,
     /// Removed on completion and on failure. Palette PNGs and two-pass logs.
     pub temp_files: Vec<PathBuf>,
+    /// Keeps `output` reserved for this job until the plan is dropped, which
+    /// is when the job ends -- see `paths::OutputClaim`. Held, never read:
+    /// dropping it is the whole of what it does.
+    #[allow(dead_code)]
+    pub claim: Option<paths::OutputClaim>,
 }
 
 /// Runs a plan, emitting progress across all its passes.
@@ -59,14 +65,19 @@ pub async fn run(
     emitters.progress_now(JobProgress::new(&id, kind, Stage::Queued));
 
     // Held until the job ends. This is what makes four concurrent compressions
-    // queue instead of pegging every core.
-    let _permit = jobs.acquire(kind).await;
+    // queue instead of pegging every core. Waiting for it is cancellable: a job
+    // cancelled in the queue ends here rather than starting once a slot frees.
+    let cancel = jobs.cancel_signal(&id).await;
+    let result = match jobs.acquire(&id, kind).await {
+        Ok(_permit) => {
+            emitters.status(&id, kind, JobStatus::Running);
+            jobs.set_partial_output(&id, plan.output.clone()).await;
 
-    emitters.status(&id, kind, JobStatus::Running);
-    jobs.set_partial_output(&id, plan.output.clone()).await;
-
-    let total_passes = plan.passes.len() as f64;
-    let result = run_passes(&app, jobs, &id, kind, &plan, &mut emitters, total_passes).await;
+            let total_passes = plan.passes.len() as f64;
+            run_passes(&app, jobs, &id, kind, &cancel, &plan, &mut emitters, total_passes).await
+        }
+        Err(error) => Err(error),
+    };
 
     for temp in &plan.temp_files {
         let _ = std::fs::remove_file(temp);
@@ -108,16 +119,26 @@ pub async fn run(
     }
 }
 
+/// The ambient context is passed the same way every runner in the crate takes
+/// it; see the note on `muxed::run`.
+#[allow(clippy::too_many_arguments)]
 async fn run_passes(
     app: &AppHandle,
     jobs: &Jobs,
     id: &str,
     kind: JobKind,
+    cancel: &CancelSignal,
     plan: &Plan,
     emitters: &mut Emitters,
     total_passes: f64,
 ) -> AppResult<()> {
     for (index, pass) in plan.passes.iter().enumerate() {
+        // Between passes there is no child for `cancel` to take, so a two-pass
+        // encode cancelled during its first pass used to start the second.
+        if cancel.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+
         let mut cmd = binaries::command(app, Tool::Ffmpeg)?;
         cmd.args(COMMON_ARGS);
         cmd.args(&pass.args);
@@ -128,7 +149,19 @@ async fn run_passes(
         let mut tail = StderrTail::default();
         let mut block = ProgressBlock::default();
 
-        while let Some(line) = lines.recv().await {
+        loop {
+            // The cancel arm is what makes the card stop the moment it is
+            // pressed: `cancel` kills the process, but a read loop left waiting
+            // on its pipes would still be draining what was already buffered.
+            let line = tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    process::drain(&mut lines, process::DRAIN_LIMIT).await;
+                    return Err(AppError::Cancelled);
+                }
+                line = lines.recv() => line,
+            };
+            let Some(line) = line else { break };
             match line {
                 Line::Stdout(line) => {
                     if let Some(update) = block.feed(&line) {
