@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   FileAudio,
+  FileQuestionMark,
   Gauge,
   Link2,
   ListVideo,
@@ -97,6 +98,10 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
    *  probe and the request are all about the same link. */
   const link = normalizeUrl(url);
   const info = probe?.url === link ? probe.info : null;
+  /** The probe for this link came back empty-handed. Not a reason to refuse
+   *  the download -- the backend looks again, properly, once it starts -- but
+   *  a reason to say what is and is not known rather than show nothing. */
+  const probeFailed = probe?.url === link && probe.info === null;
 
   // A file link has nothing to choose: it is fetched exactly as it is, so the
   // media toggle and the quality picker would both be lying about what is
@@ -285,6 +290,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       {(info || probing) && (
         <LinkPreview info={info} kind={fileKind} probing={probing} />
       )}
+      {!info && !probing && probeFailed && <UnknownLinkPreview link={link} />}
 
       {isFile ? (
         // Not a disabled control and not an empty space: what is about to
@@ -513,6 +519,35 @@ function LinkPreview({
             )}
           </>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * The preview for a link the probe could not identify.
+ *
+ * It used to be nothing at all: the preview vanished, and the download that
+ * followed was quietly assumed to be a video. It is neither assumed nor hidden
+ * now. The link's type is shown as unknown -- which is the truth -- and the line
+ * under it says when that changes: the engine looks at the link again when the
+ * download starts, and the job's row takes on whatever it finds.
+ */
+function UnknownLinkPreview({ link }: { link: string }) {
+  const { t } = useTranslation();
+
+  return (
+    <Card padding="sm" className="flex items-center gap-3">
+      <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-sm bg-fg-muted/10 text-fg-muted">
+        <FileQuestionMark size={20} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm text-fg" dir="ltr" title={link}>
+          {link}
+        </p>
+        <p className="truncate text-xs text-fg-muted">
+          {t("file_kind_unknown")} · {t("file_kind_unknown_hint")}
+        </p>
       </div>
     </Card>
   );

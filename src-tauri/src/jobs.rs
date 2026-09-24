@@ -17,9 +17,11 @@ use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::time::{Duration, Instant};
 
 use crate::error::{AppError, AppResult};
+use crate::process;
 
 pub const PROGRESS_EVENT: &str = "job-progress";
 pub const STATUS_EVENT: &str = "job-status";
+pub const META_EVENT: &str = "job-meta";
 
 /// Four concurrent jobs each emitting at ffmpeg's native rate would flood the
 /// IPC bridge and jank React for no benefit; nothing is readable above 10 Hz.
@@ -139,6 +141,49 @@ pub struct JobStatusEvent {
     pub status: JobStatus,
 }
 
+/// What a download turned out to be, once the engine that runs it knows.
+///
+/// The form describes a download from its probe, and a probe is a preview: it
+/// can time out, be refused, or simply not have landed before the button was
+/// pressed. The job used to fill that gap with a guess -- "video", because the
+/// media toggle said so -- and an installer or a PDF was then drawn with a film
+/// icon and filed under Video until it finished. The engine answers the same
+/// question for certain the moment it has chosen how to fetch the link, so it
+/// says so, and a job the form could not describe stays "unknown" only until
+/// then.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobMeta {
+    /// `video` or `audio`, when the job is a media download and which of the
+    /// two is known. A file fetched verbatim leaves this empty and is described
+    /// by its name and content type instead.
+    pub media: Option<MediaClass>,
+    /// The file's name as it will be saved, extension included, for a direct
+    /// download.
+    pub file_name: Option<String>,
+    /// What the server said the file is, when it said.
+    pub content_type: Option<String>,
+    /// The title the source gave, for a job that could only be named after its
+    /// URL when it started.
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaClass {
+    Video,
+    Audio,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobMetaEvent {
+    pub id: String,
+    pub kind: JobKind,
+    #[serde(flatten)]
+    pub meta: JobMeta,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobSummary {
@@ -251,19 +296,49 @@ impl Jobs {
 
     /// Waits for a slot in this kind's lane. The permit is held for the
     /// lifetime of the returned guard.
-    pub async fn acquire(&self, kind: JobKind) -> tokio::sync::OwnedSemaphorePermit {
+    ///
+    /// Gives up the moment the job is cancelled. A job waiting here has no
+    /// child and no request in flight, so nothing else would notice: the fifth
+    /// download, cancelled while the other four ran, used to sit on "cancelling"
+    /// until one of them finished -- and then start, because nothing it did
+    /// afterwards checked. The media tools did exactly that and ran to
+    /// completion, reporting success on a job the user had cancelled.
+    pub async fn acquire(
+        &self,
+        id: &str,
+        kind: JobKind,
+    ) -> AppResult<tokio::sync::OwnedSemaphorePermit> {
         let lane = match kind.lane() {
             Lane::Cpu => self.cpu.clone(),
             Lane::Network => self.net.clone(),
         };
+        let cancel = self.cancel_signal(id).await;
+        let permit = cancel.guard(lane.acquire_owned()).await?;
         // The semaphores are never closed, so this cannot fail.
-        lane.acquire_owned().await.expect("semaphore is open")
+        Ok(permit.expect("semaphore is open"))
     }
 
-    pub async fn attach_child(&self, id: &str, child: tokio::process::Child) {
-        if let Some(entry) = self.entries.lock().await.get_mut(id) {
-            entry.child = Some(child);
+    /// Hands the job's child to the registry, where `cancel` can reach it.
+    ///
+    /// A job cancelled a moment before its child existed -- during the spawn,
+    /// or between two ffmpeg passes -- would otherwise hand over a process that
+    /// nobody is ever going to kill, and the job would run to the end. So the
+    /// flag is checked here, under the same lock `cancel` takes, and a child
+    /// arriving late is killed on the spot. The runner then finds no child to
+    /// take back and reports the job cancelled, exactly as if `cancel` had
+    /// taken it.
+    pub async fn attach_child(&self, id: &str, mut child: tokio::process::Child) {
+        {
+            let mut entries = self.entries.lock().await;
+            if let Some(entry) = entries.get_mut(id) {
+                if !entry.cancel.is_cancelled() {
+                    entry.child = Some(child);
+                    return;
+                }
+            }
         }
+        process::kill_tree(&mut child);
+        let _ = child.wait().await;
     }
 
     pub async fn take_child(&self, id: &str) -> Option<tokio::process::Child> {
@@ -298,12 +373,18 @@ impl Jobs {
         }
     }
 
+    /// Forgets the job, and kills whatever child it still had.
+    ///
+    /// A runner that noticed the cancel signal and stopped reading can get here
+    /// before `cancel` has taken the child -- and dropping it would only kill
+    /// the process itself, not what it started. See `process::kill_tree`.
     pub async fn finish(&self, id: &str) -> Option<PathBuf> {
-        self.entries
-            .lock()
-            .await
-            .remove(id)
-            .and_then(|entry| entry.partial_output)
+        let entry = self.entries.lock().await.remove(id)?;
+        if let Some(mut child) = entry.child {
+            process::kill_tree(&mut child);
+            let _ = child.wait().await;
+        }
+        entry.partial_output
     }
 
     pub async fn cancel(&self, id: &str) -> Result<(), AppError> {
@@ -312,16 +393,16 @@ impl Jobs {
             let entry = entries
                 .get_mut(id)
                 .ok_or_else(|| AppError::UnknownJob { id: id.to_string() })?;
-            // Raised for every kind, not just the ones that watch it. The five
-            // ffmpeg tools ignore it and keep inferring cancellation from the
-            // missing child, so this costs them nothing and there is still one
-            // cancel path for the whole app.
+            // Raised for every kind. Every runner watches it now -- while it
+            // waits for a slot, between passes, and alongside its read loop --
+            // so a job is stopped wherever it happens to be, not only when it
+            // has a child for this to take.
             entry.cancel.cancel();
             entry.child.take()
         };
 
         if let Some(mut child) = child {
-            let _ = child.start_kill();
+            process::kill_tree(&mut child);
             let _ = child.wait().await;
         }
         Ok(())
@@ -399,6 +480,18 @@ impl Emitters {
     pub fn progress_now(&mut self, progress: JobProgress) {
         self.last = Some(Instant::now());
         let _ = self.app.emit(PROGRESS_EVENT, progress);
+    }
+
+    /// What the job turned out to be. See `JobMeta`.
+    pub fn meta(&self, id: &str, kind: JobKind, meta: JobMeta) {
+        let _ = self.app.emit(
+            META_EVENT,
+            JobMetaEvent {
+                id: id.to_string(),
+                kind,
+                meta,
+            },
+        );
     }
 
     pub fn status(&self, id: &str, kind: JobKind, status: JobStatus) {
@@ -544,5 +637,87 @@ mod tests {
 
             assert_eq!(actual, expected, "unexpected keys for {state}");
         }
+    }
+
+    /// A job waiting for a slot has nothing to kill, and used to sit on
+    /// "cancelling" until a slot freed -- and then run anyway.
+    #[tokio::test]
+    async fn cancelling_a_queued_job_ends_its_wait_for_a_slot() {
+        let jobs = Arc::new(Jobs::default());
+        // Fill the network lane so the next job has to queue.
+        let mut held = Vec::new();
+        for n in 0..4 {
+            let id = format!("busy-{n}");
+            jobs.register(id.clone(), JobKind::Download, "busy".into()).await;
+            held.push(jobs.acquire(&id, JobKind::Download).await.unwrap());
+        }
+
+        jobs.register("queued".into(), JobKind::Download, "queued".into()).await;
+        let waiting = {
+            let jobs = Arc::clone(&jobs);
+            tokio::spawn(async move {
+                jobs.acquire("queued", JobKind::Download).await.map(|_| ())
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiting.is_finished(), "the lane is full, so the job waits");
+
+        jobs.cancel("queued").await.unwrap();
+        let outcome = tokio::time::timeout(Duration::from_millis(500), waiting)
+            .await
+            .expect("the wait ends as soon as the job is cancelled")
+            .unwrap();
+        assert!(matches!(outcome, Err(AppError::Cancelled)));
+        drop(held);
+    }
+
+    /// A child that shows up after its job was cancelled -- the cancel landed
+    /// during the spawn -- is killed on arrival instead of running to the end
+    /// with nobody left to stop it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_attached_after_cancel_is_killed_on_arrival() {
+        let jobs = Jobs::default();
+        jobs.register("late".into(), JobKind::Compress, "late".into()).await;
+        jobs.cancel("late").await.unwrap();
+
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30");
+        let process::Running { child, .. } = process::spawn(cmd, "sleep").unwrap();
+        let pid = child.id().expect("running");
+
+        tokio::time::timeout(Duration::from_secs(3), jobs.attach_child("late", child))
+            .await
+            .expect("attaching kills and reaps rather than hanging");
+
+        assert!(jobs.take_child("late").await.is_none(), "the runner sees it as cancelled");
+        // Signal 0 only checks existence; the process is gone.
+        let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        assert!(!alive, "the late child is still running");
+    }
+
+    /// The keys the frontend's `JobMetaEvent` reads: flattened beside `id`,
+    /// camelCase, and the media class in lowercase.
+    #[test]
+    fn the_meta_event_matches_the_typescript_shape() {
+        let json = serde_json::to_value(JobMetaEvent {
+            id: "1-0".into(),
+            kind: JobKind::Download,
+            meta: JobMeta {
+                media: Some(MediaClass::Audio),
+                file_name: Some("a.m4a".into()),
+                content_type: Some("audio/mp4".into()),
+                title: None,
+            },
+        })
+        .unwrap();
+
+        assert_eq!(json["id"], "1-0");
+        assert_eq!(json["kind"], "download");
+        assert_eq!(json["media"], "audio");
+        assert_eq!(json["fileName"], "a.m4a");
+        assert_eq!(json["contentType"], "audio/mp4");
+        assert!(json["title"].is_null());
+        assert!(json.get("file_name").is_none(), "snake_case leaked: {json}");
     }
 }

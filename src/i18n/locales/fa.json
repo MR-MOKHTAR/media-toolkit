@@ -55,6 +55,8 @@
   "file_kind_document": "سند",
   "file_kind_image": "تصویر",
   "file_kind_other": "فایل",
+  "file_kind_unknown": "نامشخص",
+  "file_kind_unknown_hint": "نوع فایل پس از شروع دانلود مشخص می‌شود",
   "file_kind_video": "ویدیو",
   "filter_active": "در حال انجام",
   "filter_all": "همه",

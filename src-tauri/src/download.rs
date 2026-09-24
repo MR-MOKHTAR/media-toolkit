@@ -27,13 +27,36 @@ use tauri::AppHandle;
 use crate::binaries::{self, Tool};
 use crate::direct::{self, FileInfo};
 use crate::error::{AppError, AppResult};
-use crate::jobs::{Emitters, JobKind, JobProgress, JobStatus, Jobs, Stage};
+use crate::jobs::{
+    CancelSignal, Emitters, JobKind, JobMeta, JobProgress, JobStatus, Jobs, MediaClass, Stage,
+};
+use crate::library::{self, Slot};
 use crate::muxed;
 use crate::paths;
 use crate::process::{self, Line, StderrTail};
 
 /// Marks our own progress lines so they are unambiguous in the stdout stream.
 const MARKER: &str = "__DLPROGRESS__";
+
+/// Printed once per video before its download starts: what the chosen formats
+/// are and what the page calls itself. See `INFO_TEMPLATE`.
+const INFO_MARKER: &str = "__DLINFO__";
+
+/// Printed when the download is over and yt-dlp's post-processors -- the merge,
+/// the audio extraction -- are about to run.
+const STAGE_MARKER: &str = "__DLSTAGE__";
+
+/// `vcodec|acodec|title`, printed before the download starts.
+///
+/// The codecs are what tell a page asked for as video that turned out to have
+/// no picture -- a SoundCloud track, a podcast episode -- which the job card can
+/// then draw as audio from the start. The title comes last because it is the
+/// one field that can itself contain a `|`.
+const INFO_TEMPLATE: &str = "before_dl:__DLINFO__%(vcodec)s|%(acodec)s|%(title)s";
+
+/// Any template will do as long as it has a field in it: a `--print` value with
+/// no `%(` is read as a *field name*, and prints `NA`.
+const STAGE_TEMPLATE: &str = "post_process:__DLSTAGE__%(ext)s";
 
 /// Fragments fetched in parallel per download.
 ///
@@ -76,13 +99,20 @@ const THROTTLED_RATE: &str = "50K";
 ///     second and not the string "3.36MiB/s". The direct engine reports a
 ///     number, and two engines formatting their own units put "3.36MiB/s" and
 ///     "3.4 MB/s" on adjacent rows of the same list.
+///
+/// The sixth field is the format being fetched. A video that yt-dlp merges
+/// arrives as two downloads -- the picture, then the sound -- each counting
+/// from zero against its own size, which drew a bar that reached 100%, fell
+/// back to nothing and climbed again. Knowing which stream a line is about is
+/// what lets `StreamTotals` add them up into one.
 const PROGRESS_TEMPLATE: &str = concat!(
     "download:__DLPROGRESS__",
     "%(progress._percent_str)s",
     "|%(progress.downloaded_bytes)s",
     "|%(progress.total_bytes,progress.total_bytes_estimate)s",
     "|%(progress.speed)s",
-    "|%(progress.eta)s"
+    "|%(progress.eta)s",
+    "|%(info.format_id)s"
 );
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +156,17 @@ pub struct DownloadRequest {
     /// string with its own `+KEYRING:PROFILE::CONTAINER` syntax that there is
     /// no reason to let through.
     pub cookies_from: Option<String>,
+    /// Put the result on the library shelf that matches what the link turns
+    /// out to be, rather than in `output_dir`.
+    ///
+    /// The form picks a folder before the download starts, and when its probe
+    /// could not say what the link was, that folder was a guess -- Video, since
+    /// that is what the toggle said -- and an archive or an installer landed on
+    /// the Video shelf. With this set, the engine files the result once it
+    /// knows. `output_dir` is still sent: it is the folder the form showed, and
+    /// where the download goes if the library cannot be reached. Absent means
+    /// no, which is what every request stored by an older build means.
+    pub auto_folder: Option<bool>,
 }
 
 /// The browsers yt-dlp can read cookies from, as it names them.
@@ -402,43 +443,21 @@ fn format_selector(quality: Option<&str>) -> String {
 /// here. The two engines only have to move bytes and hand back where they
 /// landed, which is what let the second one be added without touching any of
 /// this.
+///
+/// Every way out goes through the one `match` at the end. A link that failed
+/// validation, or a folder that could not be created, used to return before
+/// any status was sent and before the registry forgot the job -- so the card sat
+/// on "queued" for good, and after a reload `list_jobs` revived it as running.
 pub async fn run(
     app: AppHandle,
     jobs: &Jobs,
     id: String,
     request: DownloadRequest,
 ) -> AppResult<()> {
-    let url = validate_url(&request.url)?;
-    let dir = paths::ensure_dir(&request.output_dir)?;
-
     let mut emitters = Emitters::new(app.clone());
     emitters.status(&id, JobKind::Download, JobStatus::Queued);
 
-    let _permit = jobs.acquire(JobKind::Download).await;
-
-    emitters.status(&id, JobKind::Download, JobStatus::Running);
-    emitters.progress_now(JobProgress::new(&id, JobKind::Download, Stage::Preparing));
-
-    let outcome = match choose_engine(&url, &request).await {
-        Engine::Direct(info) => {
-            // Nothing to kill: the work is a set of HTTPS requests rather than
-            // a child process, so cancellation arrives through the signal.
-            let cancel = jobs.cancel_signal(&id).await;
-            direct::run(
-                &id,
-                &mut emitters,
-                &cancel,
-                &url,
-                &dir,
-                request.output_name.as_deref(),
-                &info,
-            )
-            .await
-        }
-        Engine::YtDlp => {
-            run_media(&app, jobs, &id, &mut emitters, &url, &dir, &request).await
-        }
-    };
+    let outcome = execute(&app, jobs, &id, &mut emitters, &request).await;
 
     // The registry entry goes either way. Its recorded partial path is
     // deliberately *not* acted on any more: an interrupted download leaves its
@@ -487,6 +506,101 @@ pub async fn run(
             Err(error)
         }
     }
+}
+
+/// Everything between "queued" and a finished file, with every wait on it --
+/// the queue, the probe, the transfer -- given up the moment cancel is pressed.
+async fn execute(
+    app: &AppHandle,
+    jobs: &Jobs,
+    id: &str,
+    emitters: &mut Emitters,
+    request: &DownloadRequest,
+) -> AppResult<PathBuf> {
+    let url = validate_url(&request.url)?;
+    let cancel = jobs.cancel_signal(id).await;
+
+    let _permit = jobs.acquire(id, JobKind::Download).await?;
+
+    emitters.status(id, JobKind::Download, JobStatus::Running);
+    emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
+
+    // One HTTP request, but one that can take its full connect timeout against
+    // a host that does not answer -- twenty seconds of "cancelling" otherwise.
+    let engine = cancel.guard(choose_engine(&url, request)).await?;
+
+    // What the link is, said as soon as it is known, so a job the form could
+    // not describe stops being "unknown" here rather than at the finish.
+    emitters.meta(id, JobKind::Download, meta_for(&engine, request));
+
+    let dir = output_dir(app, request, &engine)?;
+
+    match engine {
+        Engine::Direct(info) => {
+            // Nothing to kill: the work is a set of HTTPS requests rather than
+            // a child process, so cancellation arrives through the signal.
+            direct::run(
+                id,
+                emitters,
+                &cancel,
+                &url,
+                &dir,
+                request.output_name.as_deref(),
+                &info,
+            )
+            .await
+        }
+        Engine::YtDlp => run_media(app, jobs, id, emitters, &cancel, &url, &dir, request).await,
+    }
+}
+
+/// What the engine now knows the link to be. See `JobMeta`.
+fn meta_for(engine: &Engine, request: &DownloadRequest) -> JobMeta {
+    match engine {
+        Engine::Direct(info) => JobMeta {
+            media: info.media_class(),
+            file_name: Some(info.filename.clone()),
+            content_type: info.content_type.clone(),
+            title: None,
+        },
+        // A page, which yt-dlp fetches as whichever of the two was asked for.
+        // A page asked for as video that has no picture is corrected once the
+        // formats are known -- see `run_media` and `run_ytdlp`.
+        Engine::YtDlp => JobMeta {
+            media: Some(if request.wants_audio() {
+                MediaClass::Audio
+            } else {
+                MediaClass::Video
+            }),
+            ..JobMeta::default()
+        },
+    }
+}
+
+/// Where this download is written.
+///
+/// `output_dir` unless the request asked to be filed by what it turned out to
+/// be. That decision is made here, after the engine has looked at the link,
+/// because this is the first point anything knows for certain whether it is a
+/// video, an audio file or neither.
+fn output_dir(app: &AppHandle, request: &DownloadRequest, engine: &Engine) -> AppResult<PathBuf> {
+    if request.auto_folder.unwrap_or(false) {
+        let slot = match engine {
+            Engine::Direct(info) => match info.media_class() {
+                Some(MediaClass::Video) => Slot::Video,
+                Some(MediaClass::Audio) => Slot::Audio,
+                None => Slot::Files,
+            },
+            Engine::YtDlp if request.wants_audio() => Slot::Audio,
+            Engine::YtDlp => Slot::Video,
+        };
+        // The library can be on a drive that has gone away. The folder the form
+        // showed is the fallback, and the error from that is the one reported.
+        if let Ok(dir) = library::folder(app, slot) {
+            return Ok(dir);
+        }
+    }
+    paths::ensure_dir(&request.output_dir)
 }
 
 /// Which engine gets this URL.
@@ -552,15 +666,27 @@ const AUDIO_SELECTOR: &str = "bestaudio[acodec^=mp4a]/bestaudio/best";
 /// negotiates for itself. What is deliberately not retried is cancellation --
 /// the user asked for it to stop, and starting it again on another engine is
 /// the opposite of that.
+///
+/// Nine arguments for the reason `muxed::run` gives: the job's ambient context,
+/// in the order every engine takes it.
+#[allow(clippy::too_many_arguments)]
 async fn run_media(
     app: &AppHandle,
     jobs: &Jobs,
     id: &str,
     emitters: &mut Emitters,
+    cancel: &CancelSignal,
     url: &str,
     dir: &Path,
     request: &DownloadRequest,
 ) -> AppResult<PathBuf> {
+    // Both engines below find their partial files again by name -- the title,
+    // or the name the form passed -- so the same page asked for twice at once
+    // would put two downloads into one set of `.part` files. They take turns
+    // instead; see `paths::PathLock`. Keyed on the name when there is one, and
+    // on the link when yt-dlp is going to choose it.
+    let _lock = cancel.guard(paths::lock_path(media_lock_key(dir, url, request))).await?;
+
     let audio = request.wants_audio();
     let eligible = request.parallel.unwrap_or(true)
         // Merging and encoding are both ffmpeg's, so without ffmpeg this path
@@ -581,8 +707,6 @@ async fn run_media(
         } else {
             format_selector(request.quality.as_deref())
         };
-        let cancel = jobs.cancel_signal(id).await;
-
         // Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about
         // two seconds to unpack itself before it does anything. That is two
         // seconds of a cancelled job sitting there looking cancelled and not
@@ -614,6 +738,23 @@ async fn run_media(
             .filter(|plan| !audio || plan.stream_count() == 1);
 
         if let Some(plan) = usable {
+            // The page has a name now, and whether it has a picture. A job the
+            // form could only title with its URL gets the real title here, and
+            // a "video" that turns out to be sound alone is drawn as audio.
+            emitters.meta(
+                id,
+                JobKind::Download,
+                JobMeta {
+                    media: Some(if audio || !plan.has_video() {
+                        MediaClass::Audio
+                    } else {
+                        MediaClass::Video
+                    }),
+                    title: Some(plan.title.clone()),
+                    ..JobMeta::default()
+                },
+            );
+
             // Decided here rather than above, because for `original` the answer
             // depends on what the resolve actually came back with: a codec this
             // app has no container for degrades to an encode instead of failing,
@@ -631,7 +772,7 @@ async fn run_media(
                 jobs,
                 id,
                 emitters,
-                &cancel,
+                cancel,
                 dir,
                 request.output_name.as_deref(),
                 &plan,
@@ -655,16 +796,38 @@ async fn run_media(
         }
     }
 
-    run_ytdlp(app, jobs, id, emitters, url, dir, request).await
+    run_ytdlp(app, jobs, id, emitters, cancel, url, dir, request).await
+}
+
+/// What two media downloads must not share: the file name both engines will
+/// write their partials under.
+fn media_lock_key(dir: &Path, url: &str, request: &DownloadRequest) -> PathBuf {
+    let name = request
+        .output_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(paths::sanitize_stem)
+        .unwrap_or_else(|| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            url.hash(&mut hasher);
+            format!("url-{:016x}", hasher.finish())
+        });
+    // Not a file anyone creates; a key in `paths::lock_path`'s map, spelled as
+    // a path so it cannot collide with the direct engine's `.part` keys.
+    dir.join(format!(".{name}.media-lock"))
 }
 
 /// The extractor engine: yt-dlp, for the thousand-odd sites where the link the
 /// user has is not the link the file is at.
+#[allow(clippy::too_many_arguments)]
 async fn run_ytdlp(
     app: &AppHandle,
     jobs: &Jobs,
     id: &str,
     emitters: &mut Emitters,
+    cancel: &CancelSignal,
     url: &str,
     dir: &Path,
     request: &DownloadRequest,
@@ -696,8 +859,20 @@ async fn run_ytdlp(
         "--newline".into(),
         "--no-colors".into(),
         "--no-playlist".into(),
+        // Not optional. Any `--print` puts yt-dlp in quiet mode, and quiet mode
+        // turns progress off -- so since `after_move` was added below, this
+        // engine printed no progress at all. Every download it ran sat on
+        // "Preparing" with an empty bar until it was suddenly finished, which
+        // on a long video, or two running side by side, reads as a download
+        // that never ends. Verified against yt-dlp 2026.08.19: without this
+        // flag not one progress line is written.
+        "--progress".into(),
         "--progress-template".into(),
         PROGRESS_TEMPLATE.into(),
+        "--print".into(),
+        INFO_TEMPLATE.into(),
+        "--print".into(),
+        STAGE_TEMPLATE.into(),
         "--print".into(),
         "after_move:__DLPATH__%(filepath)s".into(),
         "-o".into(),
@@ -788,40 +963,70 @@ async fn run_ytdlp(
     let mut tail = StderrTail::default();
     let mut final_path: Option<PathBuf> = None;
     let mut stage = Stage::Downloading;
+    let mut streams = StreamTotals::default();
     // See `merge_was_skipped`.
     let mut unmerged = false;
 
-    while let Some(line) = lines.recv().await {
-        match line {
-            Line::Stdout(line) => {
-                if let Some(path) = line.strip_prefix("__DLPATH__") {
-                    final_path = Some(PathBuf::from(path.trim()));
-                } else if let Some(payload) = line.strip_prefix(MARKER) {
-                    if let Some(progress) = parse_progress(id, payload, stage) {
-                        emitters.progress(progress);
-                    }
-                }
+    loop {
+        // Watching the signal as well as the pipes is what makes a cancelled
+        // card go quiet at once. `cancel` kills the process tree on its own
+        // task; this loop only has to stop reporting and let it finish dying.
+        let line = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                process::drain(&mut lines, process::DRAIN_LIMIT).await;
+                return Err(AppError::Cancelled);
             }
-            Line::Stderr(line) => {
-                unmerged |= merge_was_skipped(&line);
-                // yt-dlp reports merging on stderr, and it is the one phase
-                // that can sit at 100% for a long time on a large video.
-                if line.contains("[Merger]") || line.contains("Merging formats") {
-                    stage = Stage::Merging;
-                    emitters.progress_now(JobProgress {
-                        percent: Some(100.0),
-                        ..JobProgress::new(id, JobKind::Download, Stage::Merging)
-                    });
-                } else if line.contains("[ExtractAudio]") {
-                    stage = Stage::Finalizing;
-                    emitters.progress_now(JobProgress::new(
-                        id,
-                        JobKind::Download,
-                        Stage::Finalizing,
-                    ));
-                }
-                tail.push(line);
+            line = lines.recv() => line,
+        };
+        let Some(line) = line else { break };
+
+        // Everything this loop acts on is a marker of our own, because yt-dlp's
+        // own chatter never arrives: `--print` makes it quiet, so the
+        // `[Merger]` line the stage used to be read from was not printed at
+        // all -- and when it was, it went to stdout while this looked for it on
+        // stderr. The markers are matched on either pipe regardless.
+        let text = match &line {
+            Line::Stdout(text) | Line::Stderr(text) => text.as_str(),
+        };
+        if let Some(path) = text.strip_prefix("__DLPATH__") {
+            final_path = Some(PathBuf::from(path.trim()));
+        } else if let Some(payload) = text.strip_prefix(MARKER) {
+            if let Some((progress, stream)) = parse_progress(id, payload, stage) {
+                emitters.progress(streams.add(stream, progress));
             }
+        } else if let Some(payload) = text.strip_prefix(INFO_MARKER) {
+            let (media, title) = parse_info(payload, is_audio);
+            emitters.meta(
+                id,
+                JobKind::Download,
+                JobMeta {
+                    media: Some(media),
+                    title,
+                    ..JobMeta::default()
+                },
+            );
+        } else if text.starts_with(STAGE_MARKER) {
+            // Every byte is in; what is left is ffmpeg's. That can sit at 100%
+            // for a long time on a large video, so it gets a name of its own.
+            // Encoding for an MP3, which really is an encode; merging for the
+            // rest, which is a remux or a copy -- or nothing at all, for a
+            // single-file download, where this label is on screen for an
+            // instant.
+            stage = if is_audio && !request.wants_original_audio() {
+                Stage::Encoding
+            } else {
+                Stage::Merging
+            };
+            emitters.progress_now(JobProgress {
+                percent: Some(100.0),
+                ..JobProgress::new(id, JobKind::Download, stage)
+            });
+        }
+
+        if let Line::Stderr(text) = line {
+            unmerged |= merge_was_skipped(&text);
+            tail.push(text);
         }
     }
 
@@ -872,9 +1077,13 @@ fn merge_was_skipped(line: &str) -> bool {
     line.contains("ffmpeg is not installed") || line.contains("ffmpeg could not be found")
 }
 
-fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> {
-    let fields: Vec<&str> = payload.splitn(5, '|').collect();
-    if fields.len() != 5 {
+/// One progress line, and the format it is about when the line says.
+///
+/// Five fields is the shape older builds printed and the tests still speak;
+/// the sixth, the format id, is optional so either reads the same.
+fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<(JobProgress, Option<String>)> {
+    let fields: Vec<&str> = payload.splitn(6, '|').collect();
+    if fields.len() < 5 {
         return None;
     }
 
@@ -897,17 +1106,104 @@ fn parse_progress(id: &str, payload: &str, stage: Stage) -> Option<JobProgress> 
         .ok()
         .map(|p| p.clamp(0.0, 100.0));
 
-    Some(JobProgress {
-        id: id.to_string(),
-        kind: JobKind::Download,
-        percent,
-        stage,
-        speed: decimal(fields[3]).filter(|rate| *rate > 0.0),
-        encode_rate: None,
-        eta_secs: number(fields[4]),
-        bytes: number(fields[1]),
-        total_bytes: number(fields[2]),
-    })
+    let bytes = number(fields[1]);
+    // `total_bytes_estimate` stands in for the total on fragmented sources, and
+    // it is an estimate: it runs *behind* the real size, so the bytes that have
+    // arrived overtake it and the card read "130 MB / 118 MB". Whatever has
+    // actually arrived is a floor on the size of the file.
+    let total_bytes = match (number(fields[2]), bytes) {
+        (Some(total), Some(bytes)) => Some(total.max(bytes)),
+        (total, _) => total,
+    };
+
+    let stream = fields
+        .get(5)
+        .map(|raw| raw.trim())
+        .filter(|raw| !raw.is_empty() && *raw != "NA")
+        .map(str::to_string);
+
+    Some((
+        JobProgress {
+            id: id.to_string(),
+            kind: JobKind::Download,
+            percent,
+            stage,
+            speed: decimal(fields[3]).filter(|rate| *rate > 0.0),
+            encode_rate: None,
+            eta_secs: number(fields[4]),
+            bytes,
+            total_bytes,
+        },
+        stream,
+    ))
+}
+
+/// Adds up the streams of a download yt-dlp fetches in more than one piece.
+///
+/// A merged video is the picture and then the sound, each reported from zero
+/// against its own size. Shown as they come, the bar filled, emptied and filled
+/// again, and the size under it changed from the video's to the audio's --
+/// neither of which is the size of what the user is getting. Here each stream
+/// that finishes is carried forward, so the figures only ever grow and the
+/// percentage is of everything fetched so far.
+#[derive(Default)]
+struct StreamTotals {
+    current: Option<String>,
+    /// Bytes of the streams that are finished.
+    done: u64,
+    /// The running stream's last figures, carried forward when the next begins.
+    last_bytes: u64,
+    last_total: Option<u64>,
+}
+
+impl StreamTotals {
+    fn add(&mut self, stream: Option<String>, mut progress: JobProgress) -> JobProgress {
+        if stream.is_some() && self.current.is_some() && stream != self.current {
+            self.done += self.last_total.unwrap_or(0).max(self.last_bytes);
+        }
+        if stream.is_some() {
+            self.current = stream;
+        }
+        self.last_bytes = progress.bytes.unwrap_or(self.last_bytes);
+        self.last_total = progress.total_bytes.or(self.last_total);
+
+        if self.done > 0 {
+            progress.bytes = progress.bytes.map(|bytes| bytes + self.done);
+            progress.total_bytes = progress.total_bytes.map(|total| total + self.done);
+            // yt-dlp's own percentage is of this stream alone; with a known
+            // total it is recomputed over everything, and without one it is
+            // still the best figure there is.
+            if let (Some(bytes), Some(total)) = (progress.bytes, progress.total_bytes) {
+                if total > 0 {
+                    progress.percent = Some((bytes as f64 / total as f64 * 100.0).clamp(0.0, 100.0));
+                }
+            }
+        }
+        progress
+    }
+}
+
+/// `vcodec|acodec|title` from `INFO_TEMPLATE`: whether the download has a
+/// picture, and what the page calls itself.
+fn parse_info(payload: &str, wants_audio: bool) -> (MediaClass, Option<String>) {
+    let mut fields = payload.splitn(3, '|');
+    let vcodec = fields.next().unwrap_or("").trim();
+    let _acodec = fields.next();
+    let title = fields
+        .next()
+        .map(str::trim)
+        .filter(|title| !title.is_empty() && *title != "NA")
+        .map(str::to_string);
+
+    // Only an explicit "none" is a missing picture. "NA" means yt-dlp does not
+    // know -- which is what a plain file link on the generic extractor says --
+    // and that is not evidence of anything.
+    let media = if wants_audio || vcodec == "none" {
+        MediaClass::Audio
+    } else {
+        MediaClass::Video
+    };
+    (media, title)
 }
 
 /// What the download screen previews after a link is pasted.
@@ -1095,6 +1391,11 @@ pub async fn list_playlist(
 mod tests {
     use super::*;
 
+    /// A progress line's figures, without the stream it named.
+    fn progress_of(payload: &str) -> Option<JobProgress> {
+        parse_progress("j1", payload, Stage::Downloading).map(|(progress, _)| progress)
+    }
+
     /// A request as the download form sends one, with only the fields a test
     /// cares about set.
     fn request(media_type: &str, audio_format: Option<&str>) -> DownloadRequest {
@@ -1108,6 +1409,7 @@ mod tests {
             parallel: None,
             audio_format: audio_format.map(str::to_string),
             cookies_from: None,
+            auto_folder: None,
         }
     }
 
@@ -1380,7 +1682,7 @@ mod tests {
 
     #[test]
     fn parses_a_progress_line() {
-        let p = parse_progress("j1", " 42.5%|1048576|4194304|1258291.2|30", Stage::Downloading)
+        let p = progress_of(" 42.5%|1048576|4194304|1258291.2|30")
             .expect("should parse");
         assert_eq!(p.percent, Some(42.5));
         assert_eq!(p.bytes, Some(1_048_576));
@@ -1392,7 +1694,7 @@ mod tests {
     #[test]
     fn treats_na_fields_as_absent() {
         // Live streams and some extractors report NA for everything but percent.
-        let p = parse_progress("j1", " 10.0%|NA|NA|NA|NA", Stage::Downloading).unwrap();
+        let p = progress_of(" 10.0%|NA|NA|NA|NA").unwrap();
         assert_eq!(p.percent, Some(10.0));
         assert_eq!(p.bytes, None);
         assert_eq!(p.total_bytes, None);
@@ -1407,7 +1709,7 @@ mod tests {
     /// Instagram or m3u8 download never showed a size.
     #[test]
     fn reads_an_estimated_total_like_any_other() {
-        let p = parse_progress("j1", " 5.0%|524288|10485760.0|65536|120", Stage::Downloading)
+        let p = progress_of(" 5.0%|524288|10485760.0|65536|120")
             .expect("should parse");
         assert_eq!(p.total_bytes, Some(10_485_760));
         assert_eq!(p.speed, Some(65_536.0));
@@ -1419,8 +1721,79 @@ mod tests {
     fn ignores_speeds_that_are_not_speeds() {
         for field in ["Unknown", "NA", "none", "", "0"] {
             let line = format!(" 50.0%|1000|2000|{field}|10");
-            let p = parse_progress("j1", &line, Stage::Downloading).expect("should parse");
+            let p = progress_of(&line).expect("should parse");
             assert_eq!(p.speed, None, "{field:?} should not be a speed");
         }
+    }
+
+    /// yt-dlp's estimate for a fragmented source runs behind the real size, so
+    /// the bytes that have arrived overtake it. The card read "130 MB / 118 MB";
+    /// what has arrived is a floor on the size.
+    #[test]
+    fn an_estimate_the_download_has_outgrown_is_not_shown_as_the_total() {
+        let p = progress_of(" 99.0%|136314880|123731968|65536|1").unwrap();
+        assert_eq!(p.bytes, Some(136_314_880));
+        assert_eq!(p.total_bytes, Some(136_314_880));
+    }
+
+    /// The stream a line is about rides along as the sixth field, and a line in
+    /// the older five-field shape still reads.
+    #[test]
+    fn reads_the_stream_a_line_is_about() {
+        let (_, stream) = parse_progress("j1", " 1.0%|10|1000|5|9|137", Stage::Downloading).unwrap();
+        assert_eq!(stream.as_deref(), Some("137"));
+        let (_, stream) = parse_progress("j1", " 1.0%|10|1000|5|9|NA", Stage::Downloading).unwrap();
+        assert_eq!(stream, None);
+        let (_, stream) = parse_progress("j1", " 1.0%|10|1000|5|9", Stage::Downloading).unwrap();
+        assert_eq!(stream, None);
+    }
+
+    /// A merged video is the picture, then the sound, each counted from zero.
+    /// Added up, the bar never goes backwards and the size is of both.
+    #[test]
+    fn a_merged_download_adds_its_streams_up() {
+        let mut streams = StreamTotals::default();
+        let line = |payload: &str| parse_progress("j1", payload, Stage::Downloading).unwrap();
+
+        let (p, s) = line(" 50.0%|500|1000|10|1|137");
+        let p = streams.add(s, p);
+        assert_eq!((p.bytes, p.total_bytes, p.percent), (Some(500), Some(1000), Some(50.0)));
+
+        let (p, s) = line("100.0%|1000|1000|10|0|137");
+        streams.add(s, p);
+
+        // The audio starts at zero of its own 100 bytes -- and is shown as
+        // 1000 of 1100, not as 0 of 100.
+        let (p, s) = line("  0.0%|0|100|10|10|140");
+        let p = streams.add(s, p);
+        assert_eq!(p.bytes, Some(1000));
+        assert_eq!(p.total_bytes, Some(1100));
+        assert!(p.percent.unwrap() > 90.0, "{:?}", p.percent);
+
+        let (p, s) = line("100.0%|100|100|10|0|140");
+        let p = streams.add(s, p);
+        assert_eq!((p.bytes, p.total_bytes, p.percent), (Some(1100), Some(1100), Some(100.0)));
+    }
+
+    /// A single stream is passed through exactly as yt-dlp reported it.
+    #[test]
+    fn a_single_stream_is_left_alone() {
+        let mut streams = StreamTotals::default();
+        let (p, s) = parse_progress("j1", " 42.0%|420|1000|10|5|18", Stage::Downloading).unwrap();
+        let p = streams.add(s, p);
+        assert_eq!((p.bytes, p.total_bytes, p.percent), (Some(420), Some(1000), Some(42.0)));
+    }
+
+    /// "none" is a missing picture; "NA" is yt-dlp not knowing, which is what
+    /// the generic extractor says about a plain file and is evidence of nothing.
+    #[test]
+    fn only_an_explicit_none_makes_a_video_request_audio() {
+        assert_eq!(parse_info("none|opus|Track", false), (MediaClass::Audio, Some("Track".into())));
+        assert_eq!(parse_info("avc1.64001F|mp4a.40.2|Clip", false).0, MediaClass::Video);
+        assert_eq!(parse_info("NA|NA|NA", false), (MediaClass::Video, None));
+        // Asked for as audio, it is audio whatever the page has.
+        assert_eq!(parse_info("avc1|mp4a|Clip", true).0, MediaClass::Audio);
+        // A title with the separator in it survives whole.
+        assert_eq!(parse_info("none|opus|A | B", false).1.as_deref(), Some("A | B"));
     }
 }

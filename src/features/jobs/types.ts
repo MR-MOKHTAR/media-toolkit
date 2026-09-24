@@ -1,3 +1,5 @@
+import type { FileKind } from "../../lib/fileKind";
+
 /** One unit of background work. Downloads and media operations are the same
  *  shape, so the queue, the job list and the progress UI are written once. */
 export type JobKind =
@@ -74,6 +76,31 @@ export type JobStatusEvent = { id: string; kind: JobKind } & (
   | { state: "cancelled" }
 );
 
+/**
+ * What a download turned out to be, sent by the backend the moment its engine
+ * knows -- which is after the job has started, and often before the form's own
+ * probe would have. Mirrors `JobMetaEvent` in jobs.rs.
+ */
+export interface JobMetaEvent {
+  id: string;
+  kind: JobKind;
+  /** Set for a media download: which of the two it is. */
+  media: "video" | "audio" | null;
+  /** Set for a file fetched verbatim: its name as saved, extension included. */
+  fileName: string | null;
+  contentType: string | null;
+  /** What the source calls itself, for a job that started under its URL. */
+  title: string | null;
+}
+
+/** What kind of file a job is producing, as far as anything knows yet.
+ *
+ *  `unknown` is a real answer rather than a missing one: it is what a download
+ *  says while nothing has looked at the link successfully, and it is drawn as
+ *  such instead of being rounded to "video". It lasts until the backend's
+ *  `JobMetaEvent` -- or the finished file -- says otherwise. */
+export type JobFileKind = FileKind | "unknown";
+
 export interface Job {
   id: string;
   kind: JobKind;
@@ -103,6 +130,11 @@ export interface Job {
   endedAt?: number;
   /** Kind-specific detail for the metadata line: "1080p", "Balanced", "MP3". */
   detail?: string;
+  /** What the file is, when that was known before it existed: from the form's
+   *  probe when the job started, or from the backend once its engine looked.
+   *  Absent on rows written by builds that did not record it, which fall back
+   *  to reading the title and the detail line. */
+  fileKind?: JobFileKind;
   /** A row that exists before the backend has handed back an id.
    *
    *  Pressing the button closes the form, and everything between that and a
@@ -143,6 +175,11 @@ export interface DownloadRequest {
    *  backend validates it against its own list before it reaches a command
    *  line -- see `BROWSERS` in download.rs. */
   cookiesFrom?: string;
+  /** File the result on the library shelf that matches what it turns out to
+   *  be, decided by the backend once it has looked at the link. Sent whenever
+   *  the user has not picked a folder themselves; `outputDir` is then only the
+   *  fallback. Absent means no, as it does on requests stored by older builds. */
+  autoFolder?: boolean;
   /** Which engine to use. `auto` -- what every screen sends -- lets the backend
    *  decide from one HTTP request: a page goes to yt-dlp, a link that already
    *  points at the file goes to the direct downloader. */

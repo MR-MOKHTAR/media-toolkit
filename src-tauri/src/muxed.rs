@@ -115,6 +115,10 @@ pub struct Stream {
     /// carries no audio. Read only by `Target::AudioCopy`, to pick the container
     /// the packets belong in.
     acodec: Option<String>,
+    /// Whether this stream carries pictures. A page asked for as video can turn
+    /// out to have none -- a SoundCloud track, a podcast -- and the job card
+    /// should say "audio" about that before the file exists to say it.
+    has_video: bool,
 }
 
 /// A page resolved into something this engine can fetch.
@@ -148,6 +152,12 @@ impl Plan {
     pub fn audio_copy_ext(&self) -> Option<&'static str> {
         let stream = self.streams.first()?;
         copy_container(stream.acodec.as_deref()?)
+    }
+
+    /// Whether any stream carries video -- what the job card is told the
+    /// download is, once the page has been resolved.
+    pub fn has_video(&self) -> bool {
+        self.streams.iter().any(|stream| stream.has_video)
     }
 }
 
@@ -275,8 +285,8 @@ fn usable(format: Format) -> Option<Stream> {
 
     // Neither track: a storyboard or a subtitle picked up by a strange
     // selector. Nothing to merge and nothing anyone asked for.
-    let has_media = format.vcodec.as_deref().is_some_and(|c| c != "none")
-        || format.acodec.as_deref().is_some_and(|c| c != "none");
+    let has_video = format.vcodec.as_deref().is_some_and(|c| c != "none");
+    let has_media = has_video || format.acodec.as_deref().is_some_and(|c| c != "none");
     if !has_media {
         return None;
     }
@@ -287,6 +297,7 @@ fn usable(format: Format) -> Option<Stream> {
         size_bytes,
         ext: format.ext.unwrap_or_else(|| "bin".to_string()),
         acodec: format.acodec.filter(|codec| codec != "none"),
+        has_video,
     })
 }
 
@@ -453,8 +464,11 @@ pub async fn run(
         // m4a is the one every source this path accepts can be muxed into.
         Target::AudioCopy => plan.audio_copy_ext().unwrap_or("m4a"),
     };
-    let output = paths::unique_output(dir, &stem, ext);
-    if let Err(error) = assemble(app, emitters, id, cancel, &parts, &output, target).await {
+    // Claimed for the length of the merge, which on a long video is long
+    // enough for a second job with the same title to finish its own download
+    // and look for a name -- see `paths::OutputClaim`.
+    let output = paths::claim_output(dir, &stem, ext);
+    if let Err(error) = assemble(app, emitters, id, cancel, &parts, output.path(), target).await {
         if !matches!(error, AppError::Cancelled) {
             discard(&parts).await;
         }
@@ -465,7 +479,7 @@ pub async fn run(
     // would turn a recoverable failure into a full re-download.
     discard(&parts).await;
 
-    Ok(output)
+    Ok(output.path().to_path_buf())
 }
 
 /// Removes the intermediate streams and the sidecars that track their chunks.
@@ -553,19 +567,37 @@ async fn assemble(
     // Guarded rather than simply awaited. This ffmpeg is not in the job
     // registry -- there is nothing for `cancel_job` to take and kill -- so
     // without the guard, cancelling during the merge would be felt only once
-    // the merge finished. Dropping the future drops the child, and
-    // `process::spawn` sets `kill_on_drop`, so the guard is what actually ends
+    // the merge finished. Dropping the future kills the process, through the
+    // tree guard inside `process::output`, so the guard is what actually ends
     // it. A remux is quick, but "quick" on a two-hour 4K video is not instant.
-    cancel.guard(process::output(cmd, Tool::Ffmpeg.name())).await??;
+    let merged = cancel.guard(process::output(cmd, Tool::Ffmpeg.name())).await;
 
-    // A cancelled merge can leave a truncated output behind, and that file is
-    // not a partial download anyone can resume -- it is a broken video with a
-    // real name sitting in the user's folder.
-    if cancel.is_cancelled() {
-        let _ = tokio::fs::remove_file(output).await;
+    // A cancelled merge leaves a truncated output behind, and that file is not
+    // a partial download anyone can resume -- it is a broken video with a real
+    // name sitting in the user's folder. This used to be checked only after the
+    // merge returned normally; a cancel that interrupted it returned through
+    // the `?` above the check, and the broken file stayed.
+    if merged.is_err() || cancel.is_cancelled() {
+        remove_when_released(output).await;
         return Err(AppError::Cancelled);
     }
-    Ok(())
+    merged?.map(|_| ())
+}
+
+/// Deletes a file a just-killed process may still be holding.
+///
+/// On Windows a file cannot be deleted while another process has it open, and
+/// a killed ffmpeg takes a moment to let go. A few short retries cover that
+/// without making a cancel wait on anything longer.
+async fn remove_when_released(path: &Path) {
+    for _ in 0..10 {
+        match tokio::fs::remove_file(path).await {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            _ => return,
+        }
+    }
 }
 
 #[cfg(test)]
