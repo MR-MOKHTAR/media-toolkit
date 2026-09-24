@@ -55,6 +55,8 @@
   "file_kind_document": "Document",
   "file_kind_image": "Image",
   "file_kind_other": "File",
+  "file_kind_unknown": "Unknown",
+  "file_kind_unknown_hint": "detected when the download starts",
   "file_kind_video": "Video",
   "filter_active": "In progress",
   "filter_all": "All",

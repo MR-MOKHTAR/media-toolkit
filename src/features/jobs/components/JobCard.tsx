@@ -3,11 +3,13 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  FileQuestionMark,
   FolderOpen,
   Loader2,
   RotateCcw,
   Trash2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -24,15 +26,16 @@ import {
   formatRelativeTime,
   formatSpeed,
 } from "../../../lib/format";
+import type { TFunction } from "i18next";
+
 import {
   FILE_KIND_ICON,
   FILE_KIND_TINT,
   fileKindOf,
   formatLabelOf,
-  type FileKind,
 } from "../../../lib/fileKind";
 import { describeAppError } from "../errorText";
-import type { Job } from "../types";
+import type { DownloadRequest, Job, JobFileKind } from "../types";
 
 interface JobCardProps {
   job: Job;
@@ -70,12 +73,20 @@ const VIDEO_DETAILS = new Set(["best", "1080", "720", "480"]);
  * through evidence -- a quality on the detail line, or a request that asked
  * yt-dlp for a video -- never as the answer to "no idea".
  */
-function fileKindOfJob(job: Job): FileKind {
+function fileKindOfJob(job: Job): JobFileKind {
   // Whatever container it landed in, the result of this tool is audio -- and it
   // is known before the file exists, which the extension cannot be.
   if (job.kind === "extractAudio") return "audio";
 
   if (job.outputPath) return fileKindOf(job.outputPath);
+
+  // Recorded when the job started, or learned from the backend since. This is
+  // the answer for every job this build started -- including "unknown", which
+  // is kept rather than rounded: a download whose link nothing has managed to
+  // look at yet is drawn as exactly that until the engine says what it is.
+  if (job.fileKind) return job.fileKind;
+
+  // Rows from builds that recorded no kind: the best evidence they carry.
   const fromTitle = fileKindOf(job.title);
   if (fromTitle !== "other") return fromTitle;
   if (job.detail) {
@@ -90,6 +101,40 @@ function fileKindOfJob(job: Job): FileKind {
   return "other";
 }
 
+const UNKNOWN_TINT = "bg-fg-muted/10 text-fg-muted";
+
+const iconOf = (kind: JobFileKind): LucideIcon =>
+  kind === "unknown" ? FileQuestionMark : FILE_KIND_ICON[kind];
+
+const tintOf = (kind: JobFileKind): string =>
+  kind === "unknown" ? UNKNOWN_TINT : FILE_KIND_TINT[kind];
+
+/**
+ * What the detail line says when the job did not record one.
+ *
+ * A download whose link could not be looked at starts with no detail, because
+ * the one it would have had -- the quality, or "MP3" -- is a claim that it is
+ * media. Once it is known to be, the request says which: the same words the
+ * form would have written. Until then the kind itself is the detail, which for
+ * an unknown file is the word "Unknown".
+ */
+function detailOfJob(job: Job, kind: JobFileKind, t: TFunction): string | undefined {
+  if (job.detail) return job.detail;
+  if (kind === "unknown") return t("file_kind_unknown");
+  if ((kind === "video" || kind === "audio") && job.request) {
+    return requestDetail(job.request, t);
+  }
+  return undefined;
+}
+
+/** The detail the download form writes for a media request. */
+function requestDetail(request: DownloadRequest, t: TFunction): string | undefined {
+  if (request.mediaType === "audio") {
+    return request.audioFormat === "original" ? t("audio_format_original") : "MP3";
+  }
+  return request.quality;
+}
+
 /**
  * The format, as a short uppercase token: `MP4`, `EXE`, `ZIP`.
  *
@@ -99,6 +144,10 @@ function fileKindOfJob(job: Job): FileKind {
  * free -- and it would still be a guess for the whole time the job was running.
  */
 function formatOfJob(job: Job): string | null {
+  // Nothing is known about the file yet, and a chip read off the tail of the
+  // link -- `MP4` from `…/watch.mp4?x=1` -- would contradict the "unknown" the
+  // rest of the row is saying.
+  if (!job.outputPath && job.fileKind === "unknown") return null;
   const source = job.outputPath ?? job.title;
   const label = formatLabelOf(source);
   if (!label) return null;
@@ -145,8 +194,9 @@ function JobCardComponent({
 
   const active = job.state === "running" || job.state === "queued";
   const kind = fileKindOfJob(job);
-  const Icon = FILE_KIND_ICON[kind];
+  const Icon = iconOf(kind);
   const format = formatOfJob(job);
+  const detail = detailOfJob(job, kind, t);
   const isLink = /^https?:\/\//i.test(job.title);
   const revealable = job.state === "completed" && job.outputPath;
 
@@ -171,9 +221,9 @@ function JobCardComponent({
     ),
     // The one item here that can be a translated phrase ("exact", a target
     // size), so it is the one that truncates rather than clipping the row.
-    job.detail && (
+    detail && (
       <span key="detail" className="truncate">
-        {job.detail}
+        {detail}
       </span>
     ),
     job.state === "completed" && job.bytes !== undefined && (
@@ -213,7 +263,7 @@ function JobCardComponent({
       <span
         className={cn(
           "pointer-events-none relative flex size-9 shrink-0 items-center justify-center rounded-md",
-          FILE_KIND_TINT[kind],
+          tintOf(kind),
         )}
       >
         <Icon size={18} />

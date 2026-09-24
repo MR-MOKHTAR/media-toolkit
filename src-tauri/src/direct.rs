@@ -33,7 +33,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::error::{AppError, AppResult};
-use crate::jobs::{CancelSignal, Emitters, JobKind, JobProgress, Stage};
+use crate::jobs::{CancelSignal, Emitters, JobKind, JobProgress, MediaClass, Stage};
 use crate::paths;
 
 /// One range request's worth of file.
@@ -68,7 +68,13 @@ const REPORT_EVERY: u64 = 256 * 1024;
 const STATE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Attempts per chunk before the whole download gives up.
-const CHUNK_ATTEMPTS: u32 = 3;
+///
+/// Three was tuned for one download on a quiet line. Two or three running at
+/// once put twice or three times the sockets on the same connection, and a
+/// dropped or stalled range stops being rare -- three quick tries inside a
+/// second and a half was not enough to ride out a busy moment, and one chunk
+/// giving up fails the whole download.
+const CHUNK_ATTEMPTS: u32 = 5;
 
 /// A partial file smaller than this is not worth keeping for a resume, and
 /// leaving it behind is just litter in the user's folder.
@@ -176,6 +182,44 @@ pub struct FileInfo {
     tag: Option<String>,
 }
 
+/// Extensions that make a fetched file a video or an audio file -- the same
+/// lists `lib/fileKind.ts` draws the job card from, so the shelf a file lands on
+/// and the icon it is drawn with cannot disagree.
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "flv", "wmv", "mpg", "mpeg", "3gp", "ogv",
+    "mts", "m2ts", "vob", "divx", "asf", "rm", "rmvb",
+];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma", "weba", "oga", "m4b", "aiff", "aif",
+    "amr", "ape", "ac3",
+];
+
+impl FileInfo {
+    /// Video or audio, when this file is either, from its name first and its
+    /// declared type second -- the order `fileKindOf` uses on the other side.
+    /// `None` is an answer too: an installer or an archive, which belongs on
+    /// the Files shelf.
+    pub fn media_class(&self) -> Option<MediaClass> {
+        let extension = self
+            .filename
+            .rsplit_once('.')
+            .map(|(_, ext)| ext.to_ascii_lowercase());
+        match extension.as_deref() {
+            Some(ext) if VIDEO_EXTENSIONS.contains(&ext) => return Some(MediaClass::Video),
+            Some(ext) if AUDIO_EXTENSIONS.contains(&ext) => return Some(MediaClass::Audio),
+            _ => {}
+        }
+        let content_type = self.content_type.as_deref()?;
+        if content_type.starts_with("video/") {
+            Some(MediaClass::Video)
+        } else if content_type.starts_with("audio/") {
+            Some(MediaClass::Audio)
+        } else {
+            None
+        }
+    }
+}
+
 /// Asks a URL what it is, in one request and without reading a body.
 ///
 /// `Ok(None)` means "this is a web page" -- hand it to yt-dlp. That is a
@@ -274,6 +318,12 @@ pub async fn run(
         None => format!("{stem}.part"),
     });
 
+    // Being found again by name is the point of the part file, and it is also
+    // why two jobs can land on the same one -- the same link started twice, or
+    // two links whose files share a name. They take turns rather than writing
+    // into one file together; see `paths::PathLock`.
+    let _lock = cancel.guard(paths::lock_path(part.clone())).await?;
+
     let transfer = {
         // Scoped, because the closure holds `emitters` for as long as it lives
         // and the completion event below needs it back.
@@ -303,13 +353,16 @@ pub async fn run(
         ..JobProgress::new(id, JobKind::Download, Stage::Finalizing)
     });
 
-    let output = paths::unique_output(dir, &stem, ext.as_deref().unwrap_or("bin"));
-    tokio::fs::rename(&part, &output)
+    // Claimed rather than merely checked, so a second download of a file with
+    // the same name finishing in the same instant cannot be handed the same
+    // path -- `rename` would replace the first one's file without a word.
+    let output = paths::claim_output(dir, &stem, ext.as_deref().unwrap_or("bin"));
+    tokio::fs::rename(&part, output.path())
         .await
         .map_err(|error| AppError::io(&part, error))?;
     let _ = tokio::fs::remove_file(state_path(&part)).await;
 
-    Ok(output)
+    Ok(output.path().to_path_buf())
 }
 
 /// Fetches one already-resolved media URL to an exact path.
@@ -373,6 +426,9 @@ async fn transfer(
 /// What a worker reports back. Bytes for the bar, chunks for the resume.
 enum Tick {
     Bytes(u64),
+    /// Bytes reported by an attempt that then failed. Its chunk is fetched
+    /// again from the start, so they are about to arrive a second time.
+    Rewind(u64),
     Chunk(u32),
 }
 
@@ -533,7 +589,17 @@ async fn segmented(
             tick = rx.recv() => match tick {
                 None => break,
                 Some(Tick::Bytes(count)) => {
-                    downloaded += count;
+                    // Capped at the total as a last line of defence: whatever
+                    // the arithmetic, "120 MB of 100 MB" is never true.
+                    downloaded = (downloaded + count).min(total);
+                    report(downloaded, Some(total), meter.sample(downloaded));
+                }
+                Some(Tick::Rewind(count)) => {
+                    downloaded = downloaded.saturating_sub(count);
+                    // The meter keeps its own baseline; a count that goes
+                    // backwards would read as zero speed for one sample, which
+                    // is closer to the truth than a spike.
+                    meter.rebase(downloaded);
                     report(downloaded, Some(total), meter.sample(downloaded));
                 }
                 Some(Tick::Chunk(index)) => {
@@ -569,6 +635,13 @@ async fn segmented(
 }
 
 /// Fetches one range into its place in the file.
+///
+/// Every attempt starts the range over, so the bytes a failed attempt already
+/// reported are taken back before the next one begins. They were not, which
+/// is how a download came to show more received than the file holds: each
+/// retried chunk was counted once per attempt. On one download on a quiet line
+/// retries were rare enough to hide it; two or three downloads sharing a
+/// connection retry constantly, and the figure climbed well past the size.
 async fn fetch_chunk(
     url: &str,
     headers: Option<&HeaderMap>,
@@ -580,20 +653,28 @@ async fn fetch_chunk(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        match copy_range(url, headers, part, start, end, sender).await {
-            Ok(()) => return Ok(()),
-            Err(error) if attempt < CHUNK_ATTEMPTS => {
+        let mut reported = 0u64;
+        let outcome = copy_range(url, headers, part, start, end, sender, &mut reported).await;
+        if outcome.is_ok() {
+            return Ok(());
+        }
+        if reported > 0 {
+            let _ = sender.send(Tick::Rewind(reported)).await;
+        }
+        match outcome {
+            Err(_) if attempt < CHUNK_ATTEMPTS => {
                 // A dropped connection mid-file is ordinary on a home line.
                 // Backing off before retrying is the difference between riding
                 // out a two-second outage and failing an hour-long download.
-                tokio::time::sleep(Duration::from_millis(400 * u64::from(attempt))).await;
-                let _ = error;
+                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
             }
-            Err(error) => return Err(error),
+            other => return other,
         }
     }
 }
 
+/// `reported` counts what this attempt has told the progress bar, so the caller
+/// can take it back if the attempt fails.
 async fn copy_range(
     url: &str,
     headers: Option<&HeaderMap>,
@@ -601,6 +682,7 @@ async fn copy_range(
     start: u64,
     end: u64,
     sender: &mpsc::Sender<Tick>,
+    reported: &mut u64,
 ) -> AppResult<()> {
     let mut response = get(url, headers)
         .header(RANGE, format!("bytes={start}-{end}"))
@@ -652,6 +734,7 @@ async fn copy_range(
         unreported += take as u64;
         if unreported >= REPORT_EVERY {
             let _ = sender.send(Tick::Bytes(unreported)).await;
+            *reported += unreported;
             unreported = 0;
         }
         if written == limit {
@@ -664,16 +747,14 @@ async fn copy_range(
         .map_err(|error| AppError::io(part, error))?;
 
     if written < limit {
-        // Short read. Reported so the attempt is retried rather than the chunk
-        // being marked done with a hole in it.
-        if unreported > 0 {
-            let _ = sender.send(Tick::Bytes(unreported)).await;
-        }
+        // Short read: the attempt is retried rather than the chunk being marked
+        // done with a hole in it. What it did report is rewound by the caller.
         return Err(AppError::network("connection closed before the range ended"));
     }
 
     if unreported > 0 {
         let _ = sender.send(Tick::Bytes(unreported)).await;
+        *reported += unreported;
     }
     Ok(())
 }
@@ -706,7 +787,13 @@ async fn single(
     if resume_from > 0 {
         request = request.header(RANGE, format!("bytes={resume_from}-"));
     }
-    let mut response = request.send().await.map_err(AppError::network)?;
+    // Cancellable from the first byte. A host that accepts the connection and
+    // then sits on the headers would otherwise hold a cancelled job until the
+    // read timeout, a full minute of a card saying "cancelling".
+    let mut response = cancel
+        .guard(request.send())
+        .await?
+        .map_err(AppError::network)?;
 
     if !response.status().is_success() {
         return Err(AppError::network(format!(
@@ -755,7 +842,11 @@ async fn single(
             .await
             .map_err(|error| AppError::io(part, error))?;
         downloaded += bytes.len() as u64;
-        report(downloaded, total, meter.sample(downloaded));
+        // A server that sends more than it announced is still sending the
+        // file; what it announced was wrong, and the bar should not say
+        // "105 MB of 100 MB" about it.
+        let shown_total = total.map(|total| total.max(downloaded));
+        report(downloaded, shown_total, meter.sample(downloaded));
     }
 
     file.flush()
@@ -833,6 +924,12 @@ impl Meter {
             last_bytes: start,
             rate: None,
         }
+    }
+
+    /// Moves the baseline without taking a sample, for a count that went
+    /// backwards -- a retried chunk giving back what it had reported.
+    fn rebase(&mut self, downloaded: u64) {
+        self.last_bytes = self.last_bytes.min(downloaded);
     }
 
     /// Bytes per second, or `None` until there is enough of a window to divide
@@ -1298,6 +1395,13 @@ mod tests {
 
     /// Serves `body` at `/file.bin`, with or without range support.
     fn serve(body: Vec<u8>, ranges_supported: bool) -> Server {
+        serve_with(body, ranges_supported, 0)
+    }
+
+    /// As `serve`, but the first `cut_short` range responses promise the whole
+    /// range and hang up halfway through it -- a dropped connection, which is
+    /// what a busy line does to some of the sockets of several downloads.
+    fn serve_with(body: Vec<u8>, ranges_supported: bool, cut_short: u32) -> Server {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let addr = listener.local_addr().expect("a bound address");
         let ranges = Arc::new(AtomicU32::new(0));
@@ -1338,17 +1442,23 @@ mod tests {
                 let total = body.len() as u64;
                 let response = match requested {
                     Some((start, end)) if ranges_supported && start < total => {
-                        counter.fetch_add(1, Ordering::Relaxed);
+                        let served = counter.fetch_add(1, Ordering::Relaxed);
                         let slice = &body[start as usize..=end as usize];
+                        // The header still promises every byte of the range.
+                        let promised = slice.len();
+                        let slice = if served < cut_short {
+                            &slice[..slice.len() / 2]
+                        } else {
+                            slice
+                        };
                         let mut head = format!(
                             "HTTP/1.1 206 Partial Content\r\n\
                              Content-Type: application/octet-stream\r\n\
                              Accept-Ranges: bytes\r\n\
                              ETag: \"v1\"\r\n\
                              Content-Range: bytes {start}-{end}/{total}\r\n\
-                             Content-Length: {}\r\n\
-                             Connection: close\r\n\r\n",
-                            slice.len()
+                             Content-Length: {promised}\r\n\
+                             Connection: close\r\n\r\n"
                         )
                         .into_bytes();
                         head.extend_from_slice(slice);
@@ -1434,6 +1544,54 @@ mod tests {
         assert_eq!(std::fs::read(&part).unwrap(), expected, "bytes differ");
         // Progress arrived, and never claimed more than the file holds.
         assert!(seen > 0 && seen <= total as u64, "reported {seen}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The bug: a range that failed partway had already reported its bytes,
+    /// and its retry reported them again, so every retried chunk was counted
+    /// twice. With several downloads sharing a line, retries are routine and
+    /// the "downloaded" figure climbed past the size of the file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_retried_range_is_not_counted_twice() {
+        let total = (CHUNK_SIZE * 3 + 777_777) as usize;
+        let expected = body(total);
+        // The first four ranges are cut off halfway, so every first attempt
+        // reports about 2 MiB and then fails.
+        let server = serve_with(expected.clone(), true, 4);
+
+        let dir = scratch("retry");
+        let part = dir.join("file.bin.part");
+        let mut peak = 0u64;
+        let mut last = 0u64;
+        // The count only reaches the total when the last byte lands. Without
+        // the rewind it got there early -- capped, but still claiming a finished
+        // file while ranges were in flight -- and sat there.
+        let mut at_total = 0u32;
+
+        let downloaded = segmented(
+            &CancelSignal::default(),
+            &server.url,
+            None,
+            &part,
+            total as u64,
+            &info(total as u64, true),
+            &mut |done, reported_total, _| {
+                assert_eq!(reported_total, Some(total as u64));
+                peak = peak.max(done);
+                last = done;
+                at_total += u32::from(done == total as u64);
+            },
+        )
+        .await
+        .expect("every range succeeds on its second attempt");
+
+        assert_eq!(downloaded, total as u64);
+        assert_eq!(std::fs::read(&part).unwrap(), expected, "bytes differ");
+        assert!(peak <= total as u64, "reported {peak} of {total}");
+        assert_eq!(last, total as u64, "the last report is the whole file");
+        assert_eq!(at_total, 1, "claimed the whole file before it had arrived");
+        assert!(server.ranges.load(Ordering::Relaxed) > 4, "the cut ranges were retried");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

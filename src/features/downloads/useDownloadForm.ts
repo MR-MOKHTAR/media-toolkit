@@ -22,7 +22,7 @@ import { normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
 import { useJobs } from "../jobs/useJobs";
-import type { LibrarySlot, UrlInfo } from "../jobs/types";
+import type { JobFileKind, LibrarySlot, UrlInfo } from "../jobs/types";
 import type { AudioFormat } from "./useDownloadSettings";
 
 interface Options {
@@ -76,6 +76,22 @@ function slotFor(link: UrlInfo | null, mediaType: "video" | "audio"): LibrarySlo
     }
   }
   return mediaType === "audio" ? "audio" : "video";
+}
+
+/**
+ * What the job card should say the download is, from what the probe found.
+ *
+ * Three answers, and the third is the point. A link the probe named as media
+ * is whichever of the two the toggle asked for. A file is whatever its name and
+ * type say -- an archive, an installer, or a video. A link the probe could not
+ * answer for is `unknown`, not "video": it used to borrow the toggle's answer,
+ * and a zip the probe had merely timed out on was drawn as a film and filed
+ * under Video. The backend names it for certain once its engine has looked.
+ */
+function fileKindFor(link: UrlInfo | null, mediaType: "video" | "audio"): JobFileKind {
+  if (!link) return "unknown";
+  if (link.kind === "file") return fileKindOf(link.title, link.uploader);
+  return mediaType;
 }
 
 /** The one-word format for a file's card: its extension, or -- for the rare
@@ -189,6 +205,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         kind: "download",
         title: values.link?.title.trim() || url,
         source: url,
+        fileKind: fileKindFor(values.link, values.mediaType),
       });
       /** Frees the pending row for the paths that end without a download. */
       const abandon = () => {
@@ -237,8 +254,14 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       // What every download off this form carries, whether it is the one link
       // that was pasted or the fortieth video of a playlist. Only the URL and
       // the title differ between them.
-      const detail =
-        isFile && resolved
+      //
+      // Nothing for a link the probe could not answer: a quality or "MP3" would
+      // be a claim that it is media. The card writes the detail itself once the
+      // backend has said what the link is.
+      const fileKind = fileKindFor(resolved, values.mediaType);
+      const detail = !resolved
+        ? undefined
+        : isFile
           ? detailFor(resolved, t)
           : values.mediaType === "audio"
             ? // Not the container: which one an `original` download lands in
@@ -250,6 +273,9 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
               ? t("audio_format_original")
               : "MP3"
             : values.quality;
+      // A playlist's entries are all media -- yt-dlp listed them -- whatever
+      // the probe of the playlist page itself managed to say.
+      const entryKind: JobFileKind = values.mediaType;
 
       /** Hands the pending row over to whoever queues first, and only once:
        *  every download after that draws its own, from `startDownload`. */
@@ -259,7 +285,12 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         return id;
       };
 
-      const queue = (target: string, title: string, outputName?: string) =>
+      const queue = (
+        target: string,
+        title: string,
+        outputName: string | undefined,
+        kind: JobFileKind,
+      ) =>
         startDownload(
           {
             url: target,
@@ -278,11 +309,21 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
             // stored on a retry button reads the same as one from a build
             // that had no such setting.
             cookiesFrom: values.cookiesFrom || undefined,
+            // The shelf is the backend's to choose unless the user chose a
+            // folder: it decides once it knows what the link is, which is the
+            // only point at which anyone does for certain. `outputDir` stays
+            // on the request as the fallback, and as the folder the form showed.
+            autoFolder: !chosen.current,
           },
           // The URL is the last resort, not the default. It used to be what
           // every direct download was called, because the name was deliberately
           // left out of the request and the card read the same field.
-          { title: title || target, source: target, detail },
+          {
+            title: title || target,
+            source: target,
+            detail: kind === "unknown" ? undefined : detail,
+            fileKind: kind,
+          },
           take(),
         ).catch((error) =>
           notify("error", describeAppError(ipc.toAppError(error), t)),
@@ -305,7 +346,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         // title belongs to the playlist, not to any video in it, and yt-dlp
         // names each file from its own page.
         for (const entry of listing.entries) {
-          void queue(entry.url, entry.title);
+          void queue(entry.url, entry.title, undefined, entryKind);
         }
 
         notify(
@@ -322,7 +363,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         return true;
       }
 
-      void queue(url, name || url, isFile ? undefined : name || undefined);
+      void queue(url, name || url, isFile ? undefined : name || undefined, fileKind);
 
       notify("info", t("job_started"));
       return true;

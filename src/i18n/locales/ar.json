@@ -55,6 +55,8 @@
   "file_kind_document": "مستند",
   "file_kind_image": "صورة",
   "file_kind_other": "ملف",
+  "file_kind_unknown": "غير معروف",
+  "file_kind_unknown_hint": "يُحدَّد النوع عند بدء التنزيل",
   "file_kind_video": "فيديو",
   "filter_active": "قيد التنفيذ",
   "filter_all": "الكل",
