@@ -21,6 +21,8 @@ import type {
   JobSummary,
   LibraryInfo,
   LibrarySlot,
+  NetworkSettings,
+  ProxyTest,
   PlaylistListing,
   ToolStatus,
   UpdateResult,
@@ -72,6 +74,18 @@ export const setLibraryOrganize = (enabled: boolean) =>
 export const setSaveNextToInput = (enabled: boolean) =>
   invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
+// ---------------------------------------------------------------- network
+
+export const getNetworkSettings = () => invoke<NetworkSettings>("get_network_settings");
+
+/** Validates, saves and applies; answers with what is now in force. */
+export const setNetworkSettings = (settings: NetworkSettings) =>
+  invoke<NetworkSettings>("set_network_settings", { settings });
+
+/** Whether YouTube answers through `proxy` (null: without one). */
+export const testProxy = (proxy: string | null) =>
+  invoke<ProxyTest>("test_proxy", { proxy });
+
 export const probeUrl = (url: string, cookiesFrom?: string) =>
   invoke<UrlInfo>("probe_url", { url, cookiesFrom });
 
@@ -111,15 +125,23 @@ export async function chooseFolder(defaultPath?: string) {
   return typeof selected === "string" ? selected : null;
 }
 
-export async function chooseMediaFile(defaultPath?: string) {
+/** The names the file picker shows for its three filters, in the reader's
+ *  language. They were hard-coded English inside a Persian dialog. */
+export interface MediaFilterNames {
+  media: string;
+  video: string;
+  audio: string;
+}
+
+export async function chooseMediaFile(defaultPath: string | undefined, names: MediaFilterNames) {
   const selected = await open({
     multiple: false,
     directory: false,
     defaultPath,
     filters: [
-      { name: "Media", extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS] },
-      { name: "Video", extensions: VIDEO_EXTENSIONS },
-      { name: "Audio", extensions: AUDIO_EXTENSIONS },
+      { name: names.media, extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS] },
+      { name: names.video, extensions: VIDEO_EXTENSIONS },
+      { name: names.audio, extensions: AUDIO_EXTENSIONS },
     ],
   });
   return typeof selected === "string" ? selected : null;
@@ -169,6 +191,15 @@ export const readClipboardText = async (): Promise<string | null> => {
  * Failure is ignored: this is cosmetic, and it is unavailable in a plain
  * browser (`vite dev` without Tauri) and on mobile.
  */
+/** Never throws: no native window in `vite dev`, and a title is cosmetic. */
+export const setWindowTitle = async (title: string) => {
+  try {
+    await getCurrentWindow().setTitle(title);
+  } catch {
+    // No native window to name.
+  }
+};
+
 export const setWindowBackground = async (color: string) => {
   try {
     await getCurrentWindow().setBackgroundColor(color);

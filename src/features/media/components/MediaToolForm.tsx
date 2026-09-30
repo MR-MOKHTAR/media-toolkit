@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
 import type { ToastType } from "../../../types/feedback";
+import { describeAppError } from "../../jobs/errorText";
 import type { JobKind } from "../../jobs/types";
 import { ToolDialog } from "../../tools/ToolDialog";
 import { useDragDropState } from "../useDragDropState";
@@ -148,6 +149,7 @@ export function MediaToolForm({
     <ToolDialog
       tool={config.kind}
       onClose={onDone}
+      dirty={Boolean(file.path)}
       footer={
         <RunButton
           label={t(`tool_${config.kind}`)}
@@ -178,7 +180,14 @@ export function MediaToolForm({
           refuse yet, and saying so early made every file selection flash a
           red line before the metadata arrived. */}
       {file.path && !file.loading && !meetsRequirement && (
-        <p className="text-sm text-danger">{t(`needs_${config.requires}`)}</p>
+        <p className="text-sm text-danger-text">
+          {/* A file that could not be read at all -- corrupt, gone, or no
+              ffprobe to read it with -- is not "a file with no audio or
+              video", which is what this used to say about every failure. */}
+          {file.error
+            ? t("file_read_failed", { reason: describeAppError(file.error, t) })
+            : t(`needs_${config.requires}`)}
+        </p>
       )}
 
       {meetsRequirement && <config.Controls {...context} />}

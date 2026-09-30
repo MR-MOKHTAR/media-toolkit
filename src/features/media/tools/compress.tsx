@@ -12,6 +12,7 @@ import type {
   MediaToolConfig,
   MediaToolContext,
 } from "../components/MediaToolForm";
+import { detailKey } from "../../jobs/detail";
 import { defaultOutputName } from "../useMediaJob";
 
 type Preset = "small" | "balanced" | "high";
@@ -192,12 +193,18 @@ function CompressControls({
         )}
       </label>
 
-      {sized ? (
+      {sized && (wanted === null || wanted * 1024 * 1024 >= info.sizeBytes) ? (
+        // Why the Run button is off. It used to go grey with nothing on the
+        // form saying which of the numbers was the problem.
+        <p className="text-xs text-danger-text">
+          {t("compress_target_invalid", { size: formatBytes(info.sizeBytes, language) })}
+        </p>
+      ) : sized ? (
         <p
           className={cn(
             "text-xs",
             videoKbps !== null && videoKbps < MIN_VIDEO_KBPS
-              ? "text-warning"
+              ? "text-warning-text"
               : "text-fg-muted",
           )}
         >
@@ -231,7 +238,7 @@ export const compressTool: MediaToolConfig<CompressState> = {
     const wanted = targetMb(state);
     return wanted !== null && wanted * 1024 * 1024 < (info?.sizeBytes ?? 0);
   },
-  toRequest: ({ path, info, state, t }) => {
+  toRequest: ({ path, info, state }) => {
     const stem = defaultOutputName(path);
     const audioOnly = isAudioOnly(info);
     const height = audioOnly ? null : state.height;
@@ -249,11 +256,13 @@ export const compressTool: MediaToolConfig<CompressState> = {
         targetSizeMb: wanted,
       },
       title: `${name}.${audioOnly ? "m4a" : "mp4"}`,
+      // Tokens rather than words -- see `renderDetail` -- so the row follows
+      // the app's language instead of the one it was started in.
       detail: wanted
         ? `${wanted} MB`
         : height
-          ? `${t(`compress_${state.preset}`)} · ${height}p`
-          : t(`compress_${state.preset}`),
+          ? `${detailKey(`compress_${state.preset}`)} · ${height}p`
+          : detailKey(`compress_${state.preset}`),
     };
   },
 };

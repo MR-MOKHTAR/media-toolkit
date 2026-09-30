@@ -144,6 +144,13 @@ fn resolve(root: &Path, slot: Slot, organize_by_tool: bool) -> PathBuf {
     }
 }
 
+/// Where a `slot`'s output belongs right now, without creating anything --
+/// for asking whether a finished file is sitting on a shelf.
+pub fn shelf(app: &AppHandle, slot: Slot) -> PathBuf {
+    let settings = settings::load(app);
+    resolve(&root_from(app, &settings), slot, settings.organize_by_tool)
+}
+
 /// The folder a tool should write into, created if it is not there yet.
 pub fn folder(app: &AppHandle, slot: Slot) -> AppResult<PathBuf> {
     let settings = settings::load(app);

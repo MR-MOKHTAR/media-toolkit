@@ -29,7 +29,7 @@ const VARIANTS: Record<Variant, string> = {
   secondary:
     "bg-surface text-fg border border-line hover:bg-surface-hover hover:border-line-strong hover:shadow-(--shadow-raise)",
   ghost: "text-fg-soft hover:bg-surface-hover hover:text-fg",
-  danger: "text-danger hover:bg-danger/10",
+  danger: "text-danger-text hover:bg-danger/10",
   /* A quiet action that is still the good one -- reveal, retry, view. It sits
      beside the button that throws the file away, and the one that opens your
      file must not look like the one that deletes it. */
@@ -37,7 +37,7 @@ const VARIANTS: Record<Variant, string> = {
   /* Destructive, but resting muted rather than red: on the job card this is
      the cancel X next to an accent-tinted reveal button, and two coloured
      icons side by side make neither of them mean anything. */
-  dangerGhost: "text-fg-muted hover:bg-danger/10 hover:text-danger",
+  dangerGhost: "text-fg-muted hover:bg-danger/10 hover:text-danger-text",
 };
 
 /** Three heights and one type size across the two smaller ones.

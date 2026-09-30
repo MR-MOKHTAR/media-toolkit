@@ -1,11 +1,14 @@
-import { Fragment, memo, type ReactNode } from "react";
+import { Fragment, memo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
+  CirclePause,
   Clock3,
   FileQuestionMark,
   FolderOpen,
   Loader2,
+  Play,
   RotateCcw,
   Trash2,
   X,
@@ -34,6 +37,8 @@ import {
   fileKindOf,
   formatLabelOf,
 } from "../../../lib/fileKind";
+import { renderDetail } from "../detail";
+import { describeWhen } from "../when";
 import { describeAppError } from "../errorText";
 import type { DownloadRequest, Job, JobFileKind } from "../types";
 
@@ -41,9 +46,22 @@ interface JobCardProps {
   job: Job;
   language: string;
   cancelling: boolean;
+  /** Its "Download again" is on the way to the backend: the button waits. */
+  retrying: boolean;
+  /** Name the tool that made the row. On the Tasks screen, where every kind
+   *  is listed together, a compressed video and a downloaded one looked
+   *  identical. */
+  showTool?: boolean;
+  /** Changes every half minute, so "2 minutes ago" does not stay "just now"
+   *  on a list nothing else is updating. Read only to re-render. */
+  now?: number;
   onCancel: (id: string) => void;
   onRemove: (id: string) => void;
   onReveal: (path: string) => void;
+  /** Opens the finished file in whatever the system opens it with. */
+  onOpen: (path: string) => void;
+  /** Starts a scheduled row now, whatever its time says. */
+  onStartNow: (id: string) => void;
   /** Runs an unfinished download again, continuing from what it already got.
    *  Only offered when the job carries the request that started it. */
   onRetry: (id: string) => void;
@@ -95,10 +113,10 @@ function fileKindOfJob(job: Job): JobFileKind {
   }
   // The media tools only ever take media in and only ever give media back.
   if (job.kind !== "download") return "video";
-  // A download that got this far has told us nothing about the file, but the
-  // request itself said which of the two engines it asked for.
-  if (job.request) return job.request.mediaType === "audio" ? "audio" : "video";
-  return "other";
+  // A download that got this far has told us nothing about the file. The
+  // request's Video/Audio toggle is not evidence -- it was consulted here once,
+  // and an installer was drawn with a film icon because of it.
+  return "unknown";
 }
 
 const UNKNOWN_TINT = "bg-fg-muted/10 text-fg-muted";
@@ -119,7 +137,7 @@ const tintOf = (kind: JobFileKind): string =>
  * an unknown file is the word "Unknown".
  */
 function detailOfJob(job: Job, kind: JobFileKind, t: TFunction): string | undefined {
-  if (job.detail) return job.detail;
+  if (job.detail) return renderDetail(job.detail, t);
   if (kind === "unknown") return t("file_kind_unknown");
   if ((kind === "video" || kind === "audio") && job.request) {
     return requestDetail(job.request, t);
@@ -132,7 +150,7 @@ function requestDetail(request: DownloadRequest, t: TFunction): string | undefin
   if (request.mediaType === "audio") {
     return request.audioFormat === "original" ? t("audio_format_original") : "MP3";
   }
-  return request.quality;
+  return request.quality && renderDetail(request.quality, t);
 }
 
 /**
@@ -143,7 +161,7 @@ function requestDetail(request: DownloadRequest, t: TFunction): string | undefin
  * twice and migrated through `storage.ts` to say the same thing this says for
  * free -- and it would still be a guess for the whole time the job was running.
  */
-function formatOfJob(job: Job): string | null {
+function formatOfJob(job: Job, detail: string | undefined): string | null {
   // Nothing is known about the file yet, and a chip read off the tail of the
   // link -- `MP4` from `…/watch.mp4?x=1` -- would contradict the "unknown" the
   // rest of the row is saying.
@@ -156,7 +174,7 @@ function formatOfJob(job: Job): string | null {
   // wear a chip reading "5" until the download ended.
   if (!job.outputPath && fileKindOf(source) === "other") return null;
   // `MP3 · MP3` -- Extract audio already puts the container in `detail`.
-  return label === job.detail ? null : label;
+  return label === detail ? null : label;
 }
 
 /**
@@ -178,10 +196,14 @@ function JobCardComponent({
   job,
   language,
   cancelling,
+  retrying,
+  showTool,
   onCancel,
   onRemove,
   onReveal,
+  onOpen,
   onRetry,
+  onStartNow,
 }: JobCardProps) {
   const { t } = useTranslation();
 
@@ -193,10 +215,11 @@ function JobCardComponent({
   if (job.pending) return <PendingCard job={job} />;
 
   const active = job.state === "running" || job.state === "queued";
+  const scheduled = job.state === "scheduled";
   const kind = fileKindOfJob(job);
   const Icon = iconOf(kind);
-  const format = formatOfJob(job);
   const detail = detailOfJob(job, kind, t);
+  const format = formatOfJob(job, detail);
   const isLink = /^https?:\/\//i.test(job.title);
   const revealable = job.state === "completed" && job.outputPath;
 
@@ -212,6 +235,11 @@ function JobCardComponent({
      fall between whatever actually turned up, rather than every token having
      to know which of the others exist. */
   const meta = [
+    showTool && (
+      <span key="tool" className="shrink-0 font-medium">
+        {t(`tool_${job.kind}`)}
+      </span>
+    ),
     // Latin either way -- a container name is not a word in any of the three
     // languages, and mirroring it would only reverse it.
     format && (
@@ -239,24 +267,31 @@ function JobCardComponent({
     // screen animates each row, and its motion wrapper sat between the <ul> and
     // this <li>, so the item was not a child of its own list.
     //
-    // The full title hangs off the card, not off the <p> that shows it. That
-    // <p> is inside a `pointer-events-none` wrapper -- so the stretched reveal
-    // button behind it can be hovered and clicked through the text -- which
-    // also meant it never received a hover and its `title` never opened. On the
-    // card it works, and the action buttons set their own `title`, so hovering
-    // one of those still names the button rather than the job.
+    // The full title hangs off the part of the card that is not a button:
+    // the stretched reveal button on a finished row (the text above it lets
+    // the pointer through), the text itself on any other. It used to hang off
+    // the whole card, and every action button inherited it -- hovering "Show in
+    // folder" drew the styled label and the OS one with the job's name at once.
+    //
+    // Lifts on hover only when a click does something: a running row lifting
+    // under the pointer promised an action that was not there.
     <Card
       padding="sm"
-      interactive
-      title={job.title}
+      interactive={Boolean(revealable)}
       className="relative flex items-start gap-3"
     >
       {revealable && (
         <button
           type="button"
           onClick={() => onReveal(job.outputPath!)}
+          title={job.title}
+          // Named after the job, and out of the Tab order: the "Show in folder"
+          // button beside it does the same thing for a keyboard, and three Tab
+          // stops per finished row -- one of them announced as an instruction
+          // rather than a name -- made a long history slow to get through.
+          aria-label={t("reveal_item", { title: displayTitleOf(job.title) })}
+          tabIndex={-1}
           className="absolute inset-0 rounded-lg transition-colors duration-(--duration-fast) hover:bg-surface-hover"
-          aria-label={t("reveal_hint")}
         />
       )}
 
@@ -271,7 +306,13 @@ function JobCardComponent({
 
       {/* `flex` was missing here, so `flex-col gap-1` did nothing and the two
           blocks below spaced themselves with hand-tuned top margins instead. */}
-      <div className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-1">
+      <div
+        className={cn(
+          "relative flex min-w-0 flex-1 flex-col gap-1",
+          revealable && "pointer-events-none",
+        )}
+        title={revealable ? undefined : job.title}
+      >
         {/* A link is pinned ltr and reads from its own start. A file name is
             not: it is a title in whatever language it was named in, so it keeps
             the card's direction and truncates at its own end. */}
@@ -355,23 +396,37 @@ function JobCardComponent({
         )}
 
         {job.state === "failed" && job.error && (
-          <p
-            className="line-clamp-2 text-xs text-danger"
-            title={describeAppError(job.error, t)}
-          >
-            {describeAppError(job.error, t)}
-          </p>
+          <ErrorLine message={describeAppError(job.error, t)} />
         )}
       </div>
 
       <div className="relative flex shrink-0 items-center gap-1">
+        {scheduled && (
+          <IconButton
+            variant="accent"
+            label={t("start_now")}
+            onClick={() => onStartNow(job.id)}
+          >
+            <Play size={16} />
+          </IconButton>
+        )}
         {retryable && (
           <IconButton
             variant="accent"
             label={t("retry_download")}
+            disabled={retrying}
             onClick={() => onRetry(job.id)}
           >
-            <RotateCcw size={16} />
+            {retrying ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+          </IconButton>
+        )}
+        {revealable && (
+          <IconButton
+            variant="accent"
+            label={t("open_file")}
+            onClick={() => onOpen(job.outputPath!)}
+          >
+            <Play size={16} />
           </IconButton>
         )}
         {revealable && (
@@ -420,6 +475,36 @@ function JobCardComponent({
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Why a job failed, readable to the end.
+ *
+ * Two lines, then a click shows the rest -- the reason is usually one line,
+ * and a yt-dlp tail can be several. It had a `title` for the full text, inside
+ * a wrapper that let no pointer through, so the tooltip never opened and the
+ * end of the message could not be read at all. Selectable, so it can be copied
+ * into a bug report.
+ */
+function ErrorLine({ message }: { message: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((value) => !value)}
+      aria-expanded={open}
+      title={message}
+      // `auto`: backend text is often English inside a Persian row, and its
+      // brackets and punctuation belong to its own direction.
+      dir="auto"
+      className={cn(
+        "select-text text-start text-xs text-danger-text",
+        !open && "line-clamp-2",
+      )}
+    >
+      {message}
+    </button>
   );
 }
 
@@ -575,6 +660,14 @@ function StatusNote({ job, cancelling }: { job: Job; cancelling: boolean }) {
       return [<Loader2 size={12} className="animate-spin" />, t("cancelling"), ""];
 
     switch (job.state) {
+      case "scheduled":
+        return job.missed
+          ? [<CalendarClock size={12} />, t("status_missed"), "text-warning-text"]
+          : [
+              <CalendarClock size={12} />,
+              t("status_scheduled", { when: describeWhen(job.scheduledAt ?? 0, t) }),
+              "text-accent",
+            ];
       case "queued":
         return [<Clock3 size={12} />, t("status_queued"), ""];
       case "running":
@@ -587,12 +680,19 @@ function StatusNote({ job, cancelling }: { job: Job; cancelling: boolean }) {
         return [
           <CheckCircle2 size={12} />,
           t("status_completed"),
-          "text-success",
+          "text-success-text",
         ];
       case "failed":
-        return [<AlertTriangle size={12} />, t("status_failed"), "text-danger"];
       case "cancelled":
-        return [<X size={12} />, t("status_cancelled"), ""];
+        // Nothing failed and nobody cancelled anything: the app closed while
+        // this was running. Said as that, in the neutral tone -- the retry
+        // button beside it is the whole of what there is to do about it.
+        if (job.interrupted) {
+          return [<CirclePause size={12} />, t("status_interrupted"), ""];
+        }
+        return job.state === "failed"
+          ? [<AlertTriangle size={12} />, t("status_failed"), "text-danger-text"]
+          : [<X size={12} />, t("status_cancelled"), ""];
     }
   })();
 

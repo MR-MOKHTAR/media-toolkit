@@ -34,10 +34,18 @@ export function ToolsPanel({ notify }: Props) {
   const { t } = useTranslation();
   const [tools, setTools] = useState<ToolStatus | null>(null);
   const [updating, setUpdating] = useState(false);
+  /** The status call itself failed. Every row used to spin on "Checking…"
+   *  for as long as the panel was open. */
+  const [checkFailed, setCheckFailed] = useState(false);
 
-  useEffect(() => {
-    void ipc.getToolStatus().then(setTools).catch(() => undefined);
-  }, []);
+  const check = () => {
+    setCheckFailed(false);
+    void ipc
+      .getToolStatus()
+      .then(setTools)
+      .catch(() => setCheckFailed(true));
+  };
+  useEffect(check, []);
 
   const updateYtdlp = async () => {
     setUpdating(true);
@@ -56,6 +64,17 @@ export function ToolsPanel({ notify }: Props) {
       setUpdating(false);
     }
   };
+
+  if (checkFailed && !tools) {
+    return (
+      <Card padding="sm" className="flex flex-wrap items-center gap-3">
+        <p className="min-w-0 flex-1 text-sm text-danger-text">{t("load_failed")}</p>
+        <Button variant="secondary" size="sm" onClick={check}>
+          {t("try_again")}
+        </Button>
+      </Card>
+    );
+  }
 
   return (
     <Card padding="none" className="flex flex-col divide-y divide-line">
@@ -95,7 +114,7 @@ export function ToolsPanel({ notify }: Props) {
             <span
               className={cn(
                 "flex shrink-0 items-center gap-1.5 text-sm",
-                ok === null ? "text-fg-muted" : ok ? "text-success" : "text-danger",
+                ok === null ? "text-fg-muted" : ok ? "text-success-text" : "text-danger-text",
               )}
             >
               {ok === null ? (

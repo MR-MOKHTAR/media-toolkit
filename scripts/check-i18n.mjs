@@ -84,6 +84,18 @@ const orphans = reference.filter(
     !dynamicPrefixes.some((prefix) => key.startsWith(prefix)),
 );
 
+// 5. Keys the code asks for that no locale has. i18next renders a missing key
+//    as the key itself, which is how every network error once read
+//    "error_network" -- and nothing above could see it, because the locales
+//    agreed with each other perfectly.
+const referenced = new Set(
+  [...code.matchAll(/\bt\(\s*["']([a-z0-9_]+)["']/g)].map((m) => m[1]),
+);
+const missing = [...referenced].filter((key) => !reference.includes(key)).sort();
+if (missing.length) {
+  problems.push(`code uses ${missing.length} key(s) missing from ${REFERENCE}.json: ${missing.join(", ")}`);
+}
+
 if (problems.length) {
   console.error("✗ i18n check failed:\n");
   for (const problem of problems) console.error(`  ${problem}`);

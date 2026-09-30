@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 
 import { useNavigation, type Route } from "../../app/navigation";
 import { TOOLS } from "../../app/tools";
+import { APP_VERSION } from "../../lib/appVersion";
 import { cn } from "../../lib/cn";
 import { isActiveJob } from "../../features/jobs/types";
 import { useJobs } from "../../features/jobs/useJobs";
@@ -99,7 +100,7 @@ export function AppSidebar({
 
         <IconButton
           label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
-          tooltipSide="right"
+          tooltipSide="end"
           onClick={onToggle}
           aria-expanded={!collapsed}
           className="no-drag"
@@ -111,7 +112,10 @@ export function AppSidebar({
       {/* Scrolls rather than pushing the bottom group off: nine rows plus the
           toggle just fit the 500px minimum window height, and nothing here
           should depend on that staying true. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      {/* The 2px of padding is room for the focus ring: a scroll container
+          clips what its children draw outside their boxes, and the outline
+          with its offset was cut off on both sides of every row. */}
+      <div className="-mx-0.5 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-0.5 py-0.5">
         {TOOLS.map(({ route: target, key, icon }) => (
           <NavItem
             key={key}
@@ -155,6 +159,28 @@ export function AppSidebar({
           }
         />
       </div>
+
+      {/* Which build this is, in the window's bottom-start corner. Last in
+          the rail and in muted text, because it is something looked up when a
+          bug is being reported, not something read on every visit.
+
+          The line follows the sidebar's direction so it sits on the same edge
+          as the rows above it; only the number itself is pinned ltr -- "v1.5.0"
+          reads the same way in every language, in ASCII digits like every
+          other version string in the app. */}
+      {APP_VERSION && (
+        <p
+          title={t("app_version", { version: APP_VERSION })}
+          className={cn(
+            "shrink-0 truncate pb-1 text-[11px] leading-4 text-fg-muted select-text",
+            collapsed ? "text-center" : "ps-3 text-start",
+          )}
+        >
+          <span dir="ltr" className="tnum">
+            v{APP_VERSION}
+          </span>
+        </p>
+      )}
     </nav>
   );
 }

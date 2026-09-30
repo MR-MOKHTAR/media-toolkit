@@ -1,14 +1,25 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
   Download,
   FolderOpen,
+  Globe,
   SlidersHorizontal,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { SettingsSection } from "../../app/navigation";
+import { useNavigation, type SettingsSection } from "../../app/navigation";
+import { Button } from "../../components/ui/Button";
 import { FormCard } from "../../components/ui/Card";
 import { navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
@@ -16,6 +27,7 @@ import type { AppLanguage } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { GeneralPanel } from "./GeneralPanel";
+import { NetworkPanel } from "./NetworkPanel";
 import { StoragePanel } from "./StoragePanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { SETTINGS_SECTIONS, useSettingsSection } from "./useSettingsSection";
@@ -76,6 +88,11 @@ const SECTIONS: Record<SettingsSection, SectionDefinition> = {
     noteKey: "settings_downloads_note",
     icon: Download,
   },
+  network: {
+    labelKey: "settings_network",
+    noteKey: "settings_network_note",
+    icon: Globe,
+  },
   tools: {
     labelKey: "bundled_tools",
     noteKey: "tools_bundled_note",
@@ -86,20 +103,30 @@ const SECTIONS: Record<SettingsSection, SectionDefinition> = {
 /** The rail, as it is listed and stepped through. */
 const RAIL = SETTINGS_SECTIONS.map((key) => ({ key, ...SECTIONS[key] }));
 
+/** The room the screen itself has before the rail is worth being a column:
+ *  a 192px rail and a panel that can still hold a path and its buttons. */
+const COLUMN_MIN_WIDTH = 640;
+
 /** Whether the rail is a column beside the panel or a bar above it. Read here
  *  rather than left to CSS because the two forms take different arrow keys and
- *  announce a different orientation. Matches the `sm:` breakpoint below. */
-function useVerticalRail() {
-  const [vertical, setVertical] = useState(
-    () => window.matchMedia("(min-width: 640px)").matches,
-  );
+ *  announce a different orientation.
+ *
+ *  Measured on the screen, not the window. The window's width said nothing
+ *  about the room left once the sidebar is open: a 700px window kept the
+ *  column and left the panel about 170px, which is where the Storage row's
+ *  buttons spilled out of their card. */
+function useVerticalRail(container: RefObject<HTMLElement | null>) {
+  const [vertical, setVertical] = useState(true);
 
   useEffect(() => {
-    const query = window.matchMedia("(min-width: 640px)");
-    const onChange = (event: MediaQueryListEvent) => setVertical(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
+    const node = container.current;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setVertical(entry.contentRect.width >= COLUMN_MIN_WIDTH);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [container]);
 
   return vertical;
 }
@@ -142,7 +169,18 @@ export function SettingsScreen({
   const { t } = useTranslation();
   const { section: active, select } = useSettingsSection(initialSection);
   const definition = SECTIONS[active];
-  const vertical = useVerticalRail();
+  const screen = useRef<HTMLDivElement>(null);
+  const vertical = useVerticalRail(screen);
+  const { stack, back } = useNavigation();
+  // Arrived from a form that sent the user here to change one of its
+  // defaults -- the download form's quality hint does. The trip back, with
+  // the half-filled form still open, used to need Escape or Alt+Left, and
+  // nothing on screen said either existed; the sidebar's own Download row
+  // opens a fresh list and loses the link.
+  const cameFrom = stack.length > 1 ? stack[stack.length - 2] : null;
+  const returnTo =
+    cameFrom && "composing" in cameFrom && cameFrom.composing ? cameFrom.name : null;
+  const BackIcon = document.documentElement.dir === "rtl" ? ArrowRight : ArrowLeft;
   const tabs = useRef(new Map<SettingsSection, HTMLButtonElement>());
 
   // Moving the selection *is* moving the focus, which is what makes a tablist a
@@ -189,6 +227,7 @@ export function SettingsScreen({
     ),
     storage: <StoragePanel notify={notify} />,
     downloads: <DownloadsPanel />,
+    network: <NetworkPanel notify={notify} />,
     tools: (
       <>
         <ToolsPanel notify={notify} />
@@ -203,21 +242,22 @@ export function SettingsScreen({
     // can only do that if this row has the window's height rather than the
     // content's. The panel then carries the scrolling, which also means changing
     // section never scrolls the rail out of reach.
-    <div className="flex h-full min-h-0 flex-col sm:flex-row">
+    <div ref={screen} className={cn("flex h-full min-h-0", vertical ? "flex-row" : "flex-col")}>
       <div
         role="tablist"
         aria-label={t("settings_sections")}
         aria-orientation={vertical ? "vertical" : "horizontal"}
         onKeyDown={onKeyDown}
         className={cn(
-          "flex shrink-0 gap-1 border-line bg-surface-soft",
-          // Narrow: a tab bar across the top. It wraps rather than scrolls --
-          // five labels do not fit 600px of window in any of the three
-          // languages, and a tab that has to be scrolled into view is a tab
-          // nobody finds.
-          "flex-wrap border-b p-2",
-          // Wide: a column against the app sidebar, sharing its tint and rule.
-          "sm:w-48 sm:flex-col sm:flex-nowrap sm:overflow-y-auto sm:border-b-0 sm:border-e sm:p-2 lg:w-56",
+          "flex shrink-0 gap-1 border-line bg-surface-soft p-2",
+          vertical
+            ? // Wide: a column against the app sidebar, sharing its tint and rule.
+              "w-48 flex-col overflow-y-auto border-e lg:w-56"
+            : // Narrow: a tab bar across the top. It wraps rather than scrolls
+              // -- five labels do not fit a narrow panel in any of the three
+              // languages, and a tab that has to be scrolled into view is a
+              // tab nobody finds.
+              "flex-wrap border-b",
         )}
       >
         {RAIL.map(({ key, labelKey, icon: Icon }) => {
@@ -242,13 +282,13 @@ export function SettingsScreen({
                 selected ? "active" : "idle",
                 cn(
                   // Narrow, this is one tab in a wrapping row, so it sizes to
-                  // its label instead of filling the rail.
-                  "w-auto shrink-0",
-                  // The marker the app sidebar uses for the screen you are on,
-                  // borrowed only in the column form -- on a row of tabs a bar
-                  // down the leading edge points at nothing.
-                  "sm:w-full sm:border-s-2",
-                  selected ? "sm:border-accent" : "sm:border-transparent",
+                  // its label instead of filling the rail. The marker the app
+                  // sidebar uses for the screen you are on is borrowed only in
+                  // the column form -- on a row of tabs a bar down the leading
+                  // edge points at nothing.
+                  vertical
+                    ? cn("w-full border-s-2", selected ? "border-accent" : "border-transparent")
+                    : "w-auto shrink-0",
                 ),
               )}
             >
@@ -263,6 +303,13 @@ export function SettingsScreen({
           furniture. `min-w-0` so a long path inside can truncate rather than
           widening the row past the window. */}
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-6">
+        {returnTo && (
+          <div className="mx-auto mb-3 w-full max-w-xl xl:max-w-2xl">
+            <Button variant="ghost" size="sm" icon={<BackIcon size={15} />} onClick={back}>
+              {t("back_to", { screen: t(`tool_${returnTo}`) })}
+            </Button>
+          </div>
+        )}
         <FormCard
           key={active}
           role="tabpanel"

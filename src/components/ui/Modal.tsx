@@ -9,6 +9,10 @@ import { cn } from "../../lib/cn";
 interface ModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Something is loaded that a stray click outside would throw away -- a
+   *  picked file with its trim range, a pasted link. Escape and the close
+   *  button still close; only the click that may have been a miss does not. */
+  keepOnOutsideClick?: boolean;
   title: string;
   /** One line under the title. Optional, but a dialog that asks for something
    *  usually has to say what for. */
@@ -44,6 +48,7 @@ interface ModalProps {
 export function Modal({
   open,
   onOpenChange,
+  keepOnOutsideClick,
   title,
   description,
   icon,
@@ -72,7 +77,17 @@ export function Modal({
           // in the capture phase, which runs before anything on window bubbles
           // -- so stopping propagation from inside this callback is enough, and
           // neither component has to know the other exists.
-          onEscapeKeyDown={(event) => event.stopPropagation()}
+          onPointerDownOutside={(event) => {
+            if (keepOnOutsideClick) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            event.stopPropagation();
+            // A field with an Escape of its own -- the trim time fields undo an
+            // edit with it -- keeps the key. Radix's listener runs before the
+            // field's, so without this the whole form closed instead.
+            const target = event.target as HTMLElement | null;
+            if (target?.closest("[data-own-escape]")) event.preventDefault();
+          }}
           // Focus the form, not the way out of it.
           //
           // Radix opens on the first tabbable thing inside the content, which

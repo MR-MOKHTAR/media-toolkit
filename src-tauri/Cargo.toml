@@ -37,6 +37,11 @@ liblzma = { version = "0.4", features = ["static"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2.7.0"
+# One running copy. Two instances share the library folder and the job history
+# but none of the in-process locks, claims and queues that keep concurrent jobs
+# apart -- the second one marked the first one's running downloads as failed,
+# and its retry button started a second writer on the same partial file.
+tauri-plugin-single-instance = "2"
 # Copying a transcript out of the app. navigator.clipboard is unreliable in the
 # WebKitGTK webview this ships on for Linux -- and works in `vite dev` on
 # localhost, which is the worst kind of difference: a copy button that passes
@@ -53,6 +58,9 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "multipart",
+    # A SOCKS5 proxy (v2rayN, Clash and most local proxy clients offer one) for
+    # the direct downloader -- see `network::proxy`.
+    "socks",
 ] }
 
 # Killing a job's whole process group on cancel -- see `process::kill_tree`.

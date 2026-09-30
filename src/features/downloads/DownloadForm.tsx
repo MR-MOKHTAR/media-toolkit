@@ -1,19 +1,24 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  CalendarClock,
   FileAudio,
   FileQuestionMark,
+  FileVideo2,
   Gauge,
   Link2,
   ListVideo,
   Music2,
   RotateCw,
   Video,
+  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
 import { Card, ControlGroup, Field } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
+import { Select } from "../../components/ui/Select";
+import { TextArea } from "../../components/ui/TextArea";
 import { TextInput } from "../../components/ui/TextInput";
 import { cn } from "../../lib/cn";
 import {
@@ -26,7 +31,7 @@ import {
 } from "../../lib/fileKind";
 import * as ipc from "../../lib/ipc";
 import { formatBytes, formatCount, formatDuration } from "../../lib/format";
-import { firstUrlIn, looksLikeUrl, normalizeUrl } from "../../lib/url";
+import { allUrlsIn, firstUrlIn, looksLikeUrl, normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import {
   OutputFolderRow,
@@ -34,6 +39,7 @@ import {
 } from "../media/components/ToolFormParts";
 import { ToolDialog } from "../tools/ToolDialog";
 import type { UrlInfo } from "../jobs/types";
+import { describeWhen, nextOccurrence } from "../jobs/when";
 import { useDownloadForm, type PlaylistChoice } from "./useDownloadForm";
 import { qualityLabel, useDownloadSettings } from "./useDownloadSettings";
 
@@ -97,11 +103,16 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
    *  downstream keys off this rather than the raw text, so the preview, the
    *  probe and the request are all about the same link. */
   const link = normalizeUrl(url);
-  const info = probe?.url === link ? probe.info : null;
+  /** Every link in the field. Two or more is a batch: a download each, each
+   *  identified by the backend on its own -- a probe per line here would be a
+   *  yt-dlp spawn per line before anything started. */
+  const links = allUrlsIn(url);
+  const batch = links.length > 1;
+  const info = !batch && probe?.url === link ? probe.info : null;
   /** The probe for this link came back empty-handed. Not a reason to refuse
    *  the download -- the backend looks again, properly, once it starts -- but
    *  a reason to say what is and is not known rather than show nothing. */
-  const probeFailed = probe?.url === link && probe.info === null;
+  const probeFailed = !batch && probe?.url === link && probe.info === null;
 
   // A file link has nothing to choose: it is fetched exactly as it is, so the
   // media toggle and the quality picker would both be lying about what is
@@ -120,14 +131,37 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   const [playlist, setPlaylist] = useState<PlaylistChoice>("one");
   useEffect(() => setPlaylist("one"), [link]);
 
-  const { savePath, toolsReady, starting, selectFolder, start } = useDownloadForm({
+  /** How many downloads run at once -- a setting now, and what the playlist
+   *  hint promises. It used to say "four at a time" whatever was set. */
+  const [slots, setSlots] = useState(4);
+  useEffect(() => {
+    void ipc
+      .getNetworkSettings()
+      .then((network) => setSlots(network.maxDownloads))
+      .catch(() => undefined);
+  }, []);
+
+  const { savePath, autoFolder, toolsReady, starting, selectFolder, start } = useDownloadForm({
     isOnline,
     notify,
     mediaType,
     link: info,
   });
 
+  /** Now, or at a time -- see `WhenRow`. Per visit to the form, not
+   *  remembered: a schedule is a decision about these links, and the next
+   *  link pasted is most likely wanted now. The time itself is remembered. */
+  const [when, setWhen] = useState<"now" | "later">("now");
+  const startAt = when === "later" ? nextOccurrence(settings.scheduleTime) : null;
+
+  const areaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => inputRef.current?.focus(), []);
+  // The field changes shape when a second link arrives, and the one being
+  // typed into should not lose the caret for it.
+  useEffect(() => {
+    if (batch) areaRef.current?.focus();
+    else inputRef.current?.focus();
+  }, [batch]);
 
   // The link that is already on the clipboard, put in the field.
   //
@@ -145,7 +179,9 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     if (initialUrl?.trim()) return;
     let cancelled = false;
     void ipc.readClipboardText().then((text) => {
-      const found = text && firstUrlIn(text);
+      // A list copied from somewhere else fills the field as a list.
+      const all = text ? allUrlsIn(text) : [];
+      const found = all.length > 1 ? all.join("\n") : text && firstUrlIn(text);
       // `urlRef` rather than `url`: this effect runs once and its closure would
       // hold the empty string forever, so the field's own state is the only
       // thing that can say whether anything has been typed since.
@@ -161,13 +197,13 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   // Selecting has to wait for the value to be on the input, which is the render
   // after `setUrl` -- hence a second effect rather than a call beside it.
   useEffect(() => {
-    if (filledFromClipboard) inputRef.current?.select();
+    if (filledFromClipboard) (areaRef.current ?? inputRef.current)?.select();
   }, [filledFromClipboard]);
 
   // Debounced: pasting a link fires a change per character otherwise, and a
   // probe is at best an HTTP round trip and at worst a yt-dlp spawn.
   useEffect(() => {
-    if (!looksLikeUrl(link) || !isOnline) {
+    if (batch || !looksLikeUrl(link) || !isOnline) {
       setProbe(null);
       return;
     }
@@ -191,9 +227,23 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       clearTimeout(timer);
       setProbing(false);
     };
-  }, [link, isOnline, settings.cookiesFrom]);
+  }, [batch, link, isOnline, settings.cookiesFrom]);
+
+  /** The button's own rule, so Enter in the field -- which does not go
+   *  through the button -- cannot start what the button would refuse. Only a
+   *  link is worth submitting: "hello" used to close the dialog, flash a row
+   *  and come back as a raw backend error. */
+  // A batch is not held back by a missing yt-dlp: direct files in it do not
+  // need one, and a page that does fails on its own row, saying why.
+  const canSubmit =
+    looksLikeUrl(link) &&
+    Boolean(savePath) &&
+    isOnline &&
+    !starting &&
+    (batch || toolsReady || isFile);
 
   const submit = () => {
+    if (!canSubmit) return;
     void start(
       {
         url: link,
@@ -207,6 +257,8 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         cookiesFrom: settings.cookiesFrom,
         parallel: settings.parallel,
         link: info,
+        urls: batch ? links : undefined,
+        startAt,
       },
       // Closes as soon as the request is accepted, not when the backend has
       // finished looking the link up. The download appears as the top row of
@@ -220,12 +272,17 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     <ToolDialog
       tool="download"
       onClose={onDone}
+      dirty={looksLikeUrl(link)}
       footer={
         <RunButton
-          label={t("start_download")}
-          disabled={
-            !link || !savePath || !isOnline || starting || (!toolsReady && !isFile)
+          label={
+            batch
+              ? t("batch_start", { links: formatCount(links.length, i18n.language) })
+              : when === "later"
+                ? t("schedule_button")
+                : t("start_download")
           }
+          disabled={!canSubmit}
           onClick={submit}
         />
       }
@@ -240,6 +297,27 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
           announces instead of a placeholder that disappears on the first
           keystroke. */}
       <Field label={t("url_label")} htmlFor="download-url">
+        {batch ? (
+          // More than one link: a list, one per line, edited as text. Enter
+          // is a new line here; Ctrl+Enter starts them, like any multi-line
+          // field that submits.
+          <TextArea
+            ref={areaRef}
+            id="download-url"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            rows={Math.min(8, Math.max(3, links.length + 1))}
+            dir="ltr"
+            spellCheck={false}
+            placeholder={t("url_placeholder")}
+          />
+        ) : (
         <div className="relative">
           <Link2
             size={17}
@@ -261,6 +339,17 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
             // to have something to show.
             onPaste={(event) => {
               const text = event.clipboardData.getData("text");
+              // Several links: the field becomes a list of them -- added to
+              // what is there, unless all of that was selected to be replaced.
+              const input = event.currentTarget;
+              const replacing =
+                input.selectionStart === 0 && input.selectionEnd === input.value.length;
+              const several = allUrlsIn(replacing ? text : `${url}\n${text}`);
+              if (several.length > 1) {
+                event.preventDefault();
+                setUrl(several.join("\n"));
+                return;
+              }
               const found = firstUrlIn(text);
               if (!found || found === text.trim()) return;
               event.preventDefault();
@@ -285,7 +374,17 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
             className={cn("h-12", isRtl ? "pr-11" : "pl-11")}
           />
         </div>
+        )}
       </Field>
+
+      {batch && (
+        <BatchList
+          links={links}
+          onRemove={(target) =>
+            setUrl(links.filter((other) => other !== target).join("\n"))
+          }
+        />
+      )}
 
       {(info || probing) && (
         <LinkPreview info={info} kind={fileKind} probing={probing} />
@@ -373,6 +472,14 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
               }}
             />
 
+            {/* Said out loud for a link nobody could identify: the choice is
+                recorded, and applied only if the link does turn out to be a
+                page with video on it. An installer behind it is saved as an
+                installer, not as whatever this control happened to say. */}
+            {probeFailed && (
+              <p className="text-xs text-fg-muted">{t("download_as_unknown_hint")}</p>
+            )}
+
             {/* The other question this link raises, and only when it raises
                 one. The backend has been reporting that a link is a playlist
                 since the feature existed, to a form that showed a warning and
@@ -403,7 +510,9 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
                 {playlist === "all" && (
                   <p className="flex items-center gap-1.5 text-xs text-fg-muted">
                     <ListVideo size={12} className="shrink-0" />
-                    <span>{t("playlist_all_hint")}</span>
+                    <span>
+                      {t("playlist_all_hint", { slots: formatCount(slots, i18n.language) })}
+                    </span>
                   </p>
                 )}
               </div>
@@ -412,13 +521,27 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         )
       )}
 
-      <OutputFolderRow folder={savePath} onChoose={selectFolder} />
+      {looksLikeUrl(link) && (
+        <WhenRow
+          when={when}
+          onWhenChange={setWhen}
+          time={settings.scheduleTime}
+          onTimeChange={(time) => update("scheduleTime", time)}
+          startAt={startAt}
+        />
+      )}
+
+      <OutputFolderRow
+        folder={savePath}
+        label={autoFolder && looksLikeUrl(link) ? t("save_auto_by_type") : undefined}
+        onChoose={selectFolder}
+      />
 
       {/* Only when it matters. yt-dlp is needed for a page and not for a file,
           so a missing one is a warning on one kind of link and nothing at all
           on the other. */}
       {!toolsReady && !isFile && (
-        <p className="text-sm text-warning">{t("ytdlp_not_found")}</p>
+        <p className="text-sm text-warning-text">{t("ytdlp_not_found")}</p>
       )}
     </ToolDialog>
   );
@@ -442,6 +565,11 @@ function LinkPreview({
 }) {
   const { t, i18n } = useTranslation();
   const Icon = kind ? FILE_KIND_ICON[kind] : null;
+  /** A thumbnail URL that did not load -- expired, blocked, or refused to a
+   *  client without the site's cookies. The broken-image glyph is not a
+   *  preview. */
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  useEffect(() => setThumbnailFailed(false), [info?.thumbnail]);
 
   return (
     <Card padding="sm" className="flex items-center gap-3">
@@ -454,12 +582,19 @@ function LinkPreview({
         >
           <Icon size={20} />
         </span>
-      ) : info?.thumbnail ? (
+      ) : info?.thumbnail && !thumbnailFailed ? (
         <img
           src={info.thumbnail}
           alt=""
+          onError={() => setThumbnailFailed(true)}
           className="h-10 w-16 shrink-0 rounded-sm object-cover"
         />
+      ) : info ? (
+        // A page with no picture to show. It used to keep the loading pulse
+        // after the probe had answered, which read as a preview still coming.
+        <span className="flex h-10 w-16 shrink-0 items-center justify-center rounded-sm bg-surface-soft text-fg-muted">
+          <FileVideo2 size={20} />
+        </span>
       ) : (
         <div className="h-10 w-16 shrink-0 animate-pulse rounded-sm bg-surface-soft" />
       )}
@@ -521,6 +656,126 @@ function LinkPreview({
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * The links a batch will download, one row each, with a way to drop one.
+ *
+ * The text field above is the list as typed; this is the list as understood --
+ * tidied, de-duplicated, and without the prose a link was pasted inside. Each
+ * row becomes a download of its own, whatever the others turn out to be.
+ */
+function BatchList({
+  links,
+  onRemove,
+}: {
+  links: string[];
+  onRemove: (link: string) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  return (
+    <Card padding="none" className="flex flex-col">
+      <p className="border-b border-line px-3 py-2 text-xs font-medium text-fg-soft">
+        {t("batch_count", { links: formatCount(links.length, i18n.language) })}
+      </p>
+      <ul className="max-h-40 overflow-y-auto py-1">
+        {links.map((link) => (
+          <li key={link} className="flex items-center gap-2 px-3 py-1">
+            <Link2 size={13} className="shrink-0 text-fg-muted" />
+            <span dir="ltr" className="min-w-0 flex-1 truncate text-sm text-fg-soft" title={link}>
+              {link}
+            </span>
+            <button
+              type="button"
+              onClick={() => onRemove(link)}
+              aria-label={t("batch_remove", { link })}
+              className="flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-danger/10 hover:text-danger-text"
+            >
+              <X size={13} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** 00 through 23, and the minutes in steps of five -- a schedule is "at two",
+ *  not "at 02:07". */
+const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"));
+const MINUTES = Array.from({ length: 12 }, (_, step) => String(step * 5).padStart(2, "0"));
+
+/**
+ * Now, or at a time.
+ *
+ * For the internet packages that are free or cheaper at night: paste the links
+ * in the evening, set 02:00, and leave the app open. Two selects rather than a
+ * time input, whose rendering in the Linux webview is a bare text box with no
+ * hint of the format it wants. The next time the clock reads that is the one
+ * used -- today if still ahead, tomorrow otherwise -- and the line under the
+ * control says which, so "02:00" is never ambiguous.
+ */
+function WhenRow({
+  when,
+  onWhenChange,
+  time,
+  onTimeChange,
+  startAt,
+}: {
+  when: "now" | "later";
+  onWhenChange: (when: "now" | "later") => void;
+  time: string;
+  onTimeChange: (time: string) => void;
+  startAt: number | null;
+}) {
+  const { t } = useTranslation();
+  const [hour = "02", minute = "00"] = time.split(":");
+  // A stored minute that is not on the five-minute grid still has to show.
+  const minuteOptions = MINUTES.includes(minute) ? MINUTES : [...MINUTES, minute].sort();
+
+  return (
+    <ControlGroup>
+      <Segmented
+        label={t("schedule_when")}
+        value={when}
+        onChange={onWhenChange}
+        options={[
+          { value: "now", label: t("schedule_now") },
+          { value: "later", label: t("schedule_later"), icon: <CalendarClock size={16} /> },
+        ]}
+      />
+      {when === "later" && (
+        <div className="flex flex-col gap-1.5">
+          {/* A clock reads the same way in every language: hours, then minutes. */}
+          <div dir="ltr" className="flex items-center gap-2">
+            <Select
+              aria-label={t("schedule_hour")}
+              value={hour}
+              onChange={(next) => onTimeChange(`${next}:${minute}`)}
+              options={HOURS.map((value) => ({ value, label: value }))}
+              className="w-24 tnum"
+            />
+            <span className="text-fg-muted" aria-hidden>
+              :
+            </span>
+            <Select
+              aria-label={t("schedule_minute")}
+              value={minute}
+              onChange={(next) => onTimeChange(`${hour}:${next}`)}
+              options={minuteOptions.map((value) => ({ value, label: value }))}
+              className="w-24 tnum"
+            />
+          </div>
+          {startAt !== null && (
+            <p className="flex items-center gap-1.5 text-xs text-fg-muted">
+              <CalendarClock size={12} className="shrink-0" />
+              <span>{t("schedule_hint", { when: describeWhen(startAt, t) })}</span>
+            </p>
+          )}
+        </div>
+      )}
+    </ControlGroup>
   );
 }
 
@@ -619,7 +874,7 @@ function FileNotes({ resumable }: { resumable: boolean }) {
       <p
         className={cn(
           "flex items-center justify-center gap-1.5 text-xs",
-          resumable ? "text-success" : "text-fg-muted",
+          resumable ? "text-success-text" : "text-fg-muted",
         )}
       >
         <RotateCw size={12} className="shrink-0" />

@@ -8,6 +8,7 @@ import type {
   MediaToolContext,
 } from "../components/MediaToolForm";
 import { RangeSlider } from "../components/RangeSlider";
+import { detailKey } from "../../jobs/detail";
 import { defaultOutputName } from "../useMediaJob";
 
 interface TrimState {
@@ -57,7 +58,7 @@ export const trimTool: MediaToolConfig<TrimState> = {
   initialState: { start: 0, end: 0, exact: false },
   Controls: TrimControls,
   isReady: ({ state }) => state.end > state.start,
-  toRequest: ({ path, state, t }) => {
+  toRequest: ({ path, state }) => {
     const stem = defaultOutputName(path);
     // Mirrors what the backend picks (media/ops.rs): a stream copy keeps the
     // source container, an exact cut has to re-encode and lands as MP4.
@@ -71,7 +72,7 @@ export const trimTool: MediaToolConfig<TrimState> = {
         exact: state.exact,
       },
       title: `${stem}-clip.${ext}`,
-      detail: state.exact ? t("trim_exact") : t("trim_fast"),
+      detail: detailKey(state.exact ? "trim_exact" : "trim_fast"),
     };
   },
 };

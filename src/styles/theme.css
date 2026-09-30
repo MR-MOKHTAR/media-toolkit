@@ -99,7 +99,10 @@
 
   --color-fg: #172033;
   --color-fg-soft: #526079;
-  --color-fg-muted: #7a8599;
+  /* 5.4:1 on white. It was #7a8599, 3.7:1 -- and it is the colour of every
+     hint, every metadata line and every subtitle in the app, so most of the
+     small text was under the 4.5:1 floor. */
+  --color-fg-muted: #5f6b7e;
 
   --color-line: #dfe4ec;
   --color-line-strong: #cfd6e2;
@@ -141,6 +144,14 @@
   --color-success: #12924e;
   --color-danger: #db3d4b;
   --color-warning: #d4870d;
+  /* The same three hues a step deeper, for small text. The fills and ticks
+     above stay as they are; as 12px text on white they measured 4.0:1, 4.4:1
+     and 2.9:1 -- the warning under the download field and the offline banner
+     were the hardest things in the app to read. Dark mode has room at the
+     base colours and simply repeats them. */
+  --color-success-text: #0f7a41;
+  --color-danger-text: #c42b3a;
+  --color-warning-text: #a65f00;
 
   /* Audio. Far enough from the accent blue to read as a different kind at a
      glance, and not close to danger red or success green. */
@@ -177,8 +188,10 @@
    * here is consumed only by the components that were updated; nothing
    * in the base layer depends on them, so the old look is still the
    * fallback if a class is missing. */
-  --gradient-accent: linear-gradient(135deg, #0b8177, #22c7b8);
-  --gradient-accent-hover: linear-gradient(135deg, #0f766e, #10a99b);
+  /* Dark enough end to end for the white label on a primary button: the light
+     end was #22c7b8, where "Start download" read at about 2:1. */
+  --gradient-accent: linear-gradient(135deg, #0a6f67, #0b8177);
+  --gradient-accent-hover: linear-gradient(135deg, #085e57, #0a6f67);
   /* The halo that turns behind a tool's mark. Conic rather than linear because
      it is rotated: a linear gradient spun around its centre reverses direction
      twice a turn and reads as a wobble, while a conic one has no seam to catch
@@ -200,7 +213,11 @@
      thing that must be identical everywhere or it reads as a rendering bug.
      The controls that are not typed into keep the global :focus-visible
      outline instead -- one idiom for entry, one for everything else. */
-  --shadow-focus: 0 0 0 3px var(--color-accent-soft), var(--shadow-glow);
+  /* The accent itself, one pixel outside the accent border: a 2px edge a
+     focused field can be found by. It was a 3px ring of accent-soft, which on
+     a white field in light mode is white on white -- focus showed only as the
+     border's change of colour. */
+  --shadow-focus: 0 0 0 1px var(--color-accent), var(--shadow-glow);
 
   --color-surface-glass: rgba(255, 255, 255, 0.55);
   /* A length, not `blur(16px)`, and named into Tailwind's --blur-* namespace
@@ -259,6 +276,9 @@
     --color-success: #45d17f;
     --color-danger: #f06470;
     --color-warning: #f0ac40;
+    --color-success-text: #45d17f;
+    --color-danger-text: #f06470;
+    --color-warning-text: #f0ac40;
 
     --color-media-audio: #a68bfa;
     --color-media-image: #e8944a;

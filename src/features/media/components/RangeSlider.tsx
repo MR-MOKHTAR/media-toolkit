@@ -151,6 +151,8 @@ function TimeField({
       // are hard to read and awkward to edit.
       dir="ltr"
       className="w-24 shrink-0 text-center tnum"
+      // Escape here undoes the edit; the dialog must not take it -- see Modal.
+      data-own-escape=""
       value={text}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}

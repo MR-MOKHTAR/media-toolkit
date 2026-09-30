@@ -14,6 +14,8 @@ interface SelectProps<T extends string> {
   onChange: (value: T) => void;
   /** Wired to the trigger, so the visible <label> still names the control. */
   id?: string;
+  /** The name, for a select with no visible label of its own. */
+  "aria-label"?: string;
   className?: string;
 }
 
@@ -40,6 +42,7 @@ export function Select<T extends string>({
   options,
   onChange,
   id,
+  "aria-label": ariaLabel,
   className,
 }: SelectProps<T>) {
   return (
@@ -49,6 +52,7 @@ export function Select<T extends string>({
     >
       <RadixSelect.Trigger
         id={id}
+        aria-label={ariaLabel}
         className={cn(
           // The size of the controls it shares a row with, not of `TextInput`:
           // this sits beside a format group, and the row reads as one band only

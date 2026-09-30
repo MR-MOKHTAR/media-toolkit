@@ -89,10 +89,14 @@ pub async fn update_ytdlp(app: &AppHandle) -> AppResult<UpdateResult> {
 }
 
 async fn download(url: &str, dest: &Path) -> AppResult<()> {
-    let response = reqwest::Client::builder()
+    // Through the proxy like everything else: where GitHub is reachable only
+    // through it, the update button was the one thing that still went direct.
+    let builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
-        .user_agent("media-toolkit")
-        .build().map(|client| client.get(url))
+        .user_agent("media-toolkit");
+    let response = crate::network::proxied(builder, crate::network::proxy().as_deref())
+        .build()
+        .map(|client| client.get(url))
         .map_err(|e| AppError::spawn("updater", e))?
         .send()
         .await

@@ -2,12 +2,23 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+import pkg from "./package.json";
+
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [tailwindcss(), react()],
+
+  // The version the sidebar prints, fixed at build time. package.json,
+  // tauri.conf.json and Cargo.toml are kept equal by `scripts/set-version.mjs`,
+  // and the release workflow refuses a tag they disagree on -- so this is the
+  // number the installer is named with, without an IPC round trip on every
+  // launch to ask the backend for it.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

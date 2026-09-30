@@ -127,7 +127,10 @@ export function useAppPreferences() {
       // Keep the in-memory preference when persistent storage is unavailable.
     }
 
-    void i18n.changeLanguage(language);
+    // The window's own title -- the taskbar entry and the window switcher --
+    // follows too. It was fixed at "Media Toolkit" in tauri.conf.json, the
+    // one English string left in a Persian or Arabic session.
+    void i18n.changeLanguage(language).then(() => ipc.setWindowTitle(i18n.t("app_name")));
   }, [language]);
 
   const toggleDarkMode = useCallback(() => {

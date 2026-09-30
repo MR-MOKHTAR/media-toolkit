@@ -1,4 +1,4 @@
-import { Minus, Square, X } from "lucide-react";
+import { Copy, Minus, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { IconButton } from "../ui/Button";
@@ -74,7 +74,10 @@ export function AppTitleBar({
             label={isMaximized ? t("restore") : t("maximize")}
             onClick={onToggleMaximize}
           >
-            <Square size={13} />
+            {/* Two overlapping squares for "restore", as every window manager
+                draws it -- one square for both states gave no hint of which
+                the button would do. */}
+            {isMaximized ? <Copy size={13} className="-scale-x-100" /> : <Square size={13} />}
           </IconButton>
           <IconButton
             label={t("close")}

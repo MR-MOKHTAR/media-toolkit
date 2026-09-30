@@ -25,6 +25,10 @@ export interface JobsState {
   /** Ids whose cancellation has been requested but not yet confirmed, so the
    *  button can go quiet immediately without lying about the outcome. */
   cancelling: string[];
+  /** Ids whose "Download again" is on its way to the backend. The button is
+   *  disabled for that moment: a double click used to start the same
+   *  download twice. */
+  retrying: string[];
 }
 
 export type JobsAction =
@@ -40,6 +44,8 @@ export type JobsAction =
   | { type: "status"; payload: JobStatusEvent }
   | { type: "meta"; payload: JobMetaEvent }
   | { type: "cancelRequested"; id: string }
+  | { type: "retryRequested"; id: string }
+  | { type: "retrySettled"; id: string }
   | { type: "select"; id: string | null }
   | { type: "remove"; id: string }
   | { type: "clearFinished" }
@@ -51,7 +57,11 @@ export const emptyJobsState: JobsState = {
   order: [],
   selectedId: null,
   cancelling: [],
+  retrying: [],
 };
+
+const isTerminalState = (state: Job["state"]) =>
+  state === "completed" || state === "failed" || state === "cancelled";
 
 /** Replaces one job without touching the others' identities, so memoized rows
  *  that did not change do not re-render. */
@@ -112,16 +122,18 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
     case "started": {
       const { placeholderId, job } = action;
       const byId = { ...state.byId };
-      const replaced = Boolean(byId[placeholderId]);
+      const previous = byId[placeholderId];
       delete byId[placeholderId];
       // Keyed on the row it is taking over, so the list sees the same element
-      // gaining an id rather than one row leaving and another arriving.
-      byId[job.id] = replaced ? { ...job, rowKey: placeholderId } : job;
+      // gaining an id rather than one row leaving and another arriving -- and
+      // on *that* row's key when it had taken one over itself: pending, then
+      // scheduled, then running is one row the whole way.
+      byId[job.id] = previous ? { ...job, rowKey: previous.rowKey ?? placeholderId } : job;
 
       // The real id cannot already be in `order` -- the backend has just minted
       // it -- but filtering is what keeps that from being an assumption.
       const order = state.order.filter((id) => id !== job.id);
-      const at = order.indexOf(placeholderId);
+      const at = previous ? order.indexOf(placeholderId) : -1;
       if (at === -1) order.unshift(job.id);
       else order[at] = job.id;
 
@@ -168,14 +180,28 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
 
     case "status": {
       const { id, state: next } = action.payload;
-      if (!state.byId[id]) return state;
+      const current = state.byId[id];
+      if (!current) return state;
       const cancelling = state.cancelling.filter((other) => other !== id);
+
+      // A finished job stays finished. The backend sends one terminal status
+      // per job, so a second one was made up on this side -- a cancel that
+      // raced the job's own completion, answered "no such job" and settled the
+      // row as cancelled. Arriving after the real "completed", it flipped a
+      // finished download to cancelled, took its folder button away and gave it
+      // a retry. Only the backend's "completed" may still correct a failure.
+      if (isTerminalState(current.state) && !(next === "completed" && current.state !== "completed")) {
+        return cancelling.length === state.cancelling.length ? state : { ...state, cancelling };
+      }
 
       switch (next) {
         case "queued":
-          return { ...patch(state, id, { state: "queued", stage: "queued" }), cancelling };
+          return {
+            ...patch(state, id, { state: "queued", stage: "queued", interrupted: undefined }),
+            cancelling,
+          };
         case "running":
-          return { ...patch(state, id, { state: "running" }), cancelling };
+          return { ...patch(state, id, { state: "running", interrupted: undefined }), cancelling };
         case "completed": {
           const { outputPath } = action.payload;
           return {
@@ -184,6 +210,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
               stage: "finalizing",
               percent: 100,
               outputPath,
+              interrupted: undefined,
               // A direct download whose probe had not landed -- or failed -- is
               // titled with its own URL, because that is all the form knew. The
               // file now exists and has a name, which is both shorter and what
@@ -204,6 +231,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
             ...patch(state, id, {
               state: "failed",
               error: action.payload.error,
+              interrupted: undefined,
               speed: undefined,
               encodeRate: undefined,
               etaSecs: undefined,
@@ -215,6 +243,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
           return {
             ...patch(state, id, {
               state: "cancelled",
+              interrupted: undefined,
               speed: undefined,
               encodeRate: undefined,
               etaSecs: undefined,
@@ -255,6 +284,16 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
       return state.cancelling.includes(action.id)
         ? state
         : { ...state, cancelling: [...state.cancelling, action.id] };
+
+    case "retryRequested":
+      return state.retrying.includes(action.id)
+        ? state
+        : { ...state, retrying: [...state.retrying, action.id] };
+
+    case "retrySettled":
+      return state.retrying.includes(action.id)
+        ? { ...state, retrying: state.retrying.filter((id) => id !== action.id) }
+        : state;
 
     case "select":
       return { ...state, selectedId: action.id };
@@ -302,6 +341,12 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
           // Already running as far as this state is concerned: the reload
           // happened before the revive, or the event beat this call.
           if (known.state === "running" || known.state === "queued") continue;
+          // Only a row the load marked as cut off is revived. One that ended
+          // in this session did so by the backend's own event -- which can
+          // overtake this answer, since the two travel separately -- and
+          // reviving it would leave it "running" with nothing left to say
+          // otherwise.
+          if (!known.interrupted) continue;
           byId[live.id] = {
             ...known,
             state: "running",
@@ -311,6 +356,7 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
             percent: null,
             error: undefined,
             endedAt: undefined,
+            interrupted: undefined,
           };
         } else {
           // History was cleared, or this is a different profile's storage. The
@@ -338,7 +384,8 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
       const order: string[] = [];
       for (const id of state.order) {
         const job = state.byId[id];
-        if (job.state === "running" || job.state === "queued") {
+        // Scheduled rows are not finished; they have not started.
+        if (job.state === "running" || job.state === "queued" || job.state === "scheduled") {
           byId[id] = job;
           order.push(id);
         }

@@ -37,6 +37,15 @@ pub struct Settings {
     /// to the library. Off by default: keeping the app's output together is the
     /// point of having a library at all.
     pub save_next_to_input: bool,
+
+    /// The proxy every connection goes through, or none. See `network`.
+    pub proxy: Option<String>,
+
+    /// How many downloads run at once.
+    pub max_downloads: usize,
+
+    /// Bytes per second for all downloads together, or no limit.
+    pub speed_limit: Option<u64>,
 }
 
 /// Written by hand because `derive(Default)` would make `organize_by_tool`
@@ -49,6 +58,9 @@ impl Default for Settings {
             library_root: None,
             organize_by_tool: true,
             save_next_to_input: false,
+            proxy: None,
+            max_downloads: crate::network::DEFAULT_DOWNLOAD_SLOTS,
+            speed_limit: None,
         }
     }
 }
@@ -103,11 +115,21 @@ fn carries_legacy_key(raw: &str) -> bool {
         .is_some_and(|key| !key.is_null())
 }
 
+/// Writes the settings in one step: to a file beside the real one, then a
+/// rename over it.
+///
+/// Writing in place truncated the file first, and every download that started
+/// meanwhile reads it on another thread to find its folder -- a read landing
+/// between the truncate and the write saw an empty file, fell back to the
+/// defaults, and sent that download to the default library without a word. A
+/// rename is atomic: a reader sees the old file or the new one.
 pub fn save(app: &AppHandle, settings: &Settings) -> AppResult<()> {
     let file = path(app)?;
     let body =
         serde_json::to_string_pretty(settings).map_err(|e| AppError::io(&file, e))?;
-    write_private(&file, &body)
+    let staged = file.with_extension("json.tmp");
+    write_private(&staged, &body)?;
+    std::fs::rename(&staged, &file).map_err(|e| AppError::io(&file, e))
 }
 
 /// Writes a file only this user can read.
@@ -158,6 +180,9 @@ mod tests {
             library_root: Some("/srv/media".into()),
             organize_by_tool: false,
             save_next_to_input: true,
+            proxy: Some("socks5h://127.0.0.1:10808".into()),
+            max_downloads: 2,
+            speed_limit: Some(512 * 1024),
         };
         let raw = serde_json::to_string(&settings).unwrap();
         // camelCase across the boundary, matching every other serialized type.
@@ -166,6 +191,9 @@ mod tests {
 
         let back: Settings = serde_json::from_str(&raw).unwrap();
         assert_eq!(back.library_root.as_deref(), Some("/srv/media"));
+        assert_eq!(back.proxy.as_deref(), Some("socks5h://127.0.0.1:10808"));
+        assert_eq!(back.max_downloads, 2);
+        assert_eq!(back.speed_limit, Some(512 * 1024));
         assert!(!back.organize_by_tool);
         assert!(back.save_next_to_input);
     }
@@ -206,6 +234,9 @@ mod tests {
         let back: Settings = serde_json::from_str("{}").unwrap();
         assert!(back.library_root.is_none());
         assert!(back.organize_by_tool, "the layout defaulted to off");
+        // A file from before these settings existed keeps today's behaviour.
+        assert_eq!(back.max_downloads, 4);
+        assert!(back.proxy.is_none() && back.speed_limit.is_none());
     }
 
     /// A file written before the library existed holds only `groqApiKey`, and

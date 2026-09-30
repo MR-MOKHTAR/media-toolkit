@@ -3,12 +3,15 @@ mod commands;
 mod direct;
 mod download;
 mod error;
+mod filetype;
 mod jobs;
 mod library;
 mod media;
 mod muxed;
+mod network;
 mod paths;
 mod process;
+mod ratelimit;
 mod settings;
 mod updater;
 
@@ -18,6 +21,17 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, as the plugin asks: a second launch has to be turned away
+        // before anything else starts. It brings the running window forward
+        // instead -- restored if it was minimised -- which is what someone
+        // double-clicking the icon again is actually asking for.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -27,6 +41,10 @@ pub fn run() {
             // "your files go to ~/Downloads/MediaToolkit" is true from the
             // moment the app is installed and the folder is there to be found.
             library::ensure_layout(app.handle());
+
+            // The proxy, the speed limit and the download slots, in force
+            // before the first download asks for any of them.
+            network::init(app.handle());
 
             // Checking the tools means running them, and yt-dlp takes about two
             // seconds to unpack itself. Do it here, in the background, while the
@@ -58,6 +76,9 @@ pub fn run() {
             commands::list_jobs,
             commands::open_path,
             commands::reveal_in_folder,
+            network::get_network_settings,
+            network::set_network_settings,
+            network::test_proxy,
             media::commands::probe_media,
             media::commands::estimate_compressed_size,
             media::commands::can_copy_streams,
@@ -72,7 +93,13 @@ pub fn run() {
             // as orphans, still writing to half-finished files.
             if let tauri::WindowEvent::Destroyed = event {
                 let jobs = window.state::<Jobs>();
-                tauri::async_runtime::block_on(jobs.cancel_all());
+                tauri::async_runtime::block_on(async {
+                    jobs.cancel_all().await;
+                    // Long enough for a cancelled job to delete its truncated
+                    // output and record its progress, short enough that
+                    // closing the window never feels stuck.
+                    jobs.wait_idle(std::time::Duration::from_secs(3)).await;
+                });
             }
         })
         .run(tauri::generate_context!())

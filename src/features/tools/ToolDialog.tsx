@@ -20,8 +20,11 @@ export function ToolDialog({
   tool,
   onClose,
   footer,
+  dirty,
   children,
 }: {
+  /** The form holds something worth not losing to a stray click. */
+  dirty?: boolean;
   /** The key `tool_${key}`, `tool_${key}_about` and `TOOL_ICON` all share. */
   tool: string;
   onClose: () => void;
@@ -36,6 +39,7 @@ export function ToolDialog({
   return (
     <Modal
       open
+      keepOnOutsideClick={dirty}
       onOpenChange={(next) => {
         if (!next) onClose();
       }}

@@ -145,9 +145,13 @@ const ROW =
 
 export function OutputFolderRow({
   folder,
+  label,
   onChoose,
 }: {
   folder: string;
+  /** Shown instead of the path when the folder is not decided yet -- the
+   *  download form's "sorted by file type". The path stays in the tooltip. */
+  label?: string;
   onChoose: () => void;
 }) {
   const { t } = useTranslation();
@@ -160,10 +164,12 @@ export function OutputFolderRow({
     <div dir="ltr" className={ROW}>
       <Folder size={16} className="shrink-0 text-fg-muted" />
       <span
+        // A translated sentence shapes in its own direction; a path is ltr.
+        dir={label ? "auto" : undefined}
         className="min-w-0 flex-1 truncate text-sm text-fg-soft"
         title={folder}
       >
-        {folder || t("select_location")}
+        {label ?? (folder || t("select_location"))}
       </span>
       <Button variant="ghost" size="sm" onClick={onChoose}>
         {t("change")}
@@ -299,6 +305,8 @@ export function FormatGroup({
             key={format}
             type="button"
             disabled={disabled}
+            // Which chip is chosen was carried by colour alone.
+            aria-pressed={value === format}
             onClick={() => onChange(format)}
             className={cn(
               // Radius, padding and glow all match Segmented now. The two

@@ -187,10 +187,21 @@ pub enum Target {
     AudioCopy,
 }
 
+/// What a resolve learned about a page.
+pub struct Resolved {
+    /// yt-dlp's title, sanitized into a file stem -- whether or not the fast
+    /// path can take the page. The yt-dlp engine names its file with it rather
+    /// than with `%(title)s`, so the name is chosen, and made unique, before
+    /// anything is written.
+    pub title: Option<String>,
+    /// The streams, when they are ones this engine can fetch.
+    pub plan: Option<Plan>,
+}
+
 /// Asks yt-dlp what this page's chosen formats are, and whether they are ones
 /// this engine can fetch.
 ///
-/// `Ok(None)` is the ordinary answer for most of the web and is not a failure:
+/// No plan is the ordinary answer for most of the web and is not a failure:
 /// it means "fragmented, live, or unmeasured -- run yt-dlp". An `Err` is a real
 /// extraction failure (a dead link, a private video) and the caller reports it
 /// rather than retrying, because yt-dlp is about to fail the same way.
@@ -199,7 +210,7 @@ pub async fn resolve(
     url: &str,
     selector: &str,
     cookies_from: Option<&str>,
-) -> AppResult<Option<Plan>> {
+) -> AppResult<Resolved> {
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
     cmd.args(["-J", "--no-warnings", "--no-playlist", "-f", selector]);
     // Without the cookie this resolve sees the formats an anonymous visitor
@@ -213,10 +224,24 @@ pub async fn resolve(
         Ok(extracted) => extracted,
         // Unreadable metadata is not this engine's problem to report: yt-dlp
         // itself may well download the thing anyway. Decline and let it try.
-        Err(_) => return Ok(None),
+        Err(_) => {
+            return Ok(Resolved {
+                title: None,
+                plan: None,
+            })
+        }
     };
 
-    Ok(triage(extracted))
+    let title = extracted
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(paths::sanitize_stem);
+    Ok(Resolved {
+        title,
+        plan: triage(extracted),
+    })
 }
 
 /// Whether these formats can be fetched as plain ranged HTTP, and the plan if
@@ -344,7 +369,7 @@ fn copy_container(acodec: &str) -> Option<&'static str> {
 /// A header it rejects is dropped rather than failing the download: the ones
 /// that matter (`User-Agent`, `Referer`, `Cookie`) are all ordinary, and losing
 /// an exotic one to a strict parser is not worth giving up the fast path over.
-fn header_map(headers: Option<&std::collections::HashMap<String, String>>) -> HeaderMap {
+pub(crate) fn header_map(headers: Option<&std::collections::HashMap<String, String>>) -> HeaderMap {
     let mut map = HeaderMap::new();
     let Some(headers) = headers else { return map };
 
@@ -374,11 +399,18 @@ fn header_map(headers: Option<&std::collections::HashMap<String, String>>) -> He
 /// makes the progress arithmetic honest: a single running total over a known
 /// grand total.
 ///
-/// Nine arguments, deliberately. Seven of them are the job's ambient context --
+/// Ten arguments, deliberately. Seven of them are the job's ambient context --
 /// the handle, the registry, the id, the emitters, the cancel signal -- which
 /// every path in this module already takes in exactly this order; bundling them
 /// into a struct here and nowhere else would make this one call site look
 /// different from `download::run_ytdlp` and `direct::run` for no gain.
+///
+/// `source_key` is `paths::short_key` of the page, and goes into the partial
+/// files' names -- see `part_path`.
+///
+/// A failed transfer keeps what it fetched and says so; the caller decides
+/// whether a second attempt continues from it or yt-dlp takes over and it is
+/// thrown away (`discard_parts`).
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     app: &AppHandle,
@@ -390,22 +422,16 @@ pub async fn run(
     output_name: Option<&str>,
     plan: &Plan,
     target: Target,
+    source_key: &str,
 ) -> AppResult<PathBuf> {
-    let stem = output_name
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(paths::sanitize_stem)
-        .unwrap_or_else(|| plan.title.clone());
+    let stem = stem_for(output_name, plan);
 
     let total = plan.total_bytes();
     let mut base = 0u64;
     let mut parts = Vec::with_capacity(plan.streams.len());
 
     for (index, stream) in plan.streams.iter().enumerate() {
-        // Deterministic, so a retry finds what the previous attempt left. The
-        // index is in the name because a video and an audio stream of the same
-        // source can share an extension.
-        let part = dir.join(format!(".{stem}.{index}.{}.part", stream.ext));
+        let part = part_path(dir, &stem, source_key, index, &stream.ext);
         // Recorded so a cancelled job's leftovers are known, exactly as the
         // other engines do.
         jobs.set_partial_output(id, part.clone()).await;
@@ -432,28 +458,28 @@ pub async fn run(
         )
         .await;
 
-        // Pushed before the error is examined, so a failure knows about the
-        // stream it failed on as well as the ones before it.
         parts.push(part);
 
-        if let Err(error) = outcome {
-            // Cancelled means the user may well press retry, and a retry
-            // re-resolves and continues from exactly these files -- so they
-            // stay. Any other failure sends the caller to yt-dlp, which
-            // produces the file by another route entirely and will never look
-            // at them again; leaving them behind would be hundreds of megabytes
-            // of hidden litter in the user's folder for a download that
-            // succeeded.
-            if !matches!(error, AppError::Cancelled) {
-                discard(&parts).await;
-            }
-            return Err(error);
-        }
+        // Whatever arrived stays where a second attempt looks for it. A cancel
+        // is the user's retry button; any other failure is the caller's to
+        // decide about -- it tries once more on fresh URLs before handing the
+        // page to yt-dlp, and throwing the bytes away first is what used to
+        // make that second attempt start from nothing.
+        outcome?;
 
         base += stream.size_bytes;
     }
 
     jobs.clear_partial_output(id).await;
+
+    // An MP3 is a real encode, and it is CPU work like any compression: it
+    // takes a place in the CPU lane rather than running beside three x264
+    // encodes. Waiting for one is cancellable like any other queue.
+    let _cpu = if target == Target::Mp3 {
+        Some(jobs.acquire_cpu(id).await?)
+    } else {
+        None
+    };
 
     let ext = match target {
         Target::Container => plan.ext.as_str(),
@@ -468,18 +494,51 @@ pub async fn run(
     // enough for a second job with the same title to finish its own download
     // and look for a name -- see `paths::OutputClaim`.
     let output = paths::claim_output(dir, &stem, ext);
-    if let Err(error) = assemble(app, emitters, id, cancel, &parts, output.path(), target).await {
-        if !matches!(error, AppError::Cancelled) {
-            discard(&parts).await;
-        }
-        return Err(error);
-    }
+    // A failed merge keeps the parts, like a failed transfer: they are
+    // complete, and the caller's second attempt only has to merge them.
+    assemble(app, emitters, id, cancel, &parts, output.path(), target).await?;
 
     // Only once the result exists. Losing a part before the merge succeeded
     // would turn a recoverable failure into a full re-download.
     discard(&parts).await;
 
     Ok(output.path().to_path_buf())
+}
+
+/// The file stem a plan is saved and fetched under.
+fn stem_for(output_name: Option<&str>, plan: &Plan) -> String {
+    output_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(paths::sanitize_stem)
+        .unwrap_or_else(|| plan.title.clone())
+}
+
+/// Where stream `index` of a page is fetched to.
+///
+/// Deterministic, so a retry finds what the previous attempt left. The page's
+/// key is in the name as well as its title: two different videos that share a
+/// title -- two entries of one playlist both called "Intro" -- used to write
+/// into each other's partial files at the same time, and the merge then
+/// produced a video that was neither. The index is there because a video and
+/// an audio stream of the same source can share an extension.
+fn part_path(dir: &Path, stem: &str, source_key: &str, index: usize, ext: &str) -> PathBuf {
+    dir.join(format!(".{stem}.{source_key}.{index}.{ext}.part"))
+}
+
+/// Throws away what a plan's transfer left behind, for the caller that is
+/// about to hand the page to yt-dlp instead. yt-dlp produces the file by
+/// another route and never looks at these; leaving them would be hundreds of
+/// megabytes of hidden litter for a download that succeeded.
+pub async fn discard_parts(dir: &Path, output_name: Option<&str>, plan: &Plan, source_key: &str) {
+    let stem = stem_for(output_name, plan);
+    let parts: Vec<PathBuf> = plan
+        .streams
+        .iter()
+        .enumerate()
+        .map(|(index, stream)| part_path(dir, &stem, source_key, index, &stream.ext))
+        .collect();
+    discard(&parts).await;
 }
 
 /// Removes the intermediate streams and the sidecars that track their chunks.
@@ -572,16 +631,23 @@ async fn assemble(
     // it. A remux is quick, but "quick" on a two-hour 4K video is not instant.
     let merged = cancel.guard(process::output(cmd, Tool::Ffmpeg.name())).await;
 
-    // A cancelled merge leaves a truncated output behind, and that file is not
-    // a partial download anyone can resume -- it is a broken video with a real
-    // name sitting in the user's folder. This used to be checked only after the
-    // merge returned normally; a cancel that interrupted it returned through
-    // the `?` above the check, and the broken file stayed.
-    if merged.is_err() || cancel.is_cancelled() {
-        remove_when_released(output).await;
-        return Err(AppError::Cancelled);
+    // A merge that did not finish leaves a truncated output behind, and that
+    // file is not a partial download anyone can resume -- it is a broken video
+    // with a real name sitting in the user's folder. Cancelled or failed, it
+    // goes: a failed one used to stay, and the yt-dlp fallback that follows a
+    // failure found a file by that name, reported "already downloaded", and
+    // finished the job pointing at the truncated one.
+    match merged {
+        Ok(Ok(_)) if !cancel.is_cancelled() => Ok(()),
+        Ok(Err(error)) if !cancel.is_cancelled() => {
+            remove_when_released(output).await;
+            Err(error)
+        }
+        _ => {
+            remove_when_released(output).await;
+            Err(AppError::Cancelled)
+        }
     }
-    merged?.map(|_| ())
 }
 
 /// Deletes a file a just-killed process may still be holding.

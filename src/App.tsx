@@ -1,4 +1,5 @@
 import { DirectionProvider } from "@radix-ui/react-direction";
+import { MotionConfig } from "framer-motion";
 import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
 
 import { NavigationProvider, useNavigation } from "./app/navigation";
@@ -22,7 +23,7 @@ import { useSidebarCollapsed } from "./hooks/useSidebarCollapsed";
 import { useToast } from "./hooks/useToast";
 import { useWindowControls } from "./hooks/useWindowControls";
 
-function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
+function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
   const { route } = useNavigation();
   const {
     darkMode,
@@ -135,7 +136,7 @@ function Shell({ toasts, notify, dismiss }: ReturnType<typeof useToast>) {
             </main>
           </div>
 
-          <Toast toasts={toasts} isRtl={isRtl} onDismiss={dismiss} />
+          <Toast toasts={toasts} isRtl={isRtl} onDismiss={dismiss} onHold={hold} />
 
           {/* First launch only, and mounted here rather than on a screen: it is
               about the whole window -- its language and, for two of the three,
@@ -162,12 +163,17 @@ export default function App() {
   const toast = useToast();
 
   return (
-    <JobsProvider notify={toast.notify}>
-      <NavigationProvider>
-        <DragDropProvider>
-          <Shell {...toast} />
-        </DragDropProvider>
-      </NavigationProvider>
-    </JobsProvider>
+    // Honours the system's "reduce motion". The CSS animations already did,
+    // through theme.css; the toasts, the job list and the offline banner are
+    // animated by framer-motion and did not.
+    <MotionConfig reducedMotion="user">
+      <JobsProvider notify={toast.notify}>
+        <NavigationProvider>
+          <DragDropProvider>
+            <Shell {...toast} />
+          </DragDropProvider>
+        </NavigationProvider>
+      </JobsProvider>
+    </MotionConfig>
   );
 }

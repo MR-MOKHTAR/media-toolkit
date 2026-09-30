@@ -10,6 +10,9 @@ export type JobKind =
   | "extractAudio";
 
 export type JobState =
+  /** Waiting for a time the user chose. No backend job exists yet: the row
+   *  holds the request, and the store starts it when the time comes. */
+  | "scheduled"
   | "queued"
   | "running"
   | "completed"
@@ -135,6 +138,18 @@ export interface Job {
    *  Absent on rows written by builds that did not record it, which fall back
    *  to reading the title and the detail line. */
   fileKind?: JobFileKind;
+  /** When a scheduled row starts, as epoch milliseconds. */
+  scheduledAt?: number;
+  /** A scheduled row whose time passed while the app was closed. It is not
+   *  started on its own at launch -- a download meant for a night-time
+   *  internet package must not fire at nine in the morning -- and waits for
+   *  "Start now" instead. */
+  missed?: boolean;
+  /** Set on a row that was still running when the app last closed, so it
+   *  says "Interrupted" rather than a reasonless "Failed" -- and so a webview
+   *  reload can tell it apart from a job that genuinely ended this session.
+   *  Cleared by the next status the row receives. */
+  interrupted?: boolean;
   /** A row that exists before the backend has handed back an id.
    *
    *  Pressing the button closes the form, and everything between that and a
@@ -270,6 +285,21 @@ export interface PlaylistListing {
   truncated: boolean;
 }
 
+/** Mirrors `network::NetworkSettings`: what every connection agrees on. */
+export interface NetworkSettings {
+  /** `socks5h://127.0.0.1:10808`, `http://127.0.0.1:10809`, or null for the
+   *  system's own proxy settings. */
+  proxy: string | null;
+  /** How many downloads run at once. */
+  maxDownloads: number;
+  /** Bytes per second for all downloads together, or null for no limit. */
+  speedLimit: number | null;
+}
+
+export interface ProxyTest {
+  latencyMs: number;
+}
+
 export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;
@@ -288,3 +318,6 @@ export interface UpdateResult {
 
 export const isActiveJob = (job: Job) =>
   job.state === "queued" || job.state === "running";
+
+/** Work that is not over: running, waiting its turn, or waiting for its time. */
+export const isOpenJob = (job: Job) => isActiveJob(job) || job.state === "scheduled";

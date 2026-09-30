@@ -23,14 +23,35 @@ it finds none.
 
 | | |
 |---|---|
-| **Download** | Paste a link — any link, and the field takes it in whatever shape it arrived: with a sentence around it, or with no `https://` in front. The form fills itself from the clipboard when it opens. A page goes to yt-dlp, which handles the ~1000 sites it supports and shows the title, channel, duration and thumbnail first. A link that already points at a file — an installer, an archive, a PDF, a direct MP4 — is fetched by the app itself on eight connections, with its real name and exact size shown before you commit; a server that names neither the file nor its type is identified from the file's own first bytes. Video *and* audio pages are fetched the same way: yt-dlp resolves the streams, the app pulls them on eight ranged connections, and FFmpeg merges or encodes — measured at 1.5× a single connection on a healthy line and up to 10× against a throttled one. An audio download keeps the track the site served rather than re-encoding it — the same argument Extract audio already makes, applied to the download that fetched the stream; MP3 is one switch away in Settings for whatever insists on it. A link that names a playlist — the whole page, or the `list=` on a single video — asks which you meant, and *Whole playlist* queues every video as its own download, four at a time, capped at 100. Settings can point yt-dlp at a browser's cookies, which is what gets a link behind a login, an age check, or a members-only wall; it is off until you pick one. Every running download shows its size, its speed and how much longer it has. Interrupted downloads resume rather than restart. |
+| **Download** | Paste a link — any link, and the field takes it in whatever shape it arrived: with a sentence around it, or with no `https://` in front. The form fills itself from the clipboard when it opens. A page goes to yt-dlp, which handles the ~1000 sites it supports and shows the title, channel, duration and thumbnail first. A link that already points at a file — an installer, an archive, a PDF, a direct MP4 — is fetched by the app itself on eight connections, with its real name and exact size shown before you commit; a server that names neither the file nor its type is identified from the file's own first bytes. Video *and* audio pages are fetched the same way: yt-dlp resolves the streams, the app pulls them on eight ranged connections, and FFmpeg merges or encodes — measured at 1.5× a single connection on a healthy line and up to 10× against a throttled one. An audio download keeps the track the site served rather than re-encoding it — the same argument Extract audio already makes, applied to the download that fetched the stream; MP3 is one switch away in Settings for whatever insists on it. A link that names a playlist — the whole page, or the `list=` on a single video — asks which you meant, and *Whole playlist* queues every video as its own download, capped at 100. Paste several links at once — one per line, or a message with links in it — and each becomes its own download, identified on its own. Any download can start *At a time* instead of now: pick the hour, leave the app open, and it starts then — for internet packages that are free or cheaper at night. A schedule whose time passed while the app was closed waits for *Start now* rather than firing at launch. Settings can point yt-dlp at a browser's cookies, which is what gets a link behind a login, an age check, or a members-only wall; it is off until you pick one. Every running download shows its size, its speed and how much longer it has. Interrupted downloads resume rather than restart. |
+| **File types** | A download is called video or audio only when something says so — a real codec from yt-dlp, a media extension, or the file's own first bytes. Everything else is identified from its magic number, its content type or its name, and lands on the `Files` shelf under its real extension; a file nothing can name is saved as `.bin`. The Video/Audio switch is a request about pages with media on them, never a label for an installer. A link the app's own client cannot place is asked about through yt-dlp first: when yt-dlp's answer is "a plain file" (its Generic extractor's `direct` link), the file is fetched as a file, under the name the link had — not as `<uuid>.unknown_video` in `Video/`, which is what used to happen. Every finished download is checked once more against its bytes. |
 | **Compress** | Three things in one place, because they are the same question: quality (Small / Balanced / High), resolution (Original / 1080p / 720p / 480p, with anything at or above the source disabled), and an optional size to land under. The estimated output size updates as you change either of the first two, so the trade is visible before anything runs. |
 | **Trim** | Drag two handles over a timeline. Cuts losslessly by default, which is instant; *Exact cut* re-encodes when you need the exact frame you asked for. |
 | **Convert** | MP4, MKV, MOV, WebM, MP3, M4A, WAV — one grid, whichever the file needs. When the streams can be copied into the new container the app says so and finishes in about a second. |
 | **Extract audio** | The soundtrack of a video, on its own. *Original* copies the track out untouched — instant, and lossless, because the audio inside an MP4 is already a finished AAC file; MP3, M4A and WAV are there for when something downstream insists. The app only offers the lossless option for files whose codec it has a container for. |
 
 Jobs run concurrently and each reports its own progress. FFmpeg work is capped
-by a semaphore, so four compressions cannot make the app itself unresponsive.
+by a semaphore, so four compressions cannot make the app itself unresponsive —
+the MP3 encode at the end of an audio download included. Downloads of different
+videos never share partial files, even when their titles match, and the same
+link started twice takes turns rather than writing into one file. The app runs
+as a single instance: launching it again brings the open window forward.
+
+## Network
+
+Settings › Network holds what every connection agrees on:
+
+- **Proxy** — HTTP or SOCKS5 (`127.0.0.1:10808` for v2rayN's SOCKS port, for
+  example), used by yt-dlp and the app's own downloader alike, with a *Test*
+  button that checks YouTube answers through it. They have to share it:
+  YouTube signs stream URLs for the address that asked for them. Off uses the
+  system's own proxy settings.
+- **Simultaneous downloads** — 1 to 8, default 4. Lowering it never stops a
+  running download; the new limit applies as they finish.
+- **Speed limit** — for all downloads together, so the rest of the connection
+  stays usable. yt-dlp's own transfers are held to the same figure.
+
+These are stored in `settings.json` with the library settings.
 
 A download that fails, is cancelled, or is cut off by the app closing keeps its
 `.part` file and comes back with a **Download again** button beside it. Pressing
@@ -104,8 +125,11 @@ src-tauri/src/
   binaries.rs     tool resolution: app data dir -> bundled resources -> PATH,
                   plus the optional JS runtime lookup
   download.rs     URL normalisation, engine choice, and the yt-dlp engine
-  direct.rs       the HTTP engine: parallel ranges, resume, any file type,
-                  and the content sniffing that names one
+  direct.rs       the HTTP engine: parallel ranges, resume, any file type
+  filetype.rs     what a file is: magic numbers, extensions, content types,
+                  and the name it should be saved under
+  network.rs      proxy, speed limit and download slots, live and persisted
+  ratelimit.rs    the one token bucket every transfer shares
   muxed.rs        the fast path: yt-dlp resolves, direct.rs fetches, ffmpeg
                   merges or encodes -- and declines anything fragmented or live
   library.rs      the app's storage folder and its per-tool layout

@@ -21,12 +21,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::binaries::{self, Tool};
-use crate::direct::{self, FileInfo};
+use crate::direct::{self, FileInfo, Probe};
 use crate::error::{AppError, AppResult};
+use crate::filetype;
 use crate::jobs::{
     CancelSignal, Emitters, JobKind, JobMeta, JobProgress, JobStatus, Jobs, MediaClass, Stage,
 };
@@ -285,9 +287,30 @@ pub struct UrlInfo {
 
 /// Which engine a job runs on.
 enum Engine {
-    /// The link is the file, and the probe already learned its size and name.
-    Direct(Box<FileInfo>),
+    /// The link is the file -- or yt-dlp resolved it to one, and `headers` are
+    /// what yt-dlp was served with. The probe already learned its size and name.
+    Direct {
+        url: String,
+        headers: Option<HeaderMap>,
+        info: Box<FileInfo>,
+    },
+    /// A page yt-dlp extracts video or audio from.
     YtDlp,
+    /// A plain file that only yt-dlp could reach -- behind a cookie dance, or a
+    /// TLS setup this app's client will not speak. Fetched exactly as it is,
+    /// named after the link rather than after whatever yt-dlp calls it (for a
+    /// redirected release asset, a UUID).
+    YtDlpFile { name_hint: String },
+}
+
+/// What yt-dlp is being asked to produce.
+#[derive(Clone, Copy)]
+enum Fetch<'a> {
+    /// Video or audio from a page: formats, merging, `-x`. `title` is what a
+    /// resolve found the page to be called, when one ran.
+    Media { title: Option<&'a str> },
+    /// The bytes behind the link, as they are.
+    File { name_hint: &'a str },
 }
 
 /// Accepts any http(s) URL and lets yt-dlp decide what it supports.
@@ -525,55 +548,93 @@ async fn execute(
     emitters.status(id, JobKind::Download, JobStatus::Running);
     emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
 
-    // One HTTP request, but one that can take its full connect timeout against
-    // a host that does not answer -- twenty seconds of "cancelling" otherwise.
-    let engine = cancel.guard(choose_engine(&url, request)).await?;
+    // One HTTP request -- and, for a link that request could not place, one
+    // yt-dlp resolve. Either can take its full timeout against a host that
+    // does not answer, which is twenty seconds of "cancelling" unguarded.
+    let engine = cancel.guard(choose_engine(app, &url, request)).await?;
 
     // What the link is, said as soon as it is known, so a job the form could
-    // not describe stops being "unknown" here rather than at the finish.
-    emitters.meta(id, JobKind::Download, meta_for(&engine, request));
+    // not describe stops being "unknown" here rather than at the finish. A
+    // page says nothing yet: whether it is video or audio is what yt-dlp is
+    // about to find out, and the toggle is a request, not evidence.
+    if let Some(meta) = meta_for(&engine) {
+        emitters.meta(id, JobKind::Download, meta);
+    }
 
     let dir = output_dir(app, request, &engine)?;
 
-    match engine {
-        Engine::Direct(info) => {
+    let output = match &engine {
+        Engine::Direct {
+            url: target,
+            headers,
+            info,
+        } => {
             // Nothing to kill: the work is a set of HTTPS requests rather than
             // a child process, so cancellation arrives through the signal.
             direct::run(
                 id,
                 emitters,
                 &cancel,
-                &url,
+                target,
+                headers.as_ref(),
                 &dir,
                 request.output_name.as_deref(),
-                &info,
+                info,
             )
-            .await
+            .await?
         }
-        Engine::YtDlp => run_media(app, jobs, id, emitters, &cancel, &url, &dir, request).await,
-    }
+        Engine::YtDlp => run_media(app, jobs, id, emitters, &cancel, &url, &dir, request).await?,
+        Engine::YtDlpFile { name_hint } => {
+            run_ytdlp(
+                app,
+                jobs,
+                id,
+                emitters,
+                &cancel,
+                &url,
+                &dir,
+                request,
+                Fetch::File { name_hint },
+            )
+            .await?
+        }
+    };
+
+    let name_hint = match &engine {
+        Engine::YtDlpFile { name_hint } => Some(name_hint.as_str()),
+        _ => None,
+    };
+    Ok(finalize_output(app, emitters, id, request, output, name_hint).await)
 }
 
-/// What the engine now knows the link to be. See `JobMeta`.
-fn meta_for(engine: &Engine, request: &DownloadRequest) -> JobMeta {
+/// What the engine now knows the link to be, if anything. See `JobMeta`.
+fn meta_for(engine: &Engine) -> Option<JobMeta> {
     match engine {
-        Engine::Direct(info) => JobMeta {
+        Engine::Direct { info, .. } => Some(JobMeta {
             media: info.media_class(),
             file_name: Some(info.filename.clone()),
             content_type: info.content_type.clone(),
             title: None,
-        },
-        // A page, which yt-dlp fetches as whichever of the two was asked for.
-        // A page asked for as video that has no picture is corrected once the
-        // formats are known -- see `run_media` and `run_ytdlp`.
-        Engine::YtDlp => JobMeta {
-            media: Some(if request.wants_audio() {
-                MediaClass::Audio
-            } else {
-                MediaClass::Video
-            }),
+        }),
+        // Described by what yt-dlp finds on the page -- the resolve in
+        // `run_media`, or the formats `run_ytdlp` prints -- and by the file
+        // that arrives. It used to be the toggle's answer, here, before
+        // anything had looked: an installer that reached this engine was a
+        // "video" for its whole download.
+        Engine::YtDlp => None,
+        Engine::YtDlpFile { name_hint } => Some(JobMeta {
+            file_name: Some(name_hint.clone()),
             ..JobMeta::default()
-        },
+        }),
+    }
+}
+
+/// The library shelf a download of this class belongs on.
+fn shelf_for(class: Option<MediaClass>) -> Slot {
+    match class {
+        Some(MediaClass::Video) => Slot::Video,
+        Some(MediaClass::Audio) => Slot::Audio,
+        None => Slot::Files,
     }
 }
 
@@ -581,16 +642,14 @@ fn meta_for(engine: &Engine, request: &DownloadRequest) -> JobMeta {
 ///
 /// `output_dir` unless the request asked to be filed by what it turned out to
 /// be. That decision is made here, after the engine has looked at the link,
-/// because this is the first point anything knows for certain whether it is a
-/// video, an audio file or neither.
+/// because this is the first point anything knows whether it is a video, an
+/// audio file or neither -- and `finalize_output` checks it again against the
+/// file that actually arrived.
 fn output_dir(app: &AppHandle, request: &DownloadRequest, engine: &Engine) -> AppResult<PathBuf> {
     if request.auto_folder.unwrap_or(false) {
         let slot = match engine {
-            Engine::Direct(info) => match info.media_class() {
-                Some(MediaClass::Video) => Slot::Video,
-                Some(MediaClass::Audio) => Slot::Audio,
-                None => Slot::Files,
-            },
+            Engine::Direct { info, .. } => shelf_for(info.media_class()),
+            Engine::YtDlpFile { .. } => Slot::Files,
             Engine::YtDlp if request.wants_audio() => Slot::Audio,
             Engine::YtDlp => Slot::Video,
         };
@@ -605,42 +664,288 @@ fn output_dir(app: &AppHandle, request: &DownloadRequest, engine: &Engine) -> Ap
 
 /// Which engine gets this URL.
 ///
-/// One HTTP request decides it, and that request is cheap next to the
-/// alternative: booting yt-dlp to find out it has nothing to extract costs two
-/// seconds every time, and used to end in a failure the user could do nothing
-/// about.
-async fn choose_engine(url: &str, request: &DownloadRequest) -> Engine {
-    match request.mode.as_deref() {
-        Some("media") => return Engine::YtDlp,
-        Some("file") => {
-            // Asked for by name, so a probe answering "this is a page" is
-            // overruled -- but its name and size are still worth having.
-            return match direct::probe(url).await {
-                Ok(Some(info)) => Engine::Direct(Box::new(info)),
-                _ => Engine::YtDlp,
-            };
-        }
+/// One HTTP request decides it for almost every link: a file is ours, a page
+/// is yt-dlp's. What that request cannot place -- a server that refused it, a
+/// body with no type and nothing recognisable in it, a host our client could
+/// not reach -- goes to yt-dlp as a *question* before it goes as a download.
+/// Its Generic extractor fetches anything that is not a web page as a "direct
+/// video link", and that is how an installer used to come back as a video
+/// called `<uuid>.unknown_video` on the Video shelf.
+async fn choose_engine(app: &AppHandle, url: &str, request: &DownloadRequest) -> Engine {
+    if request.mode.as_deref() == Some("media") {
+        return Engine::YtDlp;
+    }
+
+    let probed = direct::probe(url).await;
+    match probed {
+        Ok(Probe::File(info)) => return file_engine(url, None, info, request),
+        // Asked for as a file by name, a page is looked at again below rather
+        // than handed to the extractor.
+        Ok(Probe::Page) if request.mode.as_deref() != Some("file") => return Engine::YtDlp,
         _ => {}
     }
 
-    match direct::probe(url).await {
-        // Extracting audio means re-encoding, and yt-dlp is the only engine
-        // here that can: fetching the bytes verbatim would hand back the video
-        // the user asked not to have. A link that is not media in the first
-        // place -- an archive, an installer -- is fetched whatever the toggle
-        // says, because there is no audio in it to extract.
-        Ok(Some(info)) if request.wants_audio() && is_media_type(&info) => Engine::YtDlp,
-        Ok(Some(info)) => Engine::Direct(Box::new(info)),
-        // A page, or a host that would not answer a plain GET. Either way
-        // yt-dlp is the one that knows what to do next.
-        _ => Engine::YtDlp,
+    match resolve_plain_file(app, url, request.cookie_browser()).await {
+        // A plain file yt-dlp can reach. Fetched on eight connections when this
+        // app's client can reach what yt-dlp resolved, and by yt-dlp otherwise.
+        Ok(Some(plain)) => {
+            let names = [plain.name_hint.as_str()];
+            match direct::probe_with(&plain.url, Some(&plain.headers), &names).await {
+                Ok(Probe::File(info) | Probe::Unclear(info)) => {
+                    file_engine(&plain.url, Some(plain.headers), info, request)
+                }
+                _ => match probed {
+                    Ok(Probe::Unclear(info)) => file_engine(url, None, info, request),
+                    _ => Engine::YtDlpFile {
+                        name_hint: plain.name_hint,
+                    },
+                },
+            }
+        }
+        // A page yt-dlp knows how to extract from.
+        Ok(None) => Engine::YtDlp,
+        // yt-dlp could make nothing of it either. A body that answered and was
+        // not a page is a file of some kind, and saving it is the honest
+        // outcome; anything else goes to yt-dlp, whose error is the one worth
+        // showing.
+        Err(_) => match probed {
+            Ok(Probe::Unclear(info)) => file_engine(url, None, info, request),
+            _ => Engine::YtDlp,
+        },
     }
 }
 
-fn is_media_type(info: &FileInfo) -> bool {
-    info.content_type
+/// The engine for a link known to be a file.
+///
+/// Extracting audio means re-encoding, and yt-dlp is the only engine here that
+/// can: fetching the bytes verbatim would hand back the video the user asked
+/// not to have. A file that is not media -- an archive, an installer -- is
+/// fetched whatever the toggle says, because there is no audio in it to
+/// extract.
+fn file_engine(url: &str, headers: Option<HeaderMap>, info: FileInfo, request: &DownloadRequest) -> Engine {
+    if request.wants_audio() && info.media_class().is_some() {
+        return Engine::YtDlp;
+    }
+    Engine::Direct {
+        url: url.to_string(),
+        headers,
+        info: Box::new(info),
+    }
+}
+
+/// A link yt-dlp resolved to a plain, non-media file.
+struct PlainFile {
+    /// Where the bytes are, after any redirect yt-dlp followed.
+    url: String,
+    /// What yt-dlp sent to be served them.
+    headers: HeaderMap,
+    /// What the file should be called: the pasted link's own name when it has
+    /// one, since yt-dlp titles a redirected file after the hash it landed on.
+    name_hint: String,
+}
+
+/// Asks yt-dlp whether this link is a page it can extract from or a file it
+/// can reach. `Ok(None)` is a page (or media yt-dlp should fetch itself).
+async fn resolve_plain_file(
+    app: &AppHandle,
+    url: &str,
+    cookies_from: Option<&str>,
+) -> AppResult<Option<PlainFile>> {
+    let mut cmd = binaries::command(app, Tool::YtDlp)?;
+    cmd.args(["-J", "--no-warnings", "--no-playlist"]);
+    with_cookies(&mut cmd, cookies_from);
+    binaries::with_url(app, &mut cmd, url);
+
+    let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|error| AppError::invalid("url", format!("could not read metadata: {error}")))?;
+    Ok(plain_file_from_json(&value, url))
+}
+
+/// Reads yt-dlp's answer for "this is a plain file, not media".
+///
+/// The Generic extractor has two ways of saying `direct: true`. A link the
+/// server labelled video or audio comes back with one real format named after
+/// its MIME type (`mp4`, `mpeg`) -- media, and yt-dlp's to fetch as such. A
+/// link whose body was merely "not a web page" comes back with *no* formats and
+/// the extension yt-dlp gives anything it could not name, `unknown_video`
+/// (verified against yt-dlp 2026.07.23 on a 7-Zip installer). That second shape
+/// is what this looks for -- unless the link's own name says it is media after
+/// all, like an `.mp4` a CDN serves as `application/octet-stream`.
+fn plain_file_from_json(value: &serde_json::Value, pasted: &str) -> Option<PlainFile> {
+    if value.get("direct").and_then(|direct| direct.as_bool()) != Some(true) {
+        return None;
+    }
+    let has_formats = value
+        .get("formats")
+        .and_then(|formats| formats.as_array())
+        .is_some_and(|formats| !formats.is_empty());
+    if has_formats {
+        return None;
+    }
+
+    let url = value.get("url")?.as_str()?.to_string();
+    let original = value
+        .get("original_url")
+        .and_then(|original| original.as_str())
+        .unwrap_or(pasted);
+    let pasted_name = reqwest::Url::parse(original)
+        .ok()
+        .and_then(|url| {
+            url.path_segments()?
+                .rfind(|segment| !segment.is_empty())
+                .map(str::to_string)
+        })
+        .map(|segment| direct::percent_decode(&segment));
+
+    let ext = value
+        .get("ext")
+        .and_then(|ext| ext.as_str())
+        .filter(|ext| !filetype::is_placeholder_extension(ext));
+    let named_ext = pasted_name
         .as_deref()
-        .is_some_and(|value| value.starts_with("video/") || value.starts_with("audio/"))
+        .and_then(|name| filetype::split_name(name).1);
+    if named_ext
+        .as_deref()
+        .or(ext)
+        .is_some_and(|ext| filetype::media_class_of_extension(ext).is_some())
+    {
+        return None;
+    }
+
+    let title = value
+        .get("title")
+        .and_then(|title| title.as_str())
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    let name_hint = match (pasted_name, title) {
+        (Some(name), _) if named_ext.is_some() => name,
+        (_, Some(title)) => match ext {
+            Some(ext) => format!("{title}.{ext}"),
+            None => title.to_string(),
+        },
+        (Some(name), None) => name,
+        (None, None) => "download".to_string(),
+    };
+
+    let headers = value
+        .get("http_headers")
+        .and_then(|headers| serde_json::from_value(headers.clone()).ok());
+    Some(PlainFile {
+        url,
+        headers: muxed::header_map(headers.as_ref()),
+        name_hint,
+    })
+}
+
+/// What the finished file turned out to be, and where it belongs.
+///
+/// Every engine ends here, because none of them is the last word on what it
+/// fetched: a link can be probed as one thing and serve another, and yt-dlp
+/// names what it cannot identify `.unknown_video`. The file itself can be
+/// asked. Its first bytes settle the extension when the one it has says
+/// nothing, and settle the shelf when the request let the app choose one -- a
+/// file the user sent to a folder of their own stays there, renamed at most.
+///
+/// Never fails the job. The download finished; a name that could not be
+/// improved is still a finished download.
+async fn finalize_output(
+    app: &AppHandle,
+    emitters: &Emitters,
+    id: &str,
+    request: &DownloadRequest,
+    output: PathBuf,
+    name_hint: Option<&str>,
+) -> PathBuf {
+    let head = filetype::read_head(&output).await;
+    let current = filetype::extension_of(&output);
+    let (ext, class) = settle(current.as_deref(), name_hint, &head);
+
+    let dir = output.parent().map(Path::to_path_buf).unwrap_or_default();
+    let target = right_shelf(app, request, &dir, class).unwrap_or_else(|| dir.clone());
+    let renamed = !current
+        .as_deref()
+        .is_some_and(|current| current.eq_ignore_ascii_case(&ext));
+
+    let mut output = output;
+    if renamed || target != dir {
+        // Claimed, so a download finishing on the same shelf in the same
+        // instant is handed a different name rather than this one.
+        let claim = paths::claim_output(&target, &paths::stem_of(&output), &ext);
+        if move_file(&output, claim.path()).await.is_ok() {
+            output = claim.path().to_path_buf();
+        }
+    }
+
+    emitters.meta(
+        id,
+        JobKind::Download,
+        JobMeta {
+            media: class,
+            file_name: output
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+            ..JobMeta::default()
+        },
+    );
+    output
+}
+
+/// The extension a finished file should have, and what it is -- from the
+/// extension it arrived with, the name the link suggested, and its first bytes.
+///
+/// A hint stands in only for an extension that says nothing (yt-dlp's
+/// `unknown_video`, or none); the bytes then settle it, and a file nothing can
+/// name is a `.bin`, which is honest about not knowing.
+fn settle(current: Option<&str>, name_hint: Option<&str>, head: &[u8]) -> (String, Option<MediaClass>) {
+    let claimed = match current {
+        Some(ext) if !filetype::is_placeholder_extension(ext) => Some(ext.to_string()),
+        _ => name_hint
+            .and_then(|name| filetype::split_name(name).1)
+            .filter(|ext| filetype::is_real_extension(ext))
+            .or_else(|| current.map(str::to_string)),
+    };
+    let ext = filetype::best_extension(claimed.as_deref(), None, Some(head))
+        .filter(|ext| !ext.eq_ignore_ascii_case("unknown_video"))
+        .unwrap_or_else(|| "bin".to_string());
+    let class = filetype::classify(Some(&ext), None, Some(head));
+    (ext, class)
+}
+
+/// The shelf this file should be on, when that is the app's decision to make
+/// and not where it already is.
+///
+/// Only for a request that let the app choose (`auto_folder`), and only for a
+/// file sitting on one of the download shelves: a library that was moved while
+/// the download ran is not the library this file is in.
+fn right_shelf(
+    app: &AppHandle,
+    request: &DownloadRequest,
+    dir: &Path,
+    class: Option<MediaClass>,
+) -> Option<PathBuf> {
+    if !request.auto_folder.unwrap_or(false) {
+        return None;
+    }
+    let on_a_shelf = [Slot::Video, Slot::Audio, Slot::Files]
+        .into_iter()
+        .any(|slot| library::shelf(app, slot) == dir);
+    if !on_a_shelf {
+        return None;
+    }
+    library::folder(app, shelf_for(class)).ok()
+}
+
+/// A rename, or a copy and a delete when the two paths are on different
+/// filesystems and a rename cannot cross.
+async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    match tokio::fs::rename(from, to).await {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            tokio::fs::copy(from, to).await?;
+            tokio::fs::remove_file(from).await
+        }
+    }
 }
 
 /// What to ask a site for when the user wants the audio.
@@ -680,12 +985,14 @@ async fn run_media(
     dir: &Path,
     request: &DownloadRequest,
 ) -> AppResult<PathBuf> {
-    // Both engines below find their partial files again by name -- the title,
-    // or the name the form passed -- so the same page asked for twice at once
-    // would put two downloads into one set of `.part` files. They take turns
-    // instead; see `paths::PathLock`. Keyed on the name when there is one, and
-    // on the link when yt-dlp is going to choose it.
-    let _lock = cancel.guard(paths::lock_path(media_lock_key(dir, url, request))).await?;
+    // Both engines below keep their partial files under names carrying this
+    // page's key -- the muxed parts in theirs, yt-dlp's in a folder named after
+    // it -- so the same page asked for twice at once would put two downloads
+    // into one set of partials. They take turns instead; see `paths::PathLock`.
+    // A different page never waits here, even one with the same title: its
+    // partials have a different key, which is what used to be missing.
+    let key = paths::short_key(url);
+    let _lock = wait_for_file(cancel, emitters, id, dir.join(format!(".{key}.media-lock"))).await?;
 
     let audio = request.wants_audio();
     let eligible = request.parallel.unwrap_or(true)
@@ -693,6 +1000,11 @@ async fn run_media(
         // cannot finish what it starts. `run_ytdlp` already reports that case
         // properly.
         && binaries::resolve(app, Tool::Ffmpeg).is_ok();
+
+    // What the page calls itself, when a resolve has said. yt-dlp's own
+    // download is then named with it rather than with `%(title)s`, so the name
+    // is chosen -- and made unique -- before anything is written.
+    let mut title: Option<String> = None;
 
     if eligible {
         // Audio used to be excluded here, on the reasoning that `-x` is a
@@ -707,37 +1019,11 @@ async fn run_media(
         } else {
             format_selector(request.quality.as_deref())
         };
-        // Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about
-        // two seconds to unpack itself before it does anything. That is two
-        // seconds of a cancelled job sitting there looking cancelled and not
-        // being, and the child is not in the registry for `cancel_job` to
-        // reach -- dropping the future is what ends it.
-        //
-        // `Ok(None)` is the ordinary answer for most of the web; an extraction
-        // error is left to `run_ytdlp` to produce again with its own stderr
-        // tail attached, which is the one the user can actually read.
-        let resolved = match cancel
-            .guard(muxed::resolve(
-                app,
-                url,
-                &selector,
-                request.cookie_browser(),
-            ))
-            .await
-        {
-            Ok(resolved) => resolved,
-            Err(_) => return Err(AppError::Cancelled),
-        };
 
-        // An MP3 is made from one audio stream. Two means the selector came
-        // back with a video track as well, which is not something to hand to
-        // an audio encoder -- so that one goes to yt-dlp, as it always did.
-        let usable = resolved
-            .ok()
-            .flatten()
-            .filter(|plan| !audio || plan.stream_count() == 1);
+        let resolved = resolve_page(app, cancel, url, &selector, request).await?;
+        title = resolved.as_ref().ok().and_then(|resolved| resolved.title.clone());
 
-        if let Some(plan) = usable {
+        if let Some(plan) = usable_plan(resolved, audio) {
             // The page has a name now, and whether it has a picture. A job the
             // form could only title with its URL gets the real title here, and
             // a "video" that turns out to be sound alone is drawn as audio.
@@ -755,72 +1041,144 @@ async fn run_media(
                 },
             );
 
-            // Decided here rather than above, because for `original` the answer
-            // depends on what the resolve actually came back with: a codec this
-            // app has no container for degrades to an encode instead of failing,
-            // which is the same choice `ops::extract_audio` makes.
-            let target = if !audio {
-                muxed::Target::Container
-            } else if request.wants_original_audio() && plan.audio_copy_ext().is_some() {
-                muxed::Target::AudioCopy
-            } else {
-                muxed::Target::Mp3
-            };
-
-            match muxed::run(
-                app,
-                jobs,
-                id,
-                emitters,
-                cancel,
-                dir,
-                request.output_name.as_deref(),
-                &plan,
-                target,
-            )
-            .await
+            let output_name = request.output_name.as_deref();
+            let target = target_for(request, &plan);
+            match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &plan, target, &key)
+                .await
             {
                 Ok(output) => return Ok(output),
                 Err(AppError::Cancelled) => return Err(AppError::Cancelled),
                 Err(_) => {
+                    // Once more, on freshly signed URLs, continuing from the
+                    // parts that already arrived. The likeliest cause is a
+                    // signed URL that expired mid-transfer, or a host that
+                    // stopped honouring ranges for a moment -- and handing the
+                    // page straight to yt-dlp threw away every byte fetched so
+                    // far and started again on one connection.
+                    emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
+                    let again = resolve_page(app, cancel, url, &selector, request).await?;
+                    if let Some(retry) = usable_plan(again, audio) {
+                        let target = target_for(request, &retry);
+                        match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &retry, target, &key)
+                            .await
+                        {
+                            Ok(output) => return Ok(output),
+                            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                            Err(_) => muxed::discard_parts(dir, output_name, &retry, &key).await,
+                        }
+                    }
+                    // yt-dlp takes it from here, by another route; these parts
+                    // would never be looked at again.
+                    muxed::discard_parts(dir, output_name, &plan, &key).await;
+
                     // Back to the start of the bar: the fallback is a fresh
                     // download and a percentage that walked to 80 and then sat
                     // still would be the wrong story about what is happening.
-                    emitters.progress_now(JobProgress::new(
-                        id,
-                        JobKind::Download,
-                        Stage::Preparing,
-                    ));
+                    emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
                 }
             }
         }
     }
 
-    run_ytdlp(app, jobs, id, emitters, cancel, url, dir, request).await
+    run_ytdlp(
+        app,
+        jobs,
+        id,
+        emitters,
+        cancel,
+        url,
+        dir,
+        request,
+        Fetch::Media {
+            title: title.as_deref(),
+        },
+    )
+    .await
 }
 
-/// What two media downloads must not share: the file name both engines will
-/// write their partials under.
-fn media_lock_key(dir: &Path, url: &str, request: &DownloadRequest) -> PathBuf {
-    let name = request
-        .output_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(paths::sanitize_stem)
-        .unwrap_or_else(|| {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            url.hash(&mut hasher);
-            format!("url-{:016x}", hasher.finish())
-        });
-    // Not a file anyone creates; a key in `paths::lock_path`'s map, spelled as
-    // a path so it cannot collide with the direct engine's `.part` keys.
-    dir.join(format!(".{name}.media-lock"))
+/// Waits for another job's hold on `key` to end, saying so if it has to.
+async fn wait_for_file(
+    cancel: &CancelSignal,
+    emitters: &mut Emitters,
+    id: &str,
+    key: PathBuf,
+) -> AppResult<paths::PathLock> {
+    cancel
+        .guard(paths::lock_path_reporting(key, || {
+            emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Queued));
+        }))
+        .await
 }
+
+/// `muxed::resolve`, given up the moment cancel is pressed.
+///
+/// Guarded, because resolving is a yt-dlp spawn and yt-dlp takes about two
+/// seconds to unpack itself before it does anything. That is two seconds of a
+/// cancelled job sitting there looking cancelled and not being, and the child
+/// is not in the registry for `cancel_job` to reach -- dropping the future is
+/// what ends it.
+///
+/// The inner result is the resolve's own: an extraction error is left to
+/// `run_ytdlp` to produce again with its own stderr tail attached, which is the
+/// one the user can actually read.
+async fn resolve_page(
+    app: &AppHandle,
+    cancel: &CancelSignal,
+    url: &str,
+    selector: &str,
+    request: &DownloadRequest,
+) -> AppResult<AppResult<muxed::Resolved>> {
+    cancel
+        .guard(muxed::resolve(app, url, selector, request.cookie_browser()))
+        .await
+}
+
+/// The plan, when the fast path can take it.
+///
+/// An MP3 is made from one audio stream. Two means the selector came back
+/// with a video track as well, which is not something to hand to an audio
+/// encoder -- so that one goes to yt-dlp, as it always did.
+fn usable_plan(resolved: AppResult<muxed::Resolved>, audio: bool) -> Option<muxed::Plan> {
+    resolved
+        .ok()
+        .and_then(|resolved| resolved.plan)
+        .filter(|plan| !audio || plan.stream_count() == 1)
+}
+
+/// What the fetched streams become.
+///
+/// Decided per plan, because for `original` the answer depends on what the
+/// resolve actually came back with: a codec this app has no container for
+/// degrades to an encode instead of failing, which is the same choice
+/// `ops::extract_audio` makes.
+fn target_for(request: &DownloadRequest, plan: &muxed::Plan) -> muxed::Target {
+    if !request.wants_audio() {
+        muxed::Target::Container
+    } else if request.wants_original_audio() && plan.audio_copy_ext().is_some() {
+        muxed::Target::AudioCopy
+    } else {
+        muxed::Target::Mp3
+    }
+}
+
+/// Where yt-dlp keeps a download's partial files: a folder of their own per
+/// link, beside the output. yt-dlp names partials after the output file, so two
+/// different videos with the same title -- two playlist entries both called
+/// "Intro" -- used to append into the same `.part` at once. Hidden, and removed
+/// once the download is done; kept after a failure, because that is what the
+/// retry button continues from.
+const TEMP_DIR: &str = ".mtk-tmp";
+
+/// Every extension a media download can end up with, so the name it is given
+/// is free under all of them -- see `paths::StemClaim`.
+const MEDIA_OUTPUT_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "webm", "mov", "flv", "3gp", "m4a", "mp3", "opus", "ogg", "oga", "flac", "wav",
+    "aac", "m4b", "weba", "mka",
+];
 
 /// The extractor engine: yt-dlp, for the thousand-odd sites where the link the
-/// user has is not the link the file is at.
+/// user has is not the link the file is at -- and, as `Fetch::File`, for the
+/// plain file only yt-dlp could reach.
 #[allow(clippy::too_many_arguments)]
 async fn run_ytdlp(
     app: &AppHandle,
@@ -831,29 +1189,69 @@ async fn run_ytdlp(
     url: &str,
     dir: &Path,
     request: &DownloadRequest,
+    fetch: Fetch<'_>,
 ) -> AppResult<PathBuf> {
-    let is_audio = request.wants_audio();
+    let file_mode = matches!(fetch, Fetch::File { .. });
+    // Nothing is extracted from a plain file, whatever the toggle says.
+    let is_audio = request.wants_audio() && !file_mode;
 
     // yt-dlp picks the extension itself once it knows the source, so the output
-    // template gets `%(ext)s` and the real path is read back afterwards.
-    let stem = request
+    // template gets `%(ext)s` and the real path is read back afterwards. A plain
+    // file is named after the link: yt-dlp would title a redirected one after
+    // the hash it landed on.
+    let named = request
         .output_name
         .as_deref()
         .filter(|name| !name.trim().is_empty())
-        .map(paths::sanitize_stem)
-        .unwrap_or_else(|| "%(title).100B".to_string());
+        .map(paths::sanitize_stem);
+    let chosen = match fetch {
+        Fetch::File { name_hint } => Some(named.unwrap_or_else(|| filetype::split_name(name_hint).0)),
+        Fetch::Media { title } => named.or_else(|| title.map(paths::sanitize_stem)),
+    };
+
+    // A name chosen here is claimed under every extension yt-dlp might end up
+    // using, and made unique against the files already on the shelf. Left to
+    // itself, yt-dlp answers a second video that shares a title with "has
+    // already been downloaded" -- and this job then reported the *first*
+    // video's file as its own. Only a page no resolve could name still gets
+    // `%(title)s`, which is the one case yt-dlp names for itself.
+    let hint_ext = match fetch {
+        Fetch::File { name_hint } => filetype::split_name(name_hint)
+            .1
+            .filter(|ext| filetype::is_real_extension(ext)),
+        Fetch::Media { .. } => None,
+    };
+    let file_extensions: Vec<&str> = hint_ext.as_deref().into_iter().chain(["unknown_video"]).collect();
+    let claim = chosen.map(|stem| {
+        paths::claim_stem(
+            dir,
+            &stem,
+            if file_mode {
+                &file_extensions
+            } else {
+                MEDIA_OUTPUT_EXTENSIONS
+            },
+        )
+    });
+    // `%` is the one character yt-dlp's template reads as syntax.
+    let (stem, template_stem) = match &claim {
+        Some(claim) => (claim.stem().to_string(), claim.stem().replace('%', "%%")),
+        None => ("%(title).100B".to_string(), "%(title).100B".to_string()),
+    };
 
     // Only ever a fallback, for the case where yt-dlp's `after_move` print does
     // not reach us -- see the `unwrap_or_else` at the end of this function. Every
     // branch of it is a guess, `mp4` included: a webm-only site produces a
     // `.webm`. m4a is the guess for a copied audio stream because AAC is what
-    // the great majority of sites serve as their best audio.
-    let ext = match (is_audio, request.wants_original_audio()) {
-        (true, true) => "m4a",
-        (true, false) => "mp3",
-        (false, _) => "mp4",
+    // the great majority of sites serve as their best audio. A plain file is
+    // whatever yt-dlp called it, which `finalize_output` then corrects.
+    let ext = match (file_mode, is_audio, request.wants_original_audio()) {
+        (true, _, _) => "unknown_video",
+        (false, true, true) => "m4a",
+        (false, true, false) => "mp3",
+        (false, false, _) => "mp4",
     };
-    let template = dir.join(format!("{stem}.%(ext)s"));
+    let temp = dir.join(TEMP_DIR).join(paths::short_key(url));
 
     let mut args: Vec<String> = vec![
         "--newline".into(),
@@ -875,8 +1273,15 @@ async fn run_ytdlp(
         STAGE_TEMPLATE.into(),
         "--print".into(),
         "after_move:__DLPATH__%(filepath)s".into(),
+        // A relative template under an explicit home: `-P` is ignored when
+        // `-o` is an absolute path, and the temp path is what keeps this
+        // download's partials apart from every other link's.
+        "-P".into(),
+        format!("home:{}", dir.to_string_lossy()),
+        "-P".into(),
+        format!("temp:{}", temp.to_string_lossy()),
         "-o".into(),
-        template.to_string_lossy().into_owned(),
+        format!("{template_stem}.%(ext)s"),
         // Resume from the `.part` a previous attempt left rather than starting
         // over. yt-dlp's own default, stated because the app now depends on it:
         // the retry button is only worth pressing if this holds.
@@ -902,7 +1307,11 @@ async fn run_ytdlp(
         "3".into(),
     ];
 
-    if is_audio {
+    if file_mode {
+        // The bytes as they are: no format to choose, nothing to merge or
+        // extract. `-x` on an installer ran ffprobe over it and failed the job
+        // after the download had finished.
+    } else if is_audio {
         args.push("-x".into());
         args.extend(if request.wants_original_audio() {
             // `best` is yt-dlp's word for "do not re-encode": it lifts the
@@ -940,6 +1349,13 @@ async fn run_ytdlp(
             args.push("--ffmpeg-location".into());
             args.push(parent.to_string_lossy().into_owned());
         }
+    }
+
+    // yt-dlp's own transfers are outside the app's shared limit (they are not
+    // this process's sockets), so each is held to the same figure itself.
+    if let Some(limit) = crate::ratelimit::limit() {
+        args.push("--limit-rate".into());
+        args.push(limit.to_string());
     }
 
     // Before the `--`, which is where the options stop and the URL begins.
@@ -996,16 +1412,21 @@ async fn run_ytdlp(
                 emitters.progress(streams.add(stream, progress));
             }
         } else if let Some(payload) = text.strip_prefix(INFO_MARKER) {
-            let (media, title) = parse_info(payload, is_audio);
-            emitters.meta(
-                id,
-                JobKind::Download,
-                JobMeta {
-                    media: Some(media),
-                    title,
-                    ..JobMeta::default()
-                },
-            );
+            // A plain file's "title" is whatever yt-dlp made of its URL, and it
+            // has no formats to read a picture out of. The row already has the
+            // file's name.
+            if !file_mode {
+                let (media, title) = parse_info(payload, is_audio);
+                emitters.meta(
+                    id,
+                    JobKind::Download,
+                    JobMeta {
+                        media,
+                        title,
+                        ..JobMeta::default()
+                    },
+                );
+            }
         } else if text.starts_with(STAGE_MARKER) {
             // Every byte is in; what is left is ffmpeg's. That can sit at 100%
             // for a long time on a large video, so it gets a name of its own.
@@ -1013,7 +1434,9 @@ async fn run_ytdlp(
             // rest, which is a remux or a copy -- or nothing at all, for a
             // single-file download, where this label is on screen for an
             // instant.
-            stage = if is_audio && !request.wants_original_audio() {
+            stage = if file_mode {
+                Stage::Finalizing
+            } else if is_audio && !request.wants_original_audio() {
                 Stage::Encoding
             } else {
                 Stage::Merging
@@ -1056,6 +1479,12 @@ async fn run_ytdlp(
             tail: tail.into_string(),
         });
     }
+
+    // Done with, so gone -- both levels, and only when empty. A download that
+    // failed never gets here, which is what keeps its partials for the retry.
+    let _ = tokio::fs::remove_dir(&temp).await;
+    let _ = tokio::fs::remove_dir(dir.join(TEMP_DIR)).await;
+    drop(claim);
 
     // `--print after_move:%(filepath)s` gives the real name after every
     // post-processor has run, which is the only reliable way to know it: the
@@ -1185,23 +1614,32 @@ impl StreamTotals {
 
 /// `vcodec|acodec|title` from `INFO_TEMPLATE`: whether the download has a
 /// picture, and what the page calls itself.
-fn parse_info(payload: &str, wants_audio: bool) -> (MediaClass, Option<String>) {
+///
+/// Only a named codec is evidence. `NA` means yt-dlp does not know -- which is
+/// exactly what a plain file on the Generic extractor prints -- and reading
+/// that as "video" is how an installer was drawn with a film icon for its whole
+/// download. With no evidence, nothing is claimed, and the finished file says
+/// what it is (`finalize_output`). An audio request is the exception: `-x`
+/// makes the result audio whatever the source was.
+fn parse_info(payload: &str, wants_audio: bool) -> (Option<MediaClass>, Option<String>) {
     let mut fields = payload.splitn(3, '|');
     let vcodec = fields.next().unwrap_or("").trim();
-    let _acodec = fields.next();
+    let acodec = fields.next().unwrap_or("").trim();
     let title = fields
         .next()
         .map(str::trim)
         .filter(|title| !title.is_empty() && *title != "NA")
         .map(str::to_string);
 
-    // Only an explicit "none" is a missing picture. "NA" means yt-dlp does not
-    // know -- which is what a plain file link on the generic extractor says --
-    // and that is not evidence of anything.
-    let media = if wants_audio || vcodec == "none" {
-        MediaClass::Audio
+    let named = |codec: &str| !codec.is_empty() && !matches!(codec, "NA" | "none" | "None");
+    let media = if wants_audio {
+        Some(MediaClass::Audio)
+    } else if named(vcodec) {
+        Some(MediaClass::Video)
+    } else if vcodec == "none" && named(acodec) {
+        Some(MediaClass::Audio)
     } else {
-        MediaClass::Video
+        None
     };
     (media, title)
 }
@@ -1220,21 +1658,15 @@ pub async fn probe_url(
 ) -> AppResult<UrlInfo> {
     let url = validate_url(url)?;
 
-    if let Some(file) = direct::probe(&url).await? {
-        return Ok(UrlInfo {
-            kind: UrlKind::File,
-            title: file.filename,
-            // A file has no channel, no duration and no thumbnail, and inventing
-            // any of them would put a blank line under the name.
-            uploader: file.content_type,
-            duration_secs: None,
-            thumbnail: None,
-            is_playlist: false,
-            in_playlist: false,
-            entry_count: None,
-            size_bytes: file.size_bytes,
-            resumable: file.resumable,
-        });
+    // A file answers in one request, with its real name and exact size, and
+    // never wakes yt-dlp. Everything else asks yt-dlp -- including a link that
+    // request could not place, which is where a plain file behind a refusal or
+    // a redirect our client could not follow gets recognised as one, instead
+    // of being previewed as a "video" because yt-dlp's Generic extractor
+    // called it that.
+    let probed = direct::probe(&url).await;
+    if let Ok(Probe::File(file)) = probed {
+        return Ok(file_url_info(file));
     }
 
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
@@ -1245,9 +1677,44 @@ pub async fn probe_url(
     with_cookies(&mut cmd, cookies_from);
     binaries::with_url(app, &mut cmd, &url);
 
-    let stdout = process::output(cmd, Tool::YtDlp.name()).await?;
+    let stdout = match process::output(cmd, Tool::YtDlp.name()).await {
+        Ok(stdout) => stdout,
+        Err(error) => {
+            return match probed {
+                // Something answered, and it was not a page: a file.
+                Ok(Probe::Unclear(file)) => Ok(file_url_info(file)),
+                // Our client could not even reach the host. That is the more
+                // useful of the two errors: yt-dlp's is the same failure told
+                // with a traceback.
+                Err(network) => Err(network),
+                _ => Err(error),
+            };
+        }
+    };
     let value: serde_json::Value = serde_json::from_str(&stdout)
         .map_err(|error| AppError::invalid("url", format!("could not read metadata: {error}")))?;
+
+    if let Some(plain) = plain_file_from_json(&value, &url) {
+        let names = [plain.name_hint.as_str()];
+        return Ok(
+            match direct::probe_with(&plain.url, Some(&plain.headers), &names).await {
+                Ok(Probe::File(file) | Probe::Unclear(file)) => file_url_info(file),
+                // Only yt-dlp can fetch it, so only the name is known ahead.
+                _ => UrlInfo {
+                    kind: UrlKind::File,
+                    title: plain.name_hint,
+                    uploader: None,
+                    duration_secs: None,
+                    thumbnail: None,
+                    is_playlist: false,
+                    in_playlist: false,
+                    entry_count: None,
+                    size_bytes: None,
+                    resumable: true,
+                },
+            },
+        );
+    }
 
     let entries = value.get("entries").and_then(|e| e.as_array());
     Ok(UrlInfo {
@@ -1280,6 +1747,24 @@ pub async fn probe_url(
         // yt-dlp writes a `.part` and continues from it, for every site.
         resumable: true,
     })
+}
+
+/// The preview for a link that is a file.
+fn file_url_info(file: FileInfo) -> UrlInfo {
+    UrlInfo {
+        kind: UrlKind::File,
+        title: file.filename,
+        // A file has no channel, no duration and no thumbnail, and inventing
+        // any of them would put a blank line under the name.
+        uploader: file.content_type,
+        duration_secs: None,
+        thumbnail: None,
+        is_playlist: false,
+        in_playlist: false,
+        entry_count: None,
+        size_bytes: file.size_bytes,
+        resumable: file.resumable,
+    }
 }
 
 /// Whether this URL names a playlist alongside whatever else it points at.
@@ -1787,13 +2272,100 @@ mod tests {
     /// "none" is a missing picture; "NA" is yt-dlp not knowing, which is what
     /// the generic extractor says about a plain file and is evidence of nothing.
     #[test]
-    fn only_an_explicit_none_makes_a_video_request_audio() {
-        assert_eq!(parse_info("none|opus|Track", false), (MediaClass::Audio, Some("Track".into())));
-        assert_eq!(parse_info("avc1.64001F|mp4a.40.2|Clip", false).0, MediaClass::Video);
-        assert_eq!(parse_info("NA|NA|NA", false), (MediaClass::Video, None));
-        // Asked for as audio, it is audio whatever the page has.
-        assert_eq!(parse_info("avc1|mp4a|Clip", true).0, MediaClass::Audio);
+    fn only_a_named_codec_is_evidence() {
+        assert_eq!(parse_info("none|opus|Track", false), (Some(MediaClass::Audio), Some("Track".into())));
+        assert_eq!(parse_info("avc1.64001F|mp4a.40.2|Clip", false).0, Some(MediaClass::Video));
+        // What a plain file on the Generic extractor prints. It used to be read
+        // as "video", which is how an installer was drawn with a film icon.
+        assert_eq!(parse_info("NA|NA|NA", false), (None, None));
+        assert_eq!(parse_info("none|none|x", false).0, None);
+        // Asked for as audio, the result is audio whatever the page has: `-x`.
+        assert_eq!(parse_info("avc1|mp4a|Clip", true).0, Some(MediaClass::Audio));
         // A title with the separator in it survives whole.
         assert_eq!(parse_info("none|opus|A | B", false).1.as_deref(), Some("A | B"));
+    }
+
+    /// yt-dlp's answer for a direct link to an installer, trimmed from what
+    /// 2026.07.23 printed for the 7-Zip download: redirected to a GitHub
+    /// release asset, titled after its UUID, no formats, `unknown_video`.
+    const INSTALLER_JSON: &str = r#"{
+        "id": "1645817e-3677-4207-93ff-e62de7e147be",
+        "title": "1645817e-3677-4207-93ff-e62de7e147be",
+        "direct": true,
+        "url": "https://release-assets.githubusercontent.com/github-production-release-asset/466446150/1645817e?sig=x",
+        "ext": "unknown_video",
+        "original_url": "https://www.7-zip.org/a/7z2409-x64.exe",
+        "extractor_key": "Generic",
+        "http_headers": {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-us,en;q=0.5", "Accept-Encoding": "gzip"},
+        "formats": []
+    }"#;
+
+    #[test]
+    fn a_generic_non_media_link_is_a_plain_file() {
+        let value: serde_json::Value = serde_json::from_str(INSTALLER_JSON).unwrap();
+        let plain = plain_file_from_json(&value, "https://www.7-zip.org/a/7z2409-x64.exe")
+            .expect("yt-dlp's shape for a file it could only call a video");
+        assert!(plain.url.starts_with("https://release-assets.githubusercontent.com/"));
+        // The link's own name, not the UUID yt-dlp titled it with.
+        assert_eq!(plain.name_hint, "7z2409-x64.exe");
+        assert!(plain.headers.contains_key("user-agent"));
+        // Never passed on: a compressed body makes byte ranges meaningless.
+        assert!(!plain.headers.contains_key("accept-encoding"));
+    }
+
+    #[test]
+    fn media_is_not_a_plain_file() {
+        // A direct link the server labelled audio: one real format.
+        let mp3: serde_json::Value = serde_json::from_str(
+            r#"{"direct": true, "url": "https://x/horse.mp3", "ext": "mp3", "title": "horse",
+                "formats": [{"format_id": "mpeg", "ext": "mp3", "vcodec": "none", "acodec": "mp3"}]}"#,
+        )
+        .unwrap();
+        assert!(plain_file_from_json(&mp3, "https://x/horse.mp3").is_none());
+
+        // An .mp4 a CDN serves as octet-stream: no formats, but the name says video.
+        let mp4: serde_json::Value = serde_json::from_str(
+            r#"{"direct": true, "url": "https://cdn/clip.mp4", "ext": "mp4", "title": "clip", "formats": []}"#,
+        )
+        .unwrap();
+        assert!(plain_file_from_json(&mp4, "https://cdn/clip.mp4").is_none());
+
+        // A page yt-dlp knows.
+        let page: serde_json::Value = serde_json::from_str(
+            r#"{"id": "abc", "title": "A video", "extractor_key": "Youtube", "ext": "mp4",
+                "formats": [{"format_id": "18"}]}"#,
+        )
+        .unwrap();
+        assert!(plain_file_from_json(&page, "https://youtu.be/abc").is_none());
+    }
+
+    /// What yt-dlp 2026.07.23 actually leaves for the 7-Zip installer:
+    /// `7z2409-x64.unknown_video`, starting `MZ`.
+    #[test]
+    fn a_finished_file_is_named_and_classed_by_its_bytes() {
+        let exe = b"MZ\x90\0\x03\0\0\0\x04\0\0\0\xff\xff\0\0";
+        assert_eq!(settle(Some("unknown_video"), Some("7z2409-x64.exe"), exe), ("exe".into(), None));
+        // No hint: the bytes alone.
+        assert_eq!(settle(Some("unknown_video"), None, exe), ("exe".into(), None));
+        // Nothing recognisable: an honest `.bin`, and not media.
+        assert_eq!(settle(Some("unknown_video"), None, b"\0\x01\x02\x03"), ("bin".into(), None));
+        // A real media download is left exactly as it is.
+        let mp4 = b"\0\0\0\x20ftypisom\0\0\x02\0isomiso2avc1mp41";
+        assert_eq!(settle(Some("mp4"), None, mp4), ("mp4".into(), Some(MediaClass::Video)));
+        assert_eq!(settle(Some("m4a"), None, mp4), ("m4a".into(), Some(MediaClass::Audio)));
+        // An extension that lies about an installer keeps its name but not its
+        // shelf: the bytes decide where it goes.
+        assert_eq!(settle(Some("mp4"), None, exe), ("mp4".into(), None));
+    }
+
+    #[test]
+    fn a_nameless_plain_file_is_named_after_its_title() {
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{"direct": true, "url": "https://x/get?id=5", "ext": "unknown_video",
+                "title": "get", "formats": []}"#,
+        )
+        .unwrap();
+        let plain = plain_file_from_json(&value, "https://x/get?id=5").unwrap();
+        assert_eq!(plain.name_hint, "get");
     }
 }

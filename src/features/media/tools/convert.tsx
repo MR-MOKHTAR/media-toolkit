@@ -39,6 +39,14 @@ function ConvertControls({ path, info, state: format, setState: setFormat }: Med
     };
   }, [path, info, format]);
 
+  // A file with no picture cannot become a video, and the video group is
+  // disabled for it -- but the initial "mp4" stayed selected, and Run with it.
+  // Moved to the first audio format, as compress and extract-audio already do.
+  const noVideo = Boolean(info && !info.video);
+  useEffect(() => {
+    if (noVideo && VIDEO_FORMATS.includes(format)) setFormat(AUDIO_FORMATS[0]);
+  }, [noVideo, format, setFormat]);
+
   if (!info) return null;
 
   return (

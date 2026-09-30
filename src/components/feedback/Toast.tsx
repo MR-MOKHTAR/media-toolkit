@@ -13,9 +13,9 @@ const ICONS = {
 } as const;
 
 const TONES: Record<ToastType, string> = {
-  success: "text-success",
-  error: "text-danger",
-  warning: "text-warning",
+  success: "text-success-text",
+  error: "text-danger-text",
+  warning: "text-warning-text",
   info: "text-accent",
 };
 
@@ -31,16 +31,24 @@ export function Toast({
   toasts,
   isRtl,
   onDismiss,
+  onHold,
 }: {
   toasts: ToastState[];
   isRtl: boolean;
   onDismiss: (id: string) => void;
+  /** Pauses expiry while the pointer is over the stack. */
+  onHold: (holding: boolean) => void;
 }) {
   const { t } = useTranslation();
 
   return (
+    // Above the dialogs (z-50). At the same level, the dialog portal -- later
+    // in the document -- drew its blurred scrim over every toast, so a failure
+    // reported while a form was open could not be read.
     <div
-      className="fixed bottom-4 end-4 z-50 flex max-w-sm flex-col gap-2"
+      className="fixed bottom-4 end-4 z-[60] flex max-w-sm flex-col gap-2"
+      onMouseEnter={() => onHold(true)}
+      onMouseLeave={() => onHold(false)}
     >
       <AnimatePresence initial={false}>
         {toasts.map((toast) => (
@@ -94,7 +102,9 @@ export function Toast({
             <button
               type="button"
               onClick={() => onDismiss(toast.id)}
-              className="shrink-0 text-fg-muted transition-colors hover:text-fg"
+              // 28px of target around a 15px glyph; the glyph alone was the
+              // target before, which is a hard thing to hit.
+              className="-m-1.5 flex size-7 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
               aria-label={t("close")}
             >
               <X size={15} />

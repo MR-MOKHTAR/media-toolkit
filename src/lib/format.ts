@@ -129,11 +129,27 @@ export function formatDuration(seconds: number | undefined | null): string {
   return seconds === undefined || seconds === null ? "—" : formatTimecode(seconds);
 }
 
+/**
+ * Time left, as a short unit phrase in the reader's language.
+ *
+ * Through Intl's unit formatting rather than a Latin "s" or "m" appended to
+ * localized digits, which put "۴۵s" in a Persian row. Hours past the first,
+ * because "95m" is a sum the reader has to do.
+ */
 export function formatEta(seconds: number | undefined, language: string): string {
   if (seconds === undefined || seconds < 0) return "";
-  if (seconds < 60) return `${formatCount(seconds, language)}s`;
-  const minutes = Math.round(seconds / 60);
-  return `${formatCount(minutes, language)}m`;
+  const unit = (value: number, name: "second" | "minute" | "hour") =>
+    new Intl.NumberFormat(language, {
+      style: "unit",
+      unit: name,
+      unitDisplay: "short",
+      maximumFractionDigits: 0,
+    }).format(value);
+  if (seconds < 60) return unit(seconds, "second");
+  if (seconds < 3600) return unit(Math.round(seconds / 60), "minute");
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return minutes > 0 ? `${unit(hours, "hour")} ${unit(minutes, "minute")}` : unit(hours, "hour");
 }
 
 export function formatRelativeTime(timestamp: number, language: string): string {
@@ -219,3 +235,21 @@ export const fileNameOf = (path: string) => path.split(/[/\\]/).pop() ?? path;
 
 export const fileStemOf = (path: string) =>
   fileNameOf(path).replace(/\.[^.]+$/, "");
+
+/** `02:05` -- a clock time in ASCII digits, the way this app writes every
+ *  timecode: Persian digits in an hh:mm are hard to read at a glance. */
+export function formatClock(timestamp: number): string {
+  const date = new Date(timestamp);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Which day `timestamp` is, relative to today: 0 today, 1 tomorrow, … */
+export function daysFromToday(timestamp: number, now = Date.now()): number {
+  const start = (value: number) => {
+    const date = new Date(value);
+    date.setHours(0, 0, 0, 0);
+    return date.getTime();
+  };
+  return Math.round((start(timestamp) - start(now)) / 86_400_000);
+}

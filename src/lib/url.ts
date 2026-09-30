@@ -120,3 +120,29 @@ function isBareHost(word: string): boolean {
   if (!/^\d+$/.test(port)) return false;
   return /^[\w-]+(\.[\w-]+)+$/.test(authority.slice(0, colon));
 }
+
+/** The most links one paste queues -- the same cap a playlist has, for the
+ *  same reason: a hundred rows is a download list, a thousand is an accident. */
+export const MAX_BATCH = 100;
+
+/**
+ * Every link in `text`, tidied, each once, in order -- for a paste of several.
+ *
+ * Explicit links are taken from anywhere in a line; a scheme-less host only as
+ * a line's first word, the same rule `firstUrlIn` applies to one line, so a
+ * list of bare `youtu.be/...` links works and a paragraph of prose does not
+ * turn into downloads.
+ */
+export function allUrlsIn(text: string): string[] {
+  const found: string[] = [];
+  for (const line of strip(text).split(/\r?\n/)) {
+    const explicit = line.match(/https?:\/\/\S+/gi);
+    if (explicit) {
+      found.push(...explicit.map(trimTail));
+      continue;
+    }
+    const word = line.trim().split(/\s+/)[0] ?? "";
+    if (isBareHost(word)) found.push(`https://${trimTail(word)}`);
+  }
+  return [...new Set(found)].slice(0, MAX_BATCH);
+}

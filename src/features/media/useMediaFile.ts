@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 
 import * as ipc from "../../lib/ipc";
 import type { AppError } from "../jobs/types";
@@ -32,6 +33,7 @@ export interface MediaInfo {
  * which is what lets the screens look like one another.
  */
 export function useMediaFile(initialPath?: string) {
+  const { t } = useTranslation();
   const [path, setPath] = useState<string | null>(initialPath ?? null);
   const [info, setInfo] = useState<MediaInfo | null>(null);
   const [error, setError] = useState<AppError | null>(null);
@@ -67,9 +69,19 @@ export function useMediaFile(initialPath?: string) {
   }, [path]);
 
   const browse = useCallback(async () => {
-    const selected = await ipc.chooseMediaFile(path ?? undefined);
-    if (selected) setPath(selected);
-  }, [path]);
+    try {
+      const selected = await ipc.chooseMediaFile(path ?? undefined, {
+        media: t("picker_media"),
+        video: t("format_video"),
+        audio: t("format_audio"),
+      });
+      if (selected) setPath(selected);
+    } catch (raw) {
+      // The picker itself failing is rare, and was silent: the button did
+      // nothing. Said where the file would have been.
+      setError(ipc.toAppError(raw));
+    }
+  }, [path, t]);
 
   /** A multi-file drop takes the first; these tools work on one file. */
   const acceptDrop = useCallback((paths: string[]) => {

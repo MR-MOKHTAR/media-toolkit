@@ -51,6 +51,10 @@ export interface DownloadSettings {
    *  switch exists so a site that objects to it can be worked around without
    *  waiting for a release. */
   parallel: boolean;
+  /** The last time a download was scheduled for, `HH:MM`. Remembered because
+   *  it is the same time night after night -- when a night-time internet
+   *  package starts. */
+  scheduleTime: string;
 }
 
 /**
@@ -78,6 +82,7 @@ const DEFAULTS: DownloadSettings = {
   // thing to discover the app has been doing.
   cookiesFrom: NO_COOKIES,
   parallel: true,
+  scheduleTime: "02:00",
 };
 
 function load(): DownloadSettings {

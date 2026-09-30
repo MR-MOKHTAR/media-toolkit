@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import type { Job } from "../types";
@@ -22,16 +22,28 @@ export function JobList({
   jobs,
   language,
   empty,
+  showTool,
 }: {
   jobs: Job[];
   language: string;
+  /** Name the tool on every row -- for the list that holds every kind. */
+  showTool?: boolean;
   /** Shown instead of the list when it is empty. The tool screens put their
    *  "start one" button in here; Tasks has nowhere in particular to send you. */
   empty: ReactNode;
 }) {
-  const { state, cancel, remove, reveal, retry } = useJobs();
+  const { state, cancel, remove, reveal, open, retry, startScheduled } = useJobs();
+  // Relative times ("5 minutes ago") are worked out when a row renders, and a
+  // list with nothing running never re-renders -- so they froze at whatever
+  // they said when the last job finished.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const cancelling = useMemo(() => new Set(state.cancelling), [state.cancelling]);
+  const retrying = useMemo(() => new Set(state.retrying), [state.retrying]);
 
   if (jobs.length === 0) return <>{empty}</>;
 
@@ -54,9 +66,14 @@ export function JobList({
               job={job}
               language={language}
               cancelling={cancelling.has(job.id)}
+              retrying={retrying.has(job.id)}
+              showTool={showTool}
+              now={now}
               onCancel={(id) => void cancel(id)}
               onRemove={remove}
               onReveal={(path) => void reveal(path)}
+              onOpen={(path) => void open(path)}
+              onStartNow={(id) => void startScheduled(id)}
               onRetry={(id) => void retry(id)}
             />
           </motion.li>

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -268,6 +268,36 @@ pub struct Jobs {
     entries: Mutex<HashMap<String, Entry>>,
     cpu: Arc<Semaphore>,
     net: Arc<Semaphore>,
+    /// How many downloads may run at once -- a setting now, see
+    /// `set_download_slots`.
+    net_slots: std::sync::Mutex<usize>,
+    /// Permits the network lane still owes after being made smaller while its
+    /// downloads were running. Those cannot be taken away mid-transfer, so each
+    /// is retired as it comes back instead -- see `LanePermit`.
+    net_debt: Arc<AtomicUsize>,
+}
+
+/// A place in a lane, held for as long as the job runs.
+///
+/// Returned to the lane when dropped -- unless the lane has shrunk since it
+/// was handed out, in which case it is retired instead: that is how a limit
+/// lowered from four to two while four downloads run takes effect as they
+/// finish, rather than by stopping two of them.
+pub struct LanePermit {
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    debt: Option<Arc<AtomicUsize>>,
+}
+
+impl Drop for LanePermit {
+    fn drop(&mut self) {
+        let (Some(permit), Some(debt)) = (self.permit.take(), self.debt.as_ref()) else {
+            return;
+        };
+        let owed = debt.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| owed.checked_sub(1));
+        if owed.is_ok() {
+            permit.forget();
+        }
+    }
 }
 
 impl Default for Jobs {
@@ -284,7 +314,9 @@ impl Default for Jobs {
         Self {
             entries: Mutex::new(HashMap::new()),
             cpu: Arc::new(Semaphore::new(cpu)),
-            net: Arc::new(Semaphore::new(4)),
+            net: Arc::new(Semaphore::new(crate::network::DEFAULT_DOWNLOAD_SLOTS)),
+            net_slots: std::sync::Mutex::new(crate::network::DEFAULT_DOWNLOAD_SLOTS),
+            net_debt: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -303,19 +335,73 @@ impl Jobs {
     /// until one of them finished -- and then start, because nothing it did
     /// afterwards checked. The media tools did exactly that and ran to
     /// completion, reporting success on a job the user had cancelled.
-    pub async fn acquire(
-        &self,
-        id: &str,
-        kind: JobKind,
-    ) -> AppResult<tokio::sync::OwnedSemaphorePermit> {
-        let lane = match kind.lane() {
-            Lane::Cpu => self.cpu.clone(),
-            Lane::Network => self.net.clone(),
+    pub async fn acquire(&self, id: &str, kind: JobKind) -> AppResult<LanePermit> {
+        let (lane, debt) = match kind.lane() {
+            Lane::Cpu => (self.cpu.clone(), None),
+            Lane::Network => (self.net.clone(), Some(self.net_debt.clone())),
         };
         let cancel = self.cancel_signal(id).await;
         let permit = cancel.guard(lane.acquire_owned()).await?;
         // The semaphores are never closed, so this cannot fail.
+        Ok(LanePermit {
+            permit: Some(permit.expect("semaphore is open")),
+            debt,
+        })
+    }
+
+    /// Changes how many downloads run at once, from now on.
+    ///
+    /// Raising it lets waiting downloads start at once. Lowering it never
+    /// stops one that is running: idle places are retired immediately, and
+    /// the rest as running downloads finish (see `LanePermit`).
+    pub fn set_download_slots(&self, slots: usize) {
+        let slots = slots.clamp(1, crate::network::MAX_DOWNLOAD_SLOTS);
+        let mut current = self.net_slots.lock().unwrap_or_else(|poison| poison.into_inner());
+        if slots > *current {
+            let mut raise = slots - *current;
+            // Places still owed are simply no longer owed: the permits that
+            // would have been retired come back and stay.
+            while raise > 0
+                && self
+                    .net_debt
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| owed.checked_sub(1))
+                    .is_ok()
+            {
+                raise -= 1;
+            }
+            self.net.add_permits(raise);
+        } else if slots < *current {
+            let lower = *current - slots;
+            let retired = self.net.forget_permits(lower);
+            self.net_debt.fetch_add(lower - retired, Ordering::SeqCst);
+        }
+        *current = slots;
+    }
+
+    /// A place in the CPU lane for work that is CPU-bound but belongs to a job
+    /// of another lane -- a download's MP3 encode, which otherwise ran beside
+    /// three x264 encodes with nothing holding it back. Cancellable while it
+    /// waits, like `acquire`.
+    pub async fn acquire_cpu(&self, id: &str) -> AppResult<tokio::sync::OwnedSemaphorePermit> {
+        let cancel = self.cancel_signal(id).await;
+        let permit = cancel.guard(self.cpu.clone().acquire_owned()).await?;
         Ok(permit.expect("semaphore is open"))
+    }
+
+    /// Waits, for at most `limit`, until every job has left the registry.
+    ///
+    /// For shutdown. `cancel_all` only raises flags and kills processes; the
+    /// cleanup a cancelled job does -- deleting a truncated output, writing
+    /// down which chunks of a transfer landed -- happens on its own task just
+    /// after, and the process used to exit before any of it ran.
+    pub async fn wait_idle(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if self.entries.lock().await.is_empty() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Hands the job's child to the registry, where `cancel` can reach it.
@@ -523,6 +609,49 @@ pub fn new_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lowering the limit never stops a running download; raising it starts
+    /// a waiting one at once.
+    #[tokio::test]
+    async fn the_download_lane_can_be_resized_while_it_runs() {
+        let jobs = Jobs::default();
+        for id in ["a", "b", "c", "d", "e"] {
+            jobs.register(id.into(), JobKind::Download, id.into()).await;
+        }
+        let quick = std::time::Duration::from_millis(50);
+
+        jobs.set_download_slots(1);
+        let first = jobs.acquire("a", JobKind::Download).await.unwrap();
+        assert!(
+            tokio::time::timeout(quick, jobs.acquire("b", JobKind::Download)).await.is_err(),
+            "one slot: the second download waits"
+        );
+
+        jobs.set_download_slots(2);
+        let second = tokio::time::timeout(quick, jobs.acquire("b", JobKind::Download))
+            .await
+            .expect("raised to two: it starts at once")
+            .unwrap();
+
+        // Down to one with two running: neither is stopped, and nothing new
+        // starts until both have made room.
+        jobs.set_download_slots(1);
+        drop(first);
+        assert!(
+            tokio::time::timeout(quick, jobs.acquire("c", JobKind::Download)).await.is_err(),
+            "one of the two is still running, which is the new limit"
+        );
+        drop(second);
+        let third = tokio::time::timeout(quick, jobs.acquire("c", JobKind::Download))
+            .await
+            .expect("both finished: one may start")
+            .unwrap();
+        assert!(
+            tokio::time::timeout(quick, jobs.acquire("d", JobKind::Download)).await.is_err(),
+            "and only one"
+        );
+        drop(third);
+    }
 
     fn event(status: JobStatus) -> serde_json::Value {
         serde_json::to_value(JobStatusEvent {

@@ -10,8 +10,15 @@ const MAX_VISIBLE = 3;
 
 const LIFETIME_MS = { error: 7000, other: 5200 } as const;
 
+/** How long a toast stays once the pointer leaves it. */
+const AFTER_HOLD_MS = 2500;
+
 export function useToast() {
   const [toasts, setToasts] = useState<ToastState[]>([]);
+  /** True while the pointer is over the stack. A toast that disappears while
+   *  it is being read -- or while its "Show in folder" is being aimed at --
+   *  is the one moment it must not. */
+  const [held, setHeld] = useState(false);
 
   const notify = useCallback(
     (type: ToastType, message: string, options?: { action?: ToastAction }) => {
@@ -40,7 +47,7 @@ export function useToast() {
   // kept in a ref map. Re-armed on every change to the stack, and every wake-up
   // sweeps all of them, so a toast can never outlive its deadline.
   useEffect(() => {
-    if (toasts.length === 0) return;
+    if (toasts.length === 0 || held) return;
 
     const soonest = Math.min(...toasts.map((toast) => toast.expiresAt));
     const timer = window.setTimeout(
@@ -52,7 +59,19 @@ export function useToast() {
     );
 
     return () => window.clearTimeout(timer);
-  }, [toasts]);
+  }, [toasts, held]);
 
-  return { toasts, notify, dismiss };
+  /** Holds the stack while it is being read; letting go gives each toast a
+   *  moment more rather than expiring the ones whose time passed meanwhile. */
+  const hold = useCallback((holding: boolean) => {
+    setHeld(holding);
+    if (!holding) {
+      const floor = Date.now() + AFTER_HOLD_MS;
+      setToasts((current) =>
+        current.map((toast) => ({ ...toast, expiresAt: Math.max(toast.expiresAt, floor) })),
+      );
+    }
+  }, []);
+
+  return { toasts, notify, dismiss, hold };
 }
