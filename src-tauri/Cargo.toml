@@ -34,7 +34,7 @@ tar = "0.4"
 liblzma = { version = "0.4", features = ["static"] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2.7.0"
 # One running copy. Two instances share the library folder and the job history

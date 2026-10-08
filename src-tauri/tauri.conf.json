@@ -43,6 +43,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": {
+        "depends": ["libayatana-appindicator3-1"]
+      }
+    },
     "resources": {
       "binaries": "./binaries",
       "resources/THIRD-PARTY.md": "THIRD-PARTY.md"

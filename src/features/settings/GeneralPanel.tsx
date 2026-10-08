@@ -1,9 +1,13 @@
+import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { SectionLabel } from "../../components/ui/Card";
+import { CheckRow } from "../../components/ui/CheckRow";
 import { Segmented } from "../../components/ui/Segmented";
 import { LANGUAGES, type AppLanguage } from "../../hooks/useAppPreferences";
+import * as ipc from "../../lib/ipc";
+import type { TraySettings } from "../jobs/types";
 
 interface Props {
   darkMode: boolean;
@@ -27,6 +31,21 @@ export function GeneralPanel({
   onLanguageChange,
 }: Props) {
   const { t } = useTranslation();
+  const [tray, setTray] = useState<TraySettings | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ipc
+      .getTraySettings()
+      .then((settings) => {
+        if (!cancelled) setTray(settings);
+      })
+      // No native side in `vite dev`: the row stays disabled.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -57,6 +76,17 @@ export function GeneralPanel({
           options={LANGUAGES.map(({ value, label }) => ({ value, label }))}
         />
       </section>
+
+      {/* A switch: it takes effect the moment it moves, and the next press of
+          the close button is the first thing to obey it. */}
+      <CheckRow
+        control="switch"
+        label={t("close_to_tray")}
+        hint={tray && !tray.available ? t("close_to_tray_unavailable") : t("close_to_tray_hint")}
+        checked={tray?.closeToTray ?? true}
+        disabled={!tray?.available}
+        onChange={(enabled) => void ipc.setCloseToTray(enabled).then(setTray).catch(() => undefined)}
+      />
     </>
   );
 }

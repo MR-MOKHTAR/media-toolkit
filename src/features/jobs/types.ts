@@ -285,6 +285,14 @@ export interface PlaylistListing {
   truncated: boolean;
 }
 
+/** Mirrors `tray::TraySettings`. */
+export interface TraySettings {
+  /** The close button hides the window into the tray instead of quitting. */
+  closeToTray: boolean;
+  /** False when the tray icon could not be created, so the switch does nothing. */
+  available: boolean;
+}
+
 /** Mirrors `network::NetworkSettings`: what every connection agrees on. */
 export interface NetworkSettings {
   /** `socks5h://127.0.0.1:10808`, `http://127.0.0.1:10809`, or null for the

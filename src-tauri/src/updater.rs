@@ -38,6 +38,7 @@ pub struct UpdateResult {
 /// most Windows machines do not have.
 fn asset_name() -> AppResult<&'static str> {
     let name = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "aarch64") => "yt-dlp_arm64.exe",
         ("windows", _) => "yt-dlp.exe",
         ("linux", "aarch64") => "yt-dlp_linux_aarch64",
         ("linux", _) => "yt-dlp_linux",

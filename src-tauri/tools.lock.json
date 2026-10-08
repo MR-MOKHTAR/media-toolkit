@@ -35,6 +35,13 @@
           "install_as": "yt-dlp.exe",
           "sha256": null
         },
+        "windows-aarch64": {
+          "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_arm64.exe",
+          "archive": "raw",
+          "member": null,
+          "install_as": "yt-dlp.exe",
+          "sha256": null
+        },
         "linux-x86_64": {
           "url": "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux",
           "archive": "raw",
@@ -71,6 +78,13 @@
       "targets": {
         "windows-x86_64": {
           "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/ffmpeg.exe",
+          "install_as": "ffmpeg.exe",
+          "sha256": null
+        },
+        "windows-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-winarm64-gpl-shared-8.1.zip",
           "archive": "zip",
           "member": "bin/ffmpeg.exe",
           "install_as": "ffmpeg.exe",
@@ -118,6 +132,14 @@
           "executable": false,
           "sha256": null
         },
+        "windows-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-winarm64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "LICENSE.txt",
+          "install_as": "LICENSE-ffmpeg.txt",
+          "executable": false,
+          "sha256": null
+        },
         "linux-x86_64": {
           "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz",
           "archive": "tar.xz",
@@ -142,6 +164,17 @@
       "targets": {
         "windows-x86_64": {
           "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/",
+          "install_as": ".",
+          "exclude": [
+            ".exe"
+          ],
+          "executable": false,
+          "sha256": null
+        },
+        "windows-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-winarm64-gpl-shared-8.1.zip",
           "archive": "zip",
           "member": "bin/",
           "install_as": ".",
@@ -180,6 +213,13 @@
       "targets": {
         "windows-x86_64": {
           "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+          "archive": "zip",
+          "member": "bin/ffprobe.exe",
+          "install_as": "ffprobe.exe",
+          "sha256": null
+        },
+        "windows-aarch64": {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-winarm64-gpl-shared-8.1.zip",
           "archive": "zip",
           "member": "bin/ffprobe.exe",
           "install_as": "ffprobe.exe",

@@ -46,6 +46,10 @@ pub struct Settings {
 
     /// Bytes per second for all downloads together, or no limit.
     pub speed_limit: Option<u64>,
+
+    /// The close button hides the window into the tray instead of quitting, so
+    /// downloads carry on. See `tray`.
+    pub close_to_tray: bool,
 }
 
 /// Written by hand because `derive(Default)` would make `organize_by_tool`
@@ -61,6 +65,7 @@ impl Default for Settings {
             proxy: None,
             max_downloads: crate::network::DEFAULT_DOWNLOAD_SLOTS,
             speed_limit: None,
+            close_to_tray: true,
         }
     }
 }
@@ -183,6 +188,7 @@ mod tests {
             proxy: Some("socks5h://127.0.0.1:10808".into()),
             max_downloads: 2,
             speed_limit: Some(512 * 1024),
+            close_to_tray: false,
         };
         let raw = serde_json::to_string(&settings).unwrap();
         // camelCase across the boundary, matching every other serialized type.
@@ -196,6 +202,7 @@ mod tests {
         assert_eq!(back.speed_limit, Some(512 * 1024));
         assert!(!back.organize_by_tool);
         assert!(back.save_next_to_input);
+        assert!(!back.close_to_tray);
     }
 
     /// The one property that makes a plain file an acceptable place for the
@@ -237,6 +244,8 @@ mod tests {
         // A file from before these settings existed keeps today's behaviour.
         assert_eq!(back.max_downloads, 4);
         assert!(back.proxy.is_none() && back.speed_limit.is_none());
+        // Closing to the tray is the behaviour of a file that never mentioned it.
+        assert!(back.close_to_tray);
     }
 
     /// A file written before the library existed holds only `groqApiKey`, and

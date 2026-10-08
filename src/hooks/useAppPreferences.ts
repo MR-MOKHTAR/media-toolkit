@@ -130,7 +130,11 @@ export function useAppPreferences() {
     // The window's own title -- the taskbar entry and the window switcher --
     // follows too. It was fixed at "Media Toolkit" in tauri.conf.json, the
     // one English string left in a Persian or Arabic session.
-    void i18n.changeLanguage(language).then(() => ipc.setWindowTitle(i18n.t("app_name")));
+    void i18n.changeLanguage(language).then(() => {
+      void ipc.setWindowTitle(i18n.t("app_name"));
+      // And the tray menu, which is native and cannot read the webview's strings.
+      void ipc.setTrayLabels(i18n.t("tray_show"), i18n.t("tray_quit"));
+    });
   }, [language]);
 
   const toggleDarkMode = useCallback(() => {

@@ -25,6 +25,7 @@ import type {
   ProxyTest,
   PlaylistListing,
   ToolStatus,
+  TraySettings,
   UpdateResult,
   UrlInfo,
 } from "../features/jobs/types";
@@ -73,6 +74,23 @@ export const setLibraryOrganize = (enabled: boolean) =>
 
 export const setSaveNextToInput = (enabled: boolean) =>
   invoke<LibraryInfo>("set_save_next_to_input", { enabled });
+
+// ------------------------------------------------------------------- tray
+
+export const getTraySettings = () => invoke<TraySettings>("get_tray_settings");
+
+export const setCloseToTray = (enabled: boolean) =>
+  invoke<TraySettings>("set_close_to_tray", { enabled });
+
+/** The tray menu's words, in the interface language. Never throws: no tray in
+ *  `vite dev`, and the English defaults are a fine fallback. */
+export const setTrayLabels = async (show: string, quit: string) => {
+  try {
+    await invoke("set_tray_labels", { show, quit });
+  } catch {
+    // Nothing to label.
+  }
+};
 
 // ---------------------------------------------------------------- network
 
