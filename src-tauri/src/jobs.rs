@@ -56,7 +56,7 @@ enum Lane {
 /// What the job is doing right now. Downloads go through more than one phase
 /// and "Merging" can take a while on a large video, so a frozen 100% bar needs
 /// an explanation.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Stage {
     Queued,

@@ -79,6 +79,7 @@ pub fn run() {
             network::get_network_settings,
             network::set_network_settings,
             network::test_proxy,
+            network::test_internet_speed,
             tray::get_tray_settings,
             tray::set_close_to_tray,
             tray::set_tray_labels,

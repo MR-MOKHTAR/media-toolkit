@@ -7,6 +7,7 @@ import {
   Gauge,
   Link2,
   ListVideo,
+  Loader2,
   Music2,
   RotateCw,
   Video,
@@ -240,7 +241,9 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     Boolean(savePath) &&
     isOnline &&
     !starting &&
-    (batch || toolsReady || isFile);
+    // A link nothing has looked at yet is not held back for a missing yt-dlp
+    // either: it may be a plain file, and `start` looks before it decides.
+    (batch || toolsReady || isFile || !info);
 
   const submit = () => {
     if (!canSubmit) return;
@@ -418,7 +421,18 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         // A segmented control, not the two large cards it replaces: it is one
         // line of the form like every other choice in the app, rather than the
         // biggest thing on the screen.
-        looksLikeUrl(link) && (
+        //
+        // But not for a link nothing has identified. This used to appear the
+        // instant a URL did, which dressed every link as a video before anyone
+        // had looked at it: a zip got a "Video (MP4)" toggle and a quality
+        // setting, and the form read as a YouTube downloader that happened to
+        // accept other things. Until the probe answers, the form says only that
+        // it is finding out; what it then offers follows from what it found. A
+        // batch has no probe, and the choice it asks is one every link in it
+        // may need, so it keeps the control. So does a probe that failed --
+        // see below.
+        looksLikeUrl(link) &&
+        (batch || info || probeFailed) && (
           <ControlGroup>
             <Segmented
               label={t("download_as")}
@@ -521,6 +535,18 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         )
       )}
 
+      {/* The general case, said while the specific one is not known yet. */}
+      {looksLikeUrl(link) && !batch && !info && !probeFailed && isOnline && (
+        <p className="flex items-center gap-1.5 text-xs text-fg-muted" role="status">
+          {probing ? (
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+          ) : (
+            <Link2 size={12} className="shrink-0" />
+          )}
+          {t("download_detecting")}
+        </p>
+      )}
+
       {looksLikeUrl(link) && (
         <WhenRow
           when={when}
@@ -540,7 +566,10 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       {/* Only when it matters. yt-dlp is needed for a page and not for a file,
           so a missing one is a warning on one kind of link and nothing at all
           on the other. */}
-      {!toolsReady && !isFile && (
+      {/* And only once the link is known to be a page. It was shown on an
+          empty form -- a warning about yt-dlp before a single link had been
+          pasted, for a tool that is not needed for most of what gets pasted. */}
+      {!toolsReady && !isFile && (info || probeFailed) && (
         <p className="text-sm text-warning-text">{t("ytdlp_not_found")}</p>
       )}
     </ToolDialog>

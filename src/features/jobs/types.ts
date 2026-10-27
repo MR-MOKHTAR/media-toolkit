@@ -308,6 +308,14 @@ export interface ProxyTest {
   latencyMs: number;
 }
 
+/** What measuring the connection found. Speeds are bytes per second. */
+export interface SpeedTest {
+  bytesPerSecond: number;
+  /** The best second of the test. */
+  peakBytesPerSecond: number;
+  latencyMs: number;
+}
+
 export interface ToolStatus {
   ytdlp: boolean;
   ffmpeg: boolean;

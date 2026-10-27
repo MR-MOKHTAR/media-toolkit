@@ -5,6 +5,7 @@ import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
 import { NavigationProvider, useNavigation } from "./app/navigation";
 import { AppSidebar } from "./components/layout/AppSidebar";
 import { AppTitleBar } from "./components/layout/AppTitleBar";
+import { StatusBar } from "./components/layout/StatusBar";
 import { OfflineBanner } from "./components/feedback/OfflineBanner";
 import { Toast } from "./components/feedback/Toast";
 import { DownloadForm } from "./features/downloads/DownloadForm";
@@ -134,6 +135,10 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
               )}
 
             </main>
+
+            {/* Along the bottom of every screen; see the component for what
+                goes in it. */}
+            <StatusBar isOnline={isOnline} language={language} />
           </div>
 
           <Toast toasts={toasts} isRtl={isRtl} onDismiss={dismiss} onHold={hold} />

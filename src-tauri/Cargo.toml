@@ -67,3 +67,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 # Already in the tree through tokio; named here to call `killpg` directly.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Paused clocks for the speed meter's tests: `start_paused` and
+# `tokio::time::advance` make "four silent seconds" take no time at all.
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

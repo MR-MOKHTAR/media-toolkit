@@ -17,7 +17,8 @@
 //! Which of the two runs is decided in `download::choose_engine`.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -44,23 +45,48 @@ use crate::{network, paths, ratelimit};
 /// nothing on the resume.
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
-/// Connections opened against one file.
+/// The most connections opened against one file.
 ///
-/// The same number yt-dlp is given for fragments, and for the same reason: this
-/// is network-bound work, so the core count says nothing about the right
-/// figure. Eight is where a single-stream server-side rate cap stops being the
-/// limit and the line itself starts to be, without looking like an attack to
-/// the host on the other end.
-const CONNECTIONS: usize = 8;
+/// The same reasoning yt-dlp is given for fragments: this is network-bound
+/// work, so the core count says nothing about the right figure. Eight is where
+/// a single-stream server-side rate cap stops being the limit and the line
+/// itself starts to be; sixteen is for the case where eight is still not enough
+/// to fill a fast line -- see `connections_for`.
+const CONNECTIONS: usize = 16;
+
+/// The sockets the app is willing to hold open across *all* the files it is
+/// splitting at once. One download gets the most it can use; four share the
+/// same budget instead of opening four times as many, which is where a host
+/// starts answering 429 and a home router starts dropping connections.
+const SOCKET_BUDGET: usize = 32;
+
+/// No file gets fewer than this, however many are running.
+const MIN_CONNECTIONS: usize = 4;
+
+/// A file smaller than this is never given more than eight connections: with
+/// 4 MiB chunks there is not enough of it to keep sixteen sockets busy, and
+/// the extra handshakes would cost more than they return.
+const WIDE_THRESHOLD: u64 = 256 * 1024 * 1024;
+
+/// How long a socket may deliver nothing before the chunk is abandoned and
+/// asked for again on a fresh connection.
+///
+/// The client-wide read timeout is a minute, which is right for a request that
+/// is slow to begin and wrong for one that stalls in the middle: one stuck
+/// socket held the *last* chunk of a file for a minute while the other seven
+/// workers sat finished, and the download looked frozen at 99%. A new
+/// connection usually lands on a healthy path straight away.
+const STALL_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How often the speed is measured and reported -- on a clock, not when bytes
+/// happen to arrive. A reading that is only taken when data lands cannot say
+/// "nothing is landing", so a stalled line kept showing the last good figure
+/// and then jumped.
+const SAMPLE_EVERY: Duration = Duration::from_millis(250);
 
 /// Below this, one connection wins. Eight TLS handshakes to fetch six megabytes
 /// costs more than it saves.
 const SPLIT_THRESHOLD: u64 = 8 * 1024 * 1024;
-
-/// How much a worker accumulates before reporting. Without it, eight workers
-/// each posting every 16 KB read is a few thousand messages a second to feed a
-/// progress bar that redraws ten times a second.
-const REPORT_EVERY: u64 = 256 * 1024;
 
 /// How often the record of finished chunks is written down. A crash loses at
 /// most this much *bookkeeping* -- the affected chunks are simply fetched
@@ -157,6 +183,11 @@ fn build_client(proxy: Option<&str>) -> Client {
         // download as a whole: a stalled transfer is a failure, a long one
         // is not.
         .read_timeout(Duration::from_secs(60))
+        // A socket that died silently -- a router that dropped the mapping, a
+        // VPN that reconnected -- is found by the OS in half a minute rather
+        // than whenever the next read times out.
+        .tcp_keepalive(Duration::from_secs(30))
+        .tcp_nodelay(true)
         .pool_max_idle_per_host(CONNECTIONS);
     network::proxied(builder, proxy)
         .build()
@@ -482,13 +513,41 @@ async fn transfer(
     }
 }
 
-/// What a worker reports back. Bytes for the bar, chunks for the resume.
-enum Tick {
-    Bytes(u64),
-    /// Bytes reported by an attempt that then failed. Its chunk is fetched
-    /// again from the start, so they are about to arrive a second time.
-    Rewind(u64),
-    Chunk(u32),
+/// How many connections one file gets, given how big it is and how many other
+/// files are being split at the same moment.
+///
+/// More connections is the oldest trick for filling a fast line, and it stops
+/// working the moment it becomes rude: a host that sees thirty-two sockets from
+/// one address answers 429 or starts resetting them. So the number is a share
+/// of `SOCKET_BUDGET` -- all of it for a lone download, a fraction when several
+/// run -- and the widest setting is kept for files big enough to use it.
+fn connections_for(total: u64, active: usize) -> usize {
+    let ceiling = if total >= WIDE_THRESHOLD { CONNECTIONS } else { 8 };
+    (SOCKET_BUDGET / active.max(1)).clamp(MIN_CONNECTIONS, ceiling)
+}
+
+/// Counts the files currently being split, for `connections_for`. Held for the
+/// length of a `segmented` call and released however it ends.
+fn splitting() -> &'static AtomicUsize {
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    &ACTIVE
+}
+
+struct SplitGuard;
+
+impl SplitGuard {
+    /// Registers one more file and returns how many are now being split,
+    /// itself included.
+    fn enter() -> (Self, usize) {
+        let now = splitting().fetch_add(1, Ordering::AcqRel) + 1;
+        (Self, now)
+    }
+}
+
+impl Drop for SplitGuard {
+    fn drop(&mut self) {
+        splitting().fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// What is known to be on disk already, so a retry does not refetch it.
@@ -601,14 +660,21 @@ async fn segmented(
         return Ok(total);
     }
 
-    let (tx, mut rx) = mpsc::channel::<Tick>(256);
+    // Bytes received by this attempt, bumped by every worker on every read.
+    // Counted where the bytes land rather than relayed through a channel in
+    // 256 KB lumps: a line doing 60 KB/s across eight workers took most of a
+    // minute to fill one lump each, so the bar sat still and then lurched.
+    let received = Arc::new(AtomicU64::new(0));
+    let (tx, mut rx) = mpsc::channel::<u32>(256);
     let next = Arc::new(AtomicUsize::new(0));
     let mut workers = JoinSet::new();
 
-    for _ in 0..CONNECTIONS.min(pending.len()) {
+    let (_split, active) = SplitGuard::enter();
+    for _ in 0..connections_for(total, active).min(pending.len()) {
         let queue = Arc::clone(&pending);
         let cursor = Arc::clone(&next);
         let sender = tx.clone();
+        let counter = Arc::clone(&received);
         let url = url.to_string();
         let headers = headers.cloned();
         let part = part.to_path_buf();
@@ -621,10 +687,10 @@ async fn segmented(
                 };
                 let start = u64::from(index) * CHUNK_SIZE;
                 let end = (start + CHUNK_SIZE).min(total) - 1;
-                fetch_chunk(&url, headers.as_ref(), &part, start, end, &sender).await?;
+                fetch_chunk(&url, headers.as_ref(), &part, start, end, &counter).await?;
                 // A full chunk is on disk. Losing this message would only cost
                 // a refetch after a crash, so the send is not worth failing on.
-                let _ = sender.send(Tick::Chunk(index)).await;
+                let _ = sender.send(index).await;
             }
         });
     }
@@ -634,8 +700,11 @@ async fn segmented(
 
     // Seeded with what the previous attempt already put on disk, so the first
     // sample measures this attempt rather than the resume.
-    let mut meter = Meter::new(downloaded);
+    let baseline = downloaded;
+    let mut meter = Meter::new(baseline);
     let mut last_saved = Instant::now();
+    let mut clock = tokio::time::interval(SAMPLE_EVERY);
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -645,23 +714,21 @@ async fn segmented(
                 save_state(part, &state).await;
                 return Err(AppError::Cancelled);
             }
-            tick = rx.recv() => match tick {
+            // The measurement, on its own clock. Reported even when nothing
+            // arrived in between -- that is exactly when the number has to fall.
+            _ = clock.tick() => {
+                // Capped at the total as a last line of defence: whatever the
+                // arithmetic, "120 MB of 100 MB" is never true.
+                downloaded = (baseline + received.load(Ordering::Relaxed)).min(total);
+                // The last report is the finished one, made once below; a tick
+                // that lands as the final bytes do would be a second.
+                if downloaded < total {
+                    report(downloaded, Some(total), meter.sample(downloaded));
+                }
+            }
+            index = rx.recv() => match index {
                 None => break,
-                Some(Tick::Bytes(count)) => {
-                    // Capped at the total as a last line of defence: whatever
-                    // the arithmetic, "120 MB of 100 MB" is never true.
-                    downloaded = (downloaded + count).min(total);
-                    report(downloaded, Some(total), meter.sample(downloaded));
-                }
-                Some(Tick::Rewind(count)) => {
-                    downloaded = downloaded.saturating_sub(count);
-                    // The meter keeps its own baseline; a count that goes
-                    // backwards would read as zero speed for one sample, which
-                    // is closer to the truth than a spike.
-                    meter.rebase(downloaded);
-                    report(downloaded, Some(total), meter.sample(downloaded));
-                }
-                Some(Tick::Chunk(index)) => {
+                Some(index) => {
                     state.done.push(index);
                     if last_saved.elapsed() >= STATE_INTERVAL {
                         save_state(part, &state).await;
@@ -690,58 +757,63 @@ async fn segmented(
         return Err(error);
     }
 
+    // Said once, from the counter itself, so the last report is the true end of
+    // the file whichever way the clock and the workers happened to interleave.
+    downloaded = (baseline + received.load(Ordering::Relaxed)).min(total);
+    report(downloaded, Some(total), meter.sample(downloaded));
+
     Ok(total)
 }
 
 /// Fetches one range into its place in the file.
 ///
 /// Every attempt starts the range over, so the bytes a failed attempt already
-/// reported are taken back before the next one begins. They were not, which
-/// is how a download came to show more received than the file holds: each
-/// retried chunk was counted once per attempt. On one download on a quiet line
-/// retries were rare enough to hide it; two or three downloads sharing a
-/// connection retry constantly, and the figure climbed well past the size.
+/// counted are taken back before the next one begins. They were not, which is
+/// how a download came to show more received than the file holds: each retried
+/// chunk was counted once per attempt. On one download on a quiet line retries
+/// were rare enough to hide it; two or three downloads sharing a connection
+/// retry constantly, and the figure climbed well past the size.
 async fn fetch_chunk(
     url: &str,
     headers: Option<&HeaderMap>,
     part: &Path,
     start: u64,
     end: u64,
-    sender: &mpsc::Sender<Tick>,
+    received: &AtomicU64,
 ) -> AppResult<()> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let mut reported = 0u64;
-        let outcome = copy_range(url, headers, part, start, end, sender, &mut reported).await;
+        let mut counted = 0u64;
+        let outcome = copy_range(url, headers, part, start, end, received, &mut counted).await;
         if outcome.is_ok() {
             return Ok(());
         }
-        if reported > 0 {
-            let _ = sender.send(Tick::Rewind(reported)).await;
-        }
+        received.fetch_sub(counted, Ordering::Relaxed);
         match outcome {
             Err(_) if attempt < CHUNK_ATTEMPTS => {
                 // A dropped connection mid-file is ordinary on a home line.
                 // Backing off before retrying is the difference between riding
                 // out a two-second outage and failing an hour-long download.
-                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                // Short for the first retry -- a stall abandoned by the
+                // watchdog wants a fresh socket now, not in half a second.
+                tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
             }
             other => return other,
         }
     }
 }
 
-/// `reported` counts what this attempt has told the progress bar, so the caller
-/// can take it back if the attempt fails.
+/// `counted` is what this attempt has added to `received`, so the caller can
+/// take it back if the attempt fails.
 async fn copy_range(
     url: &str,
     headers: Option<&HeaderMap>,
     part: &Path,
     start: u64,
     end: u64,
-    sender: &mpsc::Sender<Tick>,
-    reported: &mut u64,
+    received: &AtomicU64,
+    counted: &mut u64,
 ) -> AppResult<()> {
     let mut response = get(url, headers)
         .header(RANGE, format!("bytes={start}-{end}"))
@@ -770,21 +842,34 @@ async fn copy_range(
     // Buffered, and seeked *before* it is wrapped so the buffer never has to be
     // flushed to move the cursor. reqwest hands back whatever a read returned,
     // which on a fast line is 16-64 KB at a time -- so an unbuffered writer
-    // makes a syscall per read, times eight workers, for the whole file. The
+    // makes a syscall per read, times the workers, for the whole file. The
     // buffer turns that into one write per 1 MiB.
     let mut file = tokio::io::BufWriter::with_capacity(WRITE_BUFFER, file);
 
     let mut written = 0u64;
-    let mut unreported = 0u64;
     let limit = end - start + 1;
 
-    while let Some(bytes) = response.chunk().await.map_err(AppError::network)? {
+    loop {
+        // A socket that goes quiet is abandoned, not waited for -- see
+        // `STALL_TIMEOUT`.
+        let next = tokio::time::timeout(STALL_TIMEOUT, response.chunk())
+            .await
+            .map_err(|_| AppError::network("the connection stalled"))?
+            .map_err(AppError::network)?;
+        let Some(bytes) = next else { break };
+
         // A server that ignores the end of the range would otherwise overwrite
         // the chunk after this one.
         let take = bytes.len().min((limit - written) as usize);
         if take == 0 {
             break;
         }
+        // Counted the moment it arrives, before the limit and the disk have had
+        // their say: the speed shown is the line's, and a write that takes a
+        // moment must not make the line look slow.
+        received.fetch_add(take as u64, Ordering::Relaxed);
+        *counted += take as u64;
+
         // The speed limit, shared by every connection of every download. A
         // cancel does not wait for this: the worker is aborted where it stands.
         ratelimit::take(take).await;
@@ -793,12 +878,6 @@ async fn copy_range(
             .map_err(|error| AppError::io(part, error))?;
 
         written += take as u64;
-        unreported += take as u64;
-        if unreported >= REPORT_EVERY {
-            let _ = sender.send(Tick::Bytes(unreported)).await;
-            *reported += unreported;
-            unreported = 0;
-        }
         if written == limit {
             break;
         }
@@ -810,14 +889,10 @@ async fn copy_range(
 
     if written < limit {
         // Short read: the attempt is retried rather than the chunk being marked
-        // done with a hole in it. What it did report is rewound by the caller.
+        // done with a hole in it. What it counted is taken back by the caller.
         return Err(AppError::network("connection closed before the range ended"));
     }
 
-    if unreported > 0 {
-        let _ = sender.send(Tick::Bytes(unreported)).await;
-        *reported += unreported;
-    }
     Ok(())
 }
 
@@ -895,6 +970,13 @@ async fn single(
 
     let mut meter = Meter::new(downloaded);
     report(downloaded, total, None);
+    let mut clock = tokio::time::interval(SAMPLE_EVERY);
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // The same stall rule as a split transfer, applied to the one socket there
+    // is. Here the answer is not a fresh connection for one chunk: the error
+    // ends the attempt, and the retry button resumes from the `.part`.
+    let mut idle_since = Instant::now();
 
     loop {
         let next = tokio::select! {
@@ -903,25 +985,39 @@ async fn single(
                 let _ = file.flush().await;
                 return Err(AppError::Cancelled);
             }
+            // Reported on a clock as well as on arrival, so a connection that
+            // goes quiet shows its speed falling rather than freezing on the
+            // last good figure.
+            _ = clock.tick() => {
+                if idle_since.elapsed() >= STALL_TIMEOUT * 2 {
+                    let _ = file.flush().await;
+                    return Err(AppError::network("the connection stalled"));
+                }
+                let shown_total = total.map(|total| total.max(downloaded));
+                report(downloaded, shown_total, meter.sample(downloaded));
+                continue;
+            }
             chunk = response.chunk() => chunk.map_err(AppError::network)?,
         };
 
         let Some(bytes) = next else { break };
+        idle_since = Instant::now();
+        // Counted on arrival, ahead of the limit's sleep and the disk write --
+        // see `copy_range`.
+        downloaded += bytes.len() as u64;
         file.write_all(&bytes)
             .await
             .map_err(|error| AppError::io(part, error))?;
-        downloaded += bytes.len() as u64;
         // The speed limit, given up the moment cancel is pressed.
         if cancel.guard(ratelimit::take(bytes.len())).await.is_err() {
             let _ = file.flush().await;
             return Err(AppError::Cancelled);
         }
-        // A server that sends more than it announced is still sending the
-        // file; what it announced was wrong, and the bar should not say
-        // "105 MB of 100 MB" about it.
-        let shown_total = total.map(|total| total.max(downloaded));
-        report(downloaded, shown_total, meter.sample(downloaded));
     }
+
+    // The end of the stream, said from the counter: the loop above reports on
+    // its clock, so the last bytes may not have been.
+    report(downloaded, total.map(|total| total.max(downloaded)), meter.sample(downloaded));
 
     file.flush()
         .await
@@ -1002,63 +1098,79 @@ fn emit(
     });
 }
 
-/// Turns a stream of arrival times into a rate worth showing.
+/// Turns a running byte count into a rate worth showing.
 ///
-/// Smoothed, because the raw figure between two 250 ms samples swings by a
-/// factor of three on a healthy connection and a number that jumps like that
-/// reads as broken. The ETA is computed from this, so the smoothing is what
-/// stops "4 minutes left" from becoming "40 seconds left" and back twice a
-/// second.
-struct Meter {
-    last: Instant,
-    last_bytes: u64,
+/// The rate is bytes gained over the last few seconds divided by those seconds
+/// -- a sliding window, not a smoothed instant. The two things it replaces each
+/// failed in its own way: the raw gap between two 250 ms samples swings by a
+/// factor of three on a healthy line, and an exponential average updated only
+/// when data happened to arrive weighted a one-second silence the same as a
+/// tenth of a second, so the figure lurched whenever the line hiccupped.
+///
+/// A window is also honest about a stall. When nothing arrives the oldest
+/// samples age out and the rate falls to zero over a few ticks, instead of
+/// freezing on the last good number and then jumping. The ETA is computed from
+/// this, so the same property is what keeps "4 minutes left" from becoming
+/// "40 seconds left" and back twice a second.
+pub(crate) struct Meter {
+    /// `(when, bytes so far)`, oldest first. Never empty.
+    window: VecDeque<(Instant, u64)>,
     rate: Option<f64>,
 }
 
 impl Meter {
-    const INTERVAL: Duration = Duration::from_millis(400);
+    /// How far back the rate looks. Long enough to ride out a burst, short
+    /// enough that a change of pace shows up within a couple of seconds.
+    const WINDOW: Duration = Duration::from_secs(3);
+    /// Less than this and the division is mostly noise.
+    const MIN_SPAN: Duration = Duration::from_millis(400);
 
     /// `start` is what the transfer has *already* got -- the resume offset, or
     /// zero for a fresh download.
     ///
     /// It used to be hard-coded to zero, which was right exactly once. A resumed
     /// download begins with `downloaded` already at, say, 50 MiB, so the first
-    /// sample divided all 50 MiB by the 400 ms window and reported 125 MB/s --
-    /// with an ETA to match -- and then took several seconds of the EMA below to
-    /// decay back to the truth. The number the user watches was wrong for the
+    /// sample divided all 50 MiB by the first window and reported 125 MB/s --
+    /// with an ETA to match. The number the user watches was wrong for the
     /// first few seconds of every retry, which is precisely when they are
     /// looking at it.
-    fn new(start: u64) -> Self {
+    pub(crate) fn new(start: u64) -> Self {
         Self {
-            last: Instant::now(),
-            last_bytes: start,
+            window: VecDeque::from([(Instant::now(), start)]),
             rate: None,
         }
     }
 
-    /// Moves the baseline without taking a sample, for a count that went
-    /// backwards -- a retried chunk giving back what it had reported.
-    fn rebase(&mut self, downloaded: u64) {
-        self.last_bytes = self.last_bytes.min(downloaded);
-    }
-
     /// Bytes per second, or `None` until there is enough of a window to divide
-    /// by. Returns the last figure between samples so the number on screen does
-    /// not blink out.
-    fn sample(&mut self, downloaded: u64) -> Option<f64> {
-        let elapsed = self.last.elapsed();
-        if elapsed < Self::INTERVAL {
+    /// by.
+    pub(crate) fn sample(&mut self, downloaded: u64) -> Option<f64> {
+        let now = Instant::now();
+
+        // A count that went backwards -- a retried chunk giving back what it
+        // had counted -- lowers the whole window with it, so the gap is not
+        // read as negative speed and the bytes about to be fetched again are
+        // not read as a burst.
+        if let Some(&(_, oldest)) = self.window.front() {
+            if downloaded < oldest {
+                for entry in &mut self.window {
+                    entry.1 = entry.1.min(downloaded);
+                }
+            }
+        }
+        self.window.push_back((now, downloaded));
+
+        // Keep one sample at or beyond the edge of the window, so the span
+        // always reaches back as far as the window does.
+        while self.window.len() > 2 && now.duration_since(self.window[1].0) >= Self::WINDOW {
+            self.window.pop_front();
+        }
+
+        let &(then, bytes) = self.window.front()?;
+        let span = now.duration_since(then);
+        if span < Self::MIN_SPAN {
             return self.rate;
         }
-        let gained = downloaded.saturating_sub(self.last_bytes) as f64;
-        let sample = gained / elapsed.as_secs_f64();
-
-        self.rate = Some(match self.rate {
-            Some(current) => current * 0.7 + sample * 0.3,
-            None => sample,
-        });
-        self.last = Instant::now();
-        self.last_bytes = downloaded;
+        self.rate = Some(downloaded.saturating_sub(bytes) as f64 / span.as_secs_f64());
         self.rate
     }
 }
@@ -2087,6 +2199,63 @@ mod tests {
         // 2 MB/s; the bound is loose because the sleep is only approximate.
         assert!(rate < 10.0 * 1024.0 * 1024.0, "reported {rate} B/s");
         assert!(rate > 0.0, "reported {rate} B/s");
+    }
+
+    /// The bug: the figure was only recomputed when data arrived, so a line
+    /// that went quiet kept showing its last good speed, then jumped. On a clock
+    /// and over a window, silence has to read as silence.
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_line_shows_its_speed_falling_to_nothing() {
+        let mut meter = Meter::new(0);
+        let mut bytes = 0u64;
+        // Two seconds at 1 MiB/s.
+        for _ in 0..8 {
+            tokio::time::advance(Duration::from_millis(250)).await;
+            bytes += 256 * 1024;
+            meter.sample(bytes);
+        }
+        let steady = meter.sample(bytes).expect("a window has passed");
+        assert!((steady - 1_048_576.0).abs() < 150_000.0, "steady at {steady}");
+
+        // Then nothing for four seconds -- longer than the window.
+        let mut last = steady;
+        for _ in 0..16 {
+            tokio::time::advance(Duration::from_millis(250)).await;
+            let rate = meter.sample(bytes).expect("still measuring");
+            assert!(rate <= last + 1.0, "the rate rose during a stall: {rate} after {last}");
+            last = rate;
+        }
+        assert!(last < 1.0, "still showing {last} B/s after four silent seconds");
+    }
+
+    /// Bytes given back by a retried chunk must not read as negative speed, or
+    /// as a burst when they are fetched again.
+    #[tokio::test(start_paused = true)]
+    async fn a_rewind_does_not_read_as_a_burst() {
+        let mut meter = Meter::new(0);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        meter.sample(1_000_000);
+        // A failed attempt gives back 800 KB...
+        tokio::time::advance(Duration::from_millis(250)).await;
+        let after_rewind = meter.sample(200_000).expect("measuring");
+        assert!(after_rewind >= 0.0 && after_rewind < 1_500_000.0, "{after_rewind}");
+        // ...which are then fetched again over the next second.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let refetched = meter.sample(1_000_000).expect("measuring");
+        assert!(refetched < 1_500_000.0, "re-fetching read as {refetched} B/s");
+    }
+
+    #[test]
+    fn a_lone_big_download_gets_the_most_connections_and_a_crowd_shares() {
+        let big = WIDE_THRESHOLD;
+        assert_eq!(connections_for(big, 1), CONNECTIONS);
+        assert_eq!(connections_for(big, 2), CONNECTIONS);
+        assert_eq!(connections_for(big, 4), 8);
+        assert_eq!(connections_for(big, 8), MIN_CONNECTIONS);
+        // Never fewer than the floor, however many are running.
+        assert_eq!(connections_for(big, 100), MIN_CONNECTIONS);
+        // A smaller file is not given more than eight, even alone.
+        assert_eq!(connections_for(64 * 1024 * 1024, 1), 8);
     }
 
     #[test]

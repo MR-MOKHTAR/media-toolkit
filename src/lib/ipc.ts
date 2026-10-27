@@ -24,6 +24,7 @@ import type {
   NetworkSettings,
   ProxyTest,
   PlaylistListing,
+  SpeedTest,
   ToolStatus,
   TraySettings,
   UpdateResult,
@@ -103,6 +104,11 @@ export const setNetworkSettings = (settings: NetworkSettings) =>
 /** Whether YouTube answers through `proxy` (null: without one). */
 export const testProxy = (proxy: string | null) =>
   invoke<ProxyTest>("test_proxy", { proxy });
+
+/** Measures the connection for several seconds, through the proxy downloads
+ *  use. Only ever called from a button: it fetches from a public speed-test
+ *  endpoint. */
+export const testInternetSpeed = () => invoke<SpeedTest>("test_internet_speed");
 
 export const probeUrl = (url: string, cookiesFrom?: string) =>
   invoke<UrlInfo>("probe_url", { url, cookiesFrom });
@@ -235,6 +241,14 @@ export const onJobStatus = (
   handler: (payload: JobStatusEvent) => void,
 ): Promise<UnlistenFn> =>
   listen<JobStatusEvent>(STATUS_EVENT, ({ payload }) => handler(payload));
+
+/** The rate while a speed test runs, about four times a second. */
+export const onSpeedTestProgress = (
+  handler: (bytesPerSecond: number) => void,
+): Promise<UnlistenFn> =>
+  listen<{ bytesPerSecond: number }>("speed-test-progress", ({ payload }) =>
+    handler(payload.bytesPerSecond),
+  );
 
 export const onJobMeta = (
   handler: (payload: JobMetaEvent) => void,

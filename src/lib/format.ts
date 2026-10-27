@@ -85,6 +85,20 @@ export function formatSpeed(
 }
 
 /**
+ * The same transfer rate in megabits per second, which is how a provider sells a
+ * line: "100 Mbps" is about 12.5 MB/s, and a user comparing the two numbers
+ * needs both. Rule 2 again -- localized digits, Latin unit.
+ */
+export function formatMegabits(
+  bytesPerSecond: number | undefined,
+  language: string,
+): string {
+  if (bytesPerSecond === undefined || bytesPerSecond <= 0) return "";
+  const megabits = (bytesPerSecond * 8) / 1_000_000;
+  return `${numberFormatter(language, megabits >= 100 ? 0 : 1).format(megabits)} Mbps`;
+}
+
+/**
  * ffmpeg's realtime multiplier, as "2.0×".
  *
  * Not a transfer rate and not interchangeable with one: it says how many

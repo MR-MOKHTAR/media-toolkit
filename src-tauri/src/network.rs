@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::{ClientBuilder, Url};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::{AppError, AppResult};
 use crate::jobs::Jobs;
@@ -193,6 +193,151 @@ pub async fn test_proxy(proxy: Option<String>) -> AppResult<ProxyTest> {
         .map_err(AppError::network)?;
     Ok(ProxyTest {
         latency_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+/// What a speed test found.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedTest {
+    /// Bytes per second over the steady part of the test -- the figure to
+    /// compare a download against.
+    pub bytes_per_second: f64,
+    /// The best second of it. The gap between this and the average is the line
+    /// being uneven, which is worth knowing when a download looks slow.
+    pub peak_bytes_per_second: f64,
+    /// Time to the first response, in milliseconds.
+    pub latency_ms: u64,
+}
+
+/// Emitted while a speed test runs, so the status bar can show the number
+/// climbing instead of a spinner for seven seconds.
+pub const SPEED_TEST_EVENT: &str = "speed-test-progress";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeedTestProgress {
+    bytes_per_second: f64,
+}
+
+/// A test file big enough that no connection finishes it inside `TEST_LENGTH`.
+const TEST_URL: &str = "https://speed.cloudflare.com/__down?bytes=100000000";
+/// Parallel streams, for the same reason downloads use them: one connection
+/// rarely fills a fast line, and the question is what the *line* can do.
+const TEST_STREAMS: usize = 4;
+const TEST_LENGTH: Duration = Duration::from_secs(7);
+/// The first second is TCP finding its feet, not the line's speed.
+const TEST_WARM_UP: Duration = Duration::from_secs(1);
+/// A fast line would otherwise spend seven seconds pulling gigabytes.
+const TEST_BYTE_CAP: u64 = 250 * 1024 * 1024;
+
+/// Measures the connection, through the proxy the downloads use.
+///
+/// Only when asked: it fetches a file from Cloudflare's public speed-test
+/// endpoint, so it is a button and not something the app does by itself. The
+/// speed limit is deliberately not applied -- the point is to see what the line
+/// can do, not what the app has been told to use of it.
+#[tauri::command]
+pub async fn test_internet_speed(app: AppHandle) -> AppResult<SpeedTest> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let client = proxied(
+        reqwest::Client::builder().connect_timeout(Duration::from_secs(8)),
+        proxy().as_deref(),
+    )
+    .build()
+    .map_err(AppError::network)?;
+
+    let received = Arc::new(AtomicU64::new(0));
+    let started = Instant::now();
+    let mut streams = tokio::task::JoinSet::new();
+    for _ in 0..TEST_STREAMS {
+        let client = client.clone();
+        let received = Arc::clone(&received);
+        streams.spawn(async move {
+            let began = Instant::now();
+            let mut response = client.get(TEST_URL).send().await.map_err(AppError::network)?;
+            let latency = began.elapsed();
+            while let Some(bytes) = response.chunk().await.map_err(AppError::network)? {
+                received.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            }
+            Ok::<_, AppError>(latency)
+        });
+    }
+
+    // Sampled from here, on a clock, so the result does not depend on how the
+    // four streams happened to interleave.
+    let mut samples: Vec<(Duration, u64)> = Vec::new();
+    let mut clock = tokio::time::interval(Duration::from_millis(250));
+    loop {
+        clock.tick().await;
+        let at = started.elapsed();
+        let total = received.load(Ordering::Relaxed);
+        samples.push((at, total));
+
+        // The last second's rate, or the whole run's while it is younger than
+        // that. Nothing before the first half second: it is mostly the TLS
+        // handshake and would flash a number that is not the line's.
+        if at >= Duration::from_millis(500) {
+            let (from_at, from_bytes) = samples
+                .iter()
+                .rev()
+                .find(|(earlier, _)| at.saturating_sub(*earlier) >= Duration::from_secs(1))
+                .copied()
+                .unwrap_or((Duration::ZERO, 0));
+            let seconds = at.saturating_sub(from_at).as_secs_f64();
+            if seconds > 0.0 {
+                let _ = app.emit(
+                    SPEED_TEST_EVENT,
+                    SpeedTestProgress {
+                        bytes_per_second: (total - from_bytes) as f64 / seconds,
+                    },
+                );
+            }
+        }
+
+        if at >= TEST_LENGTH || total >= TEST_BYTE_CAP || streams.is_empty() {
+            break;
+        }
+    }
+
+    // Stopped where they stand: the test is over, and what is left of the file
+    // is not wanted.
+    streams.abort_all();
+    let mut latency = None;
+    while let Some(joined) = streams.join_next().await {
+        if let Ok(Ok(first)) = joined {
+            latency = Some(latency.map_or(first, |best: Duration| best.min(first)));
+        }
+    }
+
+    let steady: Vec<_> = samples.iter().filter(|(at, _)| *at >= TEST_WARM_UP).collect();
+    let (Some(first), Some(last)) = (steady.first(), steady.last()) else {
+        return Err(AppError::network("the connection delivered nothing"));
+    };
+    let span = last.0.saturating_sub(first.0).as_secs_f64();
+    if span <= 0.0 || last.1 <= first.1 {
+        return Err(AppError::network("the connection delivered nothing"));
+    }
+    let average = (last.1 - first.1) as f64 / span;
+
+    // The best one-second stretch inside the steady part.
+    let mut peak = average;
+    for (index, (at, bytes)) in steady.iter().enumerate() {
+        if let Some((later_at, later_bytes)) = steady[index..]
+            .iter()
+            .find(|(later, _)| later.saturating_sub(*at) >= Duration::from_secs(1))
+        {
+            let seconds = later_at.saturating_sub(*at).as_secs_f64();
+            peak = peak.max((later_bytes - bytes) as f64 / seconds);
+        }
+    }
+
+    Ok(SpeedTest {
+        bytes_per_second: average,
+        peak_bytes_per_second: peak,
+        latency_ms: latency.map_or(0, |value| value.as_millis() as u64),
     })
 }
 

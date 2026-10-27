@@ -20,6 +20,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -1382,6 +1383,17 @@ async fn run_ytdlp(
     let mut streams = StreamTotals::default();
     // See `merge_was_skipped`.
     let mut unmerged = false;
+    // The speed shown is measured here, from the bytes yt-dlp reports, rather
+    // than taken from the `speed` field of its progress lines. That field is
+    // its own running figure: it lags a change of pace by seconds, reads `NA`
+    // between the fragments of an HLS stream -- which blanked the number and
+    // brought it back, over and over -- and is only ever printed when a line
+    // is. The window in `Meter` answers to the bytes themselves, and the clock
+    // below keeps answering when no line comes.
+    let mut gauge = direct::Meter::new(0);
+    let mut latest: Option<JobProgress> = None;
+    let mut clock = tokio::time::interval(Duration::from_millis(500));
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         // Watching the signal as well as the pipes is what makes a cancelled
@@ -1392,6 +1404,19 @@ async fn run_ytdlp(
             () = cancel.cancelled() => {
                 process::drain(&mut lines, process::DRAIN_LIMIT).await;
                 return Err(AppError::Cancelled);
+            }
+            // A transfer that has gone quiet prints nothing, which left the
+            // card on its last speed until the next line -- looking exactly like
+            // a download that was going well and then jumped. Re-measured on a
+            // clock, the figure falls as the silence lengthens.
+            _ = clock.tick() => {
+                if let Some(progress) = latest.as_mut() {
+                    if let Some(bytes) = progress.bytes {
+                        restate_speed(progress, gauge.sample(bytes));
+                        emitters.progress(progress.clone());
+                    }
+                }
+                continue;
             }
             line = lines.recv() => line,
         };
@@ -1409,7 +1434,12 @@ async fn run_ytdlp(
             final_path = Some(PathBuf::from(path.trim()));
         } else if let Some(payload) = text.strip_prefix(MARKER) {
             if let Some((progress, stream)) = parse_progress(id, payload, stage) {
-                emitters.progress(streams.add(stream, progress));
+                let mut progress = streams.add(stream, progress);
+                if let Some(bytes) = progress.bytes.filter(|_| stage == Stage::Downloading) {
+                    restate_speed(&mut progress, gauge.sample(bytes));
+                    latest = Some(progress.clone());
+                }
+                emitters.progress(progress);
             }
         } else if let Some(payload) = text.strip_prefix(INFO_MARKER) {
             // A plain file's "title" is whatever yt-dlp made of its URL, and it
@@ -1434,6 +1464,8 @@ async fn run_ytdlp(
             // rest, which is a remux or a copy -- or nothing at all, for a
             // single-file download, where this label is on screen for an
             // instant.
+            // No more transfer to measure.
+            latest = None;
             stage = if file_mode {
                 Stage::Finalizing
             } else if is_audio && !request.wants_original_audio() {
@@ -1504,6 +1536,26 @@ async fn run_ytdlp(
 /// and shared with the post-processing variant of the same message.
 fn merge_was_skipped(line: &str) -> bool {
     line.contains("ffmpeg is not installed") || line.contains("ffmpeg could not be found")
+}
+
+/// Puts a measured speed on a progress report, with the time left to match.
+///
+/// When the gauge has no window yet -- the first few hundred milliseconds -- the
+/// figure yt-dlp printed stays, because some number beats none. Once it has one
+/// it is the only source, and a zero is kept as zero: a download that has stopped
+/// moving says so instead of echoing yt-dlp's last average.
+fn restate_speed(progress: &mut JobProgress, measured: Option<f64>) {
+    let Some(rate) = measured else { return };
+    progress.speed = Some(rate).filter(|rate| *rate > 0.0);
+    progress.eta_secs = match (progress.bytes, progress.total_bytes, progress.speed) {
+        (Some(bytes), Some(total), Some(rate)) if rate > 1.0 && total > bytes => {
+            Some(((total - bytes) as f64 / rate) as u64)
+        }
+        // A rate of nothing has no ETA, and yt-dlp's own was computed from the
+        // pace this has just disproved.
+        (_, _, None) => None,
+        _ => progress.eta_secs,
+    };
 }
 
 /// One progress line, and the format it is about when the line says.
@@ -2198,6 +2250,33 @@ mod tests {
             .expect("should parse");
         assert_eq!(p.total_bytes, Some(10_485_760));
         assert_eq!(p.speed, Some(65_536.0));
+    }
+
+    /// A measured zero is a stalled download, and says so: the speed goes, and
+    /// the time left that was computed from the old pace goes with it.
+    #[test]
+    fn a_measured_speed_replaces_ytdlps_and_a_stall_clears_it() {
+        let reported = || {
+            parse_progress("j1", " 10.0%|100|1000|500|2|137", Stage::Downloading)
+                .unwrap()
+                .0
+        };
+
+        let mut moving = reported();
+        restate_speed(&mut moving, Some(300.0));
+        assert_eq!(moving.speed, Some(300.0));
+        assert_eq!(moving.eta_secs, Some(3));
+
+        let mut stalled = reported();
+        restate_speed(&mut stalled, Some(0.0));
+        assert_eq!(stalled.speed, None);
+        assert_eq!(stalled.eta_secs, None);
+
+        // Nothing measured yet: yt-dlp's figure stands.
+        let mut early = reported();
+        restate_speed(&mut early, None);
+        assert_eq!(early.speed, Some(500.0));
+        assert_eq!(early.eta_secs, Some(2));
     }
 
     /// yt-dlp says "Unknown" as well as "NA", and a zero speed between two
