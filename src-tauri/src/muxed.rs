@@ -79,14 +79,27 @@ struct Format {
     vcodec: Option<String>,
     #[serde(default)]
     acodec: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Extracted {
     #[serde(default)]
     title: Option<String>,
+    /// Who made it, for the file's artist tag: a music track names its
+    /// artist, everything else at least its channel.
     #[serde(default)]
-    ext: Option<String>,
+    artist: Option<String>,
+    #[serde(default)]
+    uploader: Option<String>,
+    #[serde(default)]
+    channel: Option<String>,
+    /// The page's picture, for cover art.
+    #[serde(default)]
+    thumbnail: Option<String>,
     /// The video and audio yt-dlp picked, when it picked two.
     #[serde(default)]
     requested_formats: Option<Vec<Format>>,
@@ -115,6 +128,9 @@ pub struct Stream {
     /// carries no audio. Read only by `Target::AudioCopy`, to pick the container
     /// the packets belong in.
     acodec: Option<String>,
+    /// The short side of the picture, for the job card's "1080p" -- what was
+    /// fetched, not what was asked for.
+    short_side: Option<u32>,
     /// Whether this stream carries pictures. A page asked for as video can turn
     /// out to have none -- a SoundCloud track, a podcast -- and the job card
     /// should say "audio" about that before the file exists to say it.
@@ -125,10 +141,12 @@ pub struct Stream {
 pub struct Plan {
     /// yt-dlp's own title, already sanitized into a file stem.
     pub title: String,
+    /// The same title as the page wrote it, for the file's title tag.
+    display_title: Option<String>,
+    artist: Option<String>,
+    thumbnail: Option<String>,
     /// One stream, or a video and an audio to be merged.
     streams: Vec<Stream>,
-    /// The container the result lands in.
-    ext: String,
 }
 
 impl Plan {
@@ -159,18 +177,36 @@ impl Plan {
     pub fn has_video(&self) -> bool {
         self.streams.iter().any(|stream| stream.has_video)
     }
+
+    /// The codec family of the first stream's audio: "aac", "opus", ...
+    pub fn audio_codec(&self) -> Option<&'static str> {
+        let codec = self.streams.first()?.acodec.as_deref()?.to_ascii_lowercase();
+        Some(match () {
+            _ if codec.starts_with("mp4a") || codec.starts_with("aac") => "aac",
+            _ if codec.starts_with("opus") => "opus",
+            _ if codec.starts_with("vorbis") => "vorbis",
+            _ if codec.starts_with("mp3") => "mp3",
+            _ if codec.starts_with("flac") => "flac",
+            _ => "other",
+        })
+    }
+
+    /// The short side of the picture being fetched, when there is one.
+    pub fn resolution(&self) -> Option<u32> {
+        self.streams.iter().find_map(|stream| stream.short_side)
+    }
 }
 
 /// What the fetched streams are turned into once they are on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
-    /// Put them in the container the plan names, copying every stream through.
+    /// Put them in this container (mp4 or mkv), copying every stream through.
     /// A remux: seconds, and not a frame is recompressed.
-    Container,
-    /// One audio stream, re-encoded to MP3 -- what `yt-dlp -x --audio-format
-    /// mp3` does at the end of its own download, done here so the *transfer*
-    /// can still happen on eight connections.
-    Mp3,
+    Container(&'static str),
+    /// One audio stream, re-encoded -- what `yt-dlp -x --audio-format ...`
+    /// does at the end of its own download, done here so the *transfer* can
+    /// still happen on eight connections.
+    Encode(AudioEncode),
     /// One audio stream, lifted into the container its codec belongs in without
     /// being decoded.
     ///
@@ -185,6 +221,53 @@ pub enum Target {
     /// renaming that to `.opus` produces a file whose extension lies about its
     /// bytes. `-c:a copy` moves the same packets into the right box.
     AudioCopy,
+}
+
+/// An audio encode, with its bitrate in kbps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioEncode {
+    /// None is LAME's best VBR.
+    Mp3(Option<u32>),
+    Aac(u32),
+    Opus(u32),
+}
+
+impl AudioEncode {
+    fn ext(self) -> &'static str {
+        match self {
+            Self::Mp3(_) => "mp3",
+            Self::Aac(_) => "m4a",
+            Self::Opus(_) => "opus",
+        }
+    }
+
+    fn args(self) -> Vec<String> {
+        let mut args: Vec<String> = Vec::new();
+        match self {
+            // `-q:a 0` is LAME's best VBR, which is what `--audio-quality 0`
+            // asks yt-dlp for.
+            Self::Mp3(None) => args.extend(["-c:a", "libmp3lame", "-q:a", "0"].map(String::from)),
+            Self::Mp3(Some(kbps)) => {
+                args.extend(["-c:a".into(), "libmp3lame".into(), "-b:a".into(), format!("{kbps}k")])
+            }
+            Self::Aac(kbps) => args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{kbps}k")]),
+            Self::Opus(kbps) => {
+                args.extend(["-c:a".into(), "libopus".into(), "-b:a".into(), format!("{kbps}k")])
+            }
+        }
+        args
+    }
+}
+
+/// What is written into the finished file besides its streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Embed {
+    /// Title and artist tags.
+    pub metadata: bool,
+    /// The page's thumbnail as cover art, where the container has a place for
+    /// one -- MP4, M4A and MP3. Ogg and Matroska covers are skipped rather
+    /// than half-supported.
+    pub thumbnail: bool,
 }
 
 /// What a resolve learned about a page.
@@ -208,11 +291,14 @@ pub struct Resolved {
 pub async fn resolve(
     app: &AppHandle,
     url: &str,
-    selector: &str,
+    selection: &[String],
     cookies_from: Option<&str>,
 ) -> AppResult<Resolved> {
     let mut cmd = binaries::command(app, Tool::YtDlp)?;
-    cmd.args(["-J", "--no-warnings", "--no-playlist", "-f", selector]);
+    cmd.args(["-J", "--no-warnings", "--no-playlist"]);
+    // `-f` and `-S`, from `formats` -- the same arguments yt-dlp's own
+    // download would be given, so both engines fetch the same streams.
+    cmd.args(selection);
     // Without the cookie this resolve sees the formats an anonymous visitor
     // sees, which for a members-only video is none -- so the fast path would
     // decline and hand a login-walled link to yt-dlp to fail on slowly.
@@ -277,9 +363,14 @@ fn triage(extracted: Extracted) -> Option<Plan> {
         streams.push(usable(format)?);
     }
 
+    let clean = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     Some(Plan {
         title: paths::sanitize_stem(extracted.title.as_deref().unwrap_or("media")),
-        ext: extracted.ext.unwrap_or_else(|| "mp4".to_string()),
+        display_title: clean(extracted.title),
+        artist: clean(extracted.artist)
+            .or_else(|| clean(extracted.uploader))
+            .or_else(|| clean(extracted.channel)),
+        thumbnail: clean(extracted.thumbnail).filter(|url| url.starts_with("https://")),
         streams,
     })
 }
@@ -322,6 +413,14 @@ fn usable(format: Format) -> Option<Stream> {
         size_bytes,
         ext: format.ext.unwrap_or_else(|| "bin".to_string()),
         acodec: format.acodec.filter(|codec| codec != "none"),
+        short_side: if has_video {
+            match (format.width, format.height) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => Some(w.min(h)),
+                (_, h) => h,
+            }
+        } else {
+            None
+        },
         has_video,
     })
 }
@@ -422,6 +521,7 @@ pub async fn run(
     output_name: Option<&str>,
     plan: &Plan,
     target: Target,
+    embed: Embed,
     source_key: &str,
 ) -> AppResult<PathBuf> {
     let stem = stem_for(output_name, plan);
@@ -475,15 +575,15 @@ pub async fn run(
     // An MP3 is a real encode, and it is CPU work like any compression: it
     // takes a place in the CPU lane rather than running beside three x264
     // encodes. Waiting for one is cancellable like any other queue.
-    let _cpu = if target == Target::Mp3 {
+    let _cpu = if matches!(target, Target::Encode(_)) {
         Some(jobs.acquire_cpu(id).await?)
     } else {
         None
     };
 
     let ext = match target {
-        Target::Container => plan.ext.as_str(),
-        Target::Mp3 => "mp3",
+        Target::Container(container) => container,
+        Target::Encode(encode) => encode.ext(),
         // The caller only picks this target after `audio_copy_ext` answered, so
         // the fallback is unreachable in practice -- but naming a container the
         // codec does not fit would produce a file that lies about itself, and
@@ -494,9 +594,37 @@ pub async fn run(
     // enough for a second job with the same title to finish its own download
     // and look for a name -- see `paths::OutputClaim`.
     let output = paths::claim_output(dir, &stem, ext);
+
+    // The cover, when one was asked for and the container has a place for it.
+    // Best effort: a thumbnail that will not download costs the file its
+    // picture, never the download.
+    let cover = if embed.thumbnail && takes_cover(ext) {
+        match &plan.thumbnail {
+            Some(url) => {
+                let path = dir.join(format!(".{stem}.{source_key}.cover"));
+                match cancel.guard(direct::fetch_small(url, &path, COVER_LIMIT)).await {
+                    Ok(Ok(())) => Some(path),
+                    _ => None,
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let tags = Tags {
+        title: embed.metadata.then(|| plan.display_title.clone()).flatten(),
+        artist: embed.metadata.then(|| plan.artist.clone()).flatten(),
+        cover: cover.clone(),
+    };
+
     // A failed merge keeps the parts, like a failed transfer: they are
     // complete, and the caller's second attempt only has to merge them.
-    assemble(app, emitters, id, cancel, &parts, output.path(), target).await?;
+    let assembled = assemble(app, emitters, id, cancel, &parts, output.path(), target, ext, &tags).await;
+    if let Some(cover) = &cover {
+        let _ = tokio::fs::remove_file(cover).await;
+    }
+    assembled?;
 
     // Only once the result exists. Losing a part before the merge succeeded
     // would turn a recoverable failure into a full re-download.
@@ -565,6 +693,7 @@ async fn discard(parts: &[PathBuf]) {
 /// was ever CPU work. yt-dlp does exactly this at the end of `-x`; the
 /// difference is that the megabytes before it arrived on eight connections
 /// rather than one.
+#[allow(clippy::too_many_arguments)]
 async fn assemble(
     app: &AppHandle,
     emitters: &mut Emitters,
@@ -573,13 +702,19 @@ async fn assemble(
     parts: &[PathBuf],
     output: &Path,
     target: Target,
+    ext: &str,
+    tags: &Tags,
 ) -> AppResult<()> {
-    // A single stream that needs no re-encoding is already the file. Renaming
-    // beats spending an ffmpeg pass to copy it to itself.
-    if let ([only], Target::Container) = (parts, target) {
-        return tokio::fs::rename(only, output)
-            .await
-            .map_err(|error| AppError::io(only, error));
+    // A single stream that is already in the right box, with nothing to write
+    // into it, is already the file. Renaming beats spending an ffmpeg pass to
+    // copy it to itself.
+    if let ([only], Target::Container(_)) = (parts, target) {
+        let same_box = only.extension().and_then(|e| e.to_str()) == Some(ext);
+        if same_box && tags.is_empty() {
+            return tokio::fs::rename(only, output)
+                .await
+                .map_err(|error| AppError::io(only, error));
+        }
     }
 
     emitters.progress_now(JobProgress {
@@ -590,8 +725,8 @@ async fn assemble(
             match target {
                 // A copy is a remux either way: nothing is being encoded, and
                 // "Encoding" on a step that takes two seconds reads as a lie.
-                Target::Container | Target::AudioCopy => Stage::Merging,
-                Target::Mp3 => Stage::Encoding,
+                Target::Container(_) | Target::AudioCopy => Stage::Merging,
+                Target::Encode(_) => Stage::Encoding,
             },
         )
     });
@@ -601,26 +736,7 @@ async fn assemble(
     for part in parts {
         cmd.arg("-i").arg(part);
     }
-    match target {
-        Target::Container => {
-            cmd.args(["-c", "copy", "-movflags", "+faststart"]);
-        }
-        // `-q:a 0` is LAME's best VBR, which is what `--audio-quality 0` asks
-        // yt-dlp for -- so the file this produces is the one the app produced
-        // before, made from the same source stream. `-vn` drops the cover art
-        // some audio formats carry, which would otherwise land as an mp3 video
-        // stream that a few players choke on.
-        Target::Mp3 => {
-            cmd.args(["-vn", "-c:a", "libmp3lame", "-q:a", "0"]);
-        }
-        // `-vn` for the same reason as MP3: an audio format's cover art arrives
-        // as a video stream, and copying it into an m4a gives some players a
-        // file they refuse to open. `+faststart` matters for the same reason it
-        // does on video -- an m4a with its index at the end will not stream.
-        Target::AudioCopy => {
-            cmd.args(["-vn", "-c:a", "copy", "-movflags", "+faststart"]);
-        }
-    }
+    cmd.args(assemble_args(parts.len(), target, ext, tags));
     cmd.arg(output);
 
     // Guarded rather than simply awaited. This ffmpeg is not in the job
@@ -648,6 +764,92 @@ async fn assemble(
             Err(AppError::Cancelled)
         }
     }
+}
+
+/// The biggest thumbnail fetched for a cover. YouTube's largest is ~200 KB.
+const COVER_LIMIT: u64 = 4 * 1024 * 1024;
+
+/// Containers that carry a cover picture ffmpeg can write.
+fn takes_cover(ext: &str) -> bool {
+    matches!(ext, "mp4" | "m4a" | "mp3")
+}
+
+/// Tags written into the result.
+pub struct Tags {
+    title: Option<String>,
+    artist: Option<String>,
+    /// A downloaded thumbnail, added as the last input when present.
+    cover: Option<PathBuf>,
+}
+
+impl Tags {
+    fn is_empty(&self) -> bool {
+        self.title.is_none() && self.artist.is_none() && self.cover.is_none()
+    }
+}
+
+/// ffmpeg's arguments after the stream inputs: the cover input if any, the
+/// stream mapping, the codecs, the tags and the container flags.
+///
+/// With no cover, nothing is mapped explicitly -- ffmpeg's own pick of one
+/// video and one audio is what this has always relied on. With a cover, every
+/// stream is named, because the cover is a video stream and has to be told
+/// apart from the picture.
+fn assemble_args(inputs: usize, target: Target, ext: &str, tags: &Tags) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    let cover = tags.cover.as_ref().filter(|_| takes_cover(ext));
+    if let Some(cover) = cover {
+        args.extend(["-i".into(), cover.to_string_lossy().into_owned()]);
+    }
+
+    match target {
+        Target::Container(_) => {
+            if cover.is_some() {
+                for input in 0..inputs {
+                    args.extend(["-map".into(), format!("{input}")]);
+                }
+                args.extend(["-map".into(), format!("{inputs}:v:0")]);
+                // Everything copied, except the cover: re-encoded as a JPEG,
+                // whatever the site served it as, and marked as the cover.
+                args.extend(["-c".into(), "copy".into(), "-c:v:1".into(), "mjpeg".into()]);
+                args.extend(["-disposition:v:1".into(), "attached_pic".into()]);
+            } else {
+                args.extend(["-c".into(), "copy".into()]);
+            }
+        }
+        Target::AudioCopy | Target::Encode(_) => {
+            let codec: Vec<String> = match target {
+                Target::Encode(encode) => encode.args(),
+                _ => vec!["-c:a".into(), "copy".into()],
+            };
+            if cover.is_some() {
+                args.extend(["-map".into(), "0:a:0".into(), "-map".into(), format!("{inputs}:v:0")]);
+                args.extend(codec);
+                args.extend(["-c:v".into(), "mjpeg".into(), "-disposition:v:0".into(), "attached_pic".into()]);
+            } else {
+                // `-vn` drops the cover art some audio formats carry, which
+                // would otherwise land as a video stream a few players choke on.
+                args.push("-vn".into());
+                args.extend(codec);
+            }
+        }
+    }
+
+    if let Some(title) = &tags.title {
+        args.extend(["-metadata".into(), format!("title={title}")]);
+    }
+    if let Some(artist) = &tags.artist {
+        args.extend(["-metadata".into(), format!("artist={artist}")]);
+    }
+    match ext {
+        // The index at the front, so the file starts playing before it has
+        // been read to the end.
+        "mp4" | "m4a" => args.extend(["-movflags".into(), "+faststart".into()]),
+        // ID3v2.3: what Windows Explorer and most car stereos read covers from.
+        "mp3" => args.extend(["-id3v2_version".into(), "3".into()]),
+        _ => {}
+    }
+    args
 }
 
 /// Deletes a file a just-killed process may still be holding.
@@ -707,7 +909,6 @@ mod tests {
         let plan = plan_from(YOUTUBE).expect("this is the fast path's whole reason to exist");
 
         assert_eq!(plan.title, "Big Buck Bunny");
-        assert_eq!(plan.ext, "mp4");
         assert_eq!(plan.streams.len(), 2);
         assert_eq!(plan.total_bytes(), 124_386_876 + 10_202_210);
     }
@@ -864,7 +1065,6 @@ mod tests {
         let plan = plan_from(json).expect("an opus stream is fetchable");
 
         assert_eq!(plan.audio_copy_ext(), Some("opus"));
-        assert_eq!(plan.ext, "webm", "the source container is still webm");
     }
 
     /// A codec with no container this app is sure of has to turn back into an
@@ -941,5 +1141,39 @@ mod tests {
         }"#;
         let plan = plan_from(json).unwrap();
         assert_eq!(plan.title, "10_10 _best_ video_");
+    }
+
+    fn tags(cover: bool) -> Tags {
+        Tags {
+            title: Some("A Song".into()),
+            artist: Some("Someone".into()),
+            cover: cover.then(|| PathBuf::from("/tmp/x.cover")),
+        }
+    }
+
+    #[test]
+    fn video_with_a_cover_maps_every_stream_and_marks_the_picture() {
+        let args = assemble_args(2, Target::Container("mp4"), "mp4", &tags(true)).join(" ");
+        assert!(args.starts_with("-i /tmp/x.cover -map 0 -map 1 -map 2:v:0 -c copy -c:v:1 mjpeg -disposition:v:1 attached_pic"), "{args}");
+        assert!(args.contains("-metadata title=A Song") && args.contains("-movflags +faststart"), "{args}");
+    }
+
+    #[test]
+    fn mkv_and_opus_get_tags_but_no_cover() {
+        let mkv = assemble_args(2, Target::Container("mkv"), "mkv", &tags(true)).join(" ");
+        assert!(!mkv.contains("cover") && mkv.starts_with("-c copy"), "{mkv}");
+        let opus = assemble_args(1, Target::AudioCopy, "opus", &tags(true)).join(" ");
+        assert!(opus.starts_with("-vn -c:a copy") && opus.contains("artist=Someone"), "{opus}");
+    }
+
+    #[test]
+    fn audio_encodes_carry_their_bitrate() {
+        let mp3 = assemble_args(1, Target::Encode(AudioEncode::Mp3(Some(192))), "mp3", &tags(true)).join(" ");
+        assert!(mp3.contains("-map 0:a:0 -map 1:v:0 -c:a libmp3lame -b:a 192k -c:v mjpeg"), "{mp3}");
+        assert!(mp3.ends_with("-id3v2_version 3"), "{mp3}");
+        let best = assemble_args(1, Target::Encode(AudioEncode::Mp3(None)), "mp3", &tags(false)).join(" ");
+        assert!(best.starts_with("-vn -c:a libmp3lame -q:a 0"), "{best}");
+        let aac = assemble_args(1, Target::Encode(AudioEncode::Aac(192)), "m4a", &tags(false)).join(" ");
+        assert!(aac.contains("-c:a aac -b:a 192k") && aac.ends_with("+faststart"), "{aac}");
     }
 }

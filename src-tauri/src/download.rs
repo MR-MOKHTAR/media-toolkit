@@ -30,6 +30,7 @@ use crate::binaries::{self, Tool};
 use crate::direct::{self, FileInfo, Probe};
 use crate::error::{AppError, AppResult};
 use crate::filetype;
+use crate::formats::{self, AudioFormat, CodecPref};
 use crate::jobs::{
     CancelSignal, Emitters, JobKind, JobMeta, JobProgress, JobStatus, Jobs, MediaClass, Stage,
 };
@@ -55,7 +56,7 @@ const STAGE_MARKER: &str = "__DLSTAGE__";
 /// no picture -- a SoundCloud track, a podcast episode -- which the job card can
 /// then draw as audio from the start. The title comes last because it is the
 /// one field that can itself contain a `|`.
-const INFO_TEMPLATE: &str = "before_dl:__DLINFO__%(vcodec)s|%(acodec)s|%(title)s";
+const INFO_TEMPLATE: &str = "before_dl:__DLINFO__%(vcodec)s|%(acodec)s|%(width)s|%(height)s|%(title)s";
 
 /// Any template will do as long as it has a field in it: a `--print` value with
 /// no `%(` is read as a *field name*, and prints `NA`.
@@ -170,6 +171,77 @@ pub struct DownloadRequest {
     /// where the download goes if the library cannot be reached. Absent means
     /// no, which is what every request stored by an older build means.
     pub auto_folder: Option<bool>,
+    /// The video choice from the form: resolution, codec preference,
+    /// container. Absent on requests stored by older builds, which carry the
+    /// bare `quality` instead -- see `DownloadRequest::video_choice`.
+    #[serde(default)]
+    pub video: Option<VideoPrefs>,
+    /// The audio choice: what the file ends up as, and an MP3's bitrate.
+    /// Absent on older requests, which carry `audio_format`.
+    #[serde(default)]
+    pub audio: Option<AudioPrefs>,
+    /// Subtitles to fetch. Any language at all sends the page to yt-dlp, the
+    /// only engine here that knows how to fetch and embed them.
+    #[serde(default)]
+    pub subtitles: Option<SubtitlePrefs>,
+    /// Title, artist and chapters written into the file. Absent means yes.
+    #[serde(default)]
+    pub embed_metadata: Option<bool>,
+    /// The page's thumbnail as cover art. Absent means yes for audio, no for
+    /// video -- some televisions show an MP4's cover as a second video track.
+    #[serde(default)]
+    pub embed_thumbnail: Option<bool>,
+    /// Cut YouTube's sponsored segments out, from SponsorBlock's community
+    /// database. yt-dlp only.
+    #[serde(default)]
+    pub sponsor_block: Option<bool>,
+    /// Fetch only this stretch of the video. yt-dlp only.
+    #[serde(default)]
+    pub section: Option<Section>,
+    /// A folder inside the destination, for a playlist kept together under its
+    /// own name. Sanitized here; it is text from a web page.
+    #[serde(default)]
+    pub subfolder: Option<String>,
+}
+
+/// The form's video choice.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoPrefs {
+    /// "best", or a short side: "2160", "1080", ...
+    pub quality: Option<String>,
+    #[serde(default)]
+    pub codec: CodecPref,
+    /// "mp4" (default) or "mkv".
+    pub container: Option<String>,
+}
+
+/// The form's audio choice.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPrefs {
+    #[serde(default)]
+    pub format: AudioFormat,
+    /// For MP3 only: the copies keep the site's own bitrate. None is LAME's
+    /// best VBR.
+    pub bitrate_kbps: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitlePrefs {
+    #[serde(default)]
+    pub langs: Vec<String>,
+    /// Inside the video file, rather than as .srt files beside it.
+    #[serde(default)]
+    pub embed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Section {
+    pub start_secs: f64,
+    pub end_secs: f64,
 }
 
 /// The browsers yt-dlp can read cookies from, as it names them.
@@ -223,11 +295,110 @@ impl DownloadRequest {
 
     /// Whether an audio download should keep the stream it fetched.
     fn wants_original_audio(&self) -> bool {
-        self.wants_audio()
-            && self
-                .audio_format
-                .as_deref()
-                .is_some_and(|format| format.eq_ignore_ascii_case(ORIGINAL_AUDIO))
+        self.wants_audio() && self.audio_choice() == AudioFormat::Original
+    }
+
+    /// What an audio download ends up as. The form's `audio` when it sent one;
+    /// otherwise the older `audio_format`, where absent meant MP3.
+    fn audio_choice(&self) -> AudioFormat {
+        if let Some(audio) = &self.audio {
+            return audio.format;
+        }
+        match self.audio_format.as_deref() {
+            Some(format) if format.eq_ignore_ascii_case(ORIGINAL_AUDIO) => AudioFormat::Original,
+            _ => AudioFormat::Mp3,
+        }
+    }
+
+    /// An MP3's bitrate, within what LAME is good for. None is its best VBR.
+    fn mp3_kbps(&self) -> Option<u32> {
+        self.audio
+            .as_ref()
+            .and_then(|audio| audio.bitrate_kbps)
+            .map(|kbps| kbps.clamp(64, 320))
+    }
+
+    /// The resolution cap (None is "best") and the codec preference.
+    ///
+    /// An unreadable quality falls back to 720, the form's long-standing
+    /// default, rather than to "best": a 4K download nobody asked for is the
+    /// expensive kind of wrong.
+    fn video_choice(&self) -> (Option<u32>, CodecPref) {
+        let quality = self
+            .video
+            .as_ref()
+            .and_then(|video| video.quality.as_deref())
+            .or(self.quality.as_deref())
+            .unwrap_or("best");
+        let height = match quality.trim() {
+            "best" | "" => None,
+            other => Some(other.trim_end_matches('p').parse::<u32>().unwrap_or(720)),
+        };
+        let codec = self.video.as_ref().map(|video| video.codec).unwrap_or_default();
+        (height, codec)
+    }
+
+    /// The video container: MKV when asked for, MP4 otherwise.
+    fn container(&self) -> &'static str {
+        match self.video.as_ref().and_then(|video| video.container.as_deref()) {
+            Some(container) if container.eq_ignore_ascii_case("mkv") => "mkv",
+            _ => "mp4",
+        }
+    }
+
+    /// The yt-dlp format arguments for this request, the same for both engines.
+    fn selection(&self) -> Vec<String> {
+        if self.wants_audio() {
+            formats::audio_selection(self.audio_choice())
+        } else {
+            let (height, codec) = self.video_choice();
+            formats::video_selection(height, codec)
+        }
+    }
+
+    fn subtitle_langs(&self) -> Vec<String> {
+        self.subtitles
+            .as_ref()
+            .map(|subs| {
+                subs.langs
+                    .iter()
+                    .map(|lang| lang.trim())
+                    // A language code, not an argument: letters, digits, `-`.
+                    .filter(|lang| {
+                        !lang.is_empty()
+                            && lang.len() <= 24
+                            && lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    })
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether only yt-dlp can do what was asked: subtitles, SponsorBlock and
+    /// partial downloads are all things it does while fetching, which the
+    /// parallel engine does not know how to.
+    fn needs_ytdlp(&self) -> bool {
+        !self.wants_audio() && !self.subtitle_langs().is_empty()
+            || self.sponsor_block.unwrap_or(false)
+            || self.section_range().is_some()
+    }
+
+    fn section_range(&self) -> Option<(f64, f64)> {
+        let section = self.section?;
+        (section.start_secs.is_finite()
+            && section.end_secs.is_finite()
+            && section.start_secs >= 0.0
+            && section.end_secs > section.start_secs)
+            .then_some((section.start_secs, section.end_secs))
+    }
+
+    fn embeds_metadata(&self) -> bool {
+        self.embed_metadata.unwrap_or(true)
+    }
+
+    fn embeds_thumbnail(&self) -> bool {
+        self.embed_thumbnail.unwrap_or(self.wants_audio())
     }
 
     /// The browser to read cookies from, if it is one yt-dlp knows and this app
@@ -284,6 +455,10 @@ pub struct UrlInfo {
     /// Whether an interrupted download of this link can be continued rather
     /// than restarted.
     pub resumable: bool,
+    /// What a media page offers -- resolutions with sizes, audio tracks,
+    /// subtitles -- read from the same `-J` the preview already fetches.
+    /// `None` for a file, and for a page that listed no formats.
+    pub media: Option<formats::MediaSummary>,
 }
 
 /// Which engine a job runs on.
@@ -411,55 +586,6 @@ fn is_invisible(c: char) -> bool {
     matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
 
-/// yt-dlp format selector for a requested height.
-///
-/// `height<=N` rather than `height=N`: an exact match silently misses a
-/// 1920x1084 source or a DASH variant that is a pixel off, and then falls
-/// through to a lower-quality branch. The bare `/best` tail matters for
-/// single-file and audio-only sources that have no separate video stream.
-///
-/// The codec branch comes first because the output has to *play*.
-///
-/// Left to "best", YouTube hands back VP9 or AV1 video and Opus audio, and
-/// `--merge-output-format mp4` dutifully puts them in an `.mp4`. That file is
-/// valid and it does not play in Windows Media Player, QuickTime, or most
-/// televisions -- the user gets something that looks like it worked and opens to
-/// a black screen or silence.
-///
-/// Filtering on the codec and not on `ext`, which was the first attempt and is
-/// not enough: YouTube publishes AV1 *inside* mp4, so `bestvideo[ext=mp4]`
-/// picked format 399 (`av01.0.09M.08`) and landed straight back in the same
-/// problem. `vcodec^=avc1` and `acodec^=mp4a` are H.264 and AAC by name, which
-/// is what every device made in the last fifteen years decodes.
-///
-/// It costs size -- on the video measured while writing this, H.264 1080p60 is
-/// 246 MB against AV1's 119 MB for the same footage. That is the right way
-/// round for this app: a file twice as large is an inconvenience, and a file
-/// that will not open is a failure. Anyone who wants the small modern codec is
-/// served by the fallbacks, which is where sources that have nothing else land
-/// anyway.
-fn format_selector(quality: Option<&str>) -> String {
-    let height = match quality.unwrap_or("best") {
-        "best" => None,
-        height => Some(height.trim_end_matches('p').parse::<u32>().unwrap_or(720)),
-    };
-    // `[height<=N]` on every video branch, or nothing at all for "best".
-    let cap = height.map(|h| format!("[height<={h}]")).unwrap_or_default();
-
-    // Four branches, in order of preference:
-    //   1. H.264 + AAC -- plays everywhere.
-    //   2. Whatever else the mp4 container holds natively.
-    //   3. Whatever the site does have, in any container.
-    //   4. A single already-muxed file, for sources with no separate streams.
-    [
-        format!("bestvideo[vcodec^=avc1]{cap}+bestaudio[acodec^=mp4a]"),
-        format!("bestvideo[ext=mp4]{cap}+bestaudio[ext=m4a]"),
-        format!("bestvideo{cap}+bestaudio"),
-        format!("best{cap}"),
-        "best".to_string(),
-    ]
-    .join("/")
-}
 
 /// Starts a download and reports how it ended.
 ///
@@ -616,6 +742,7 @@ fn meta_for(engine: &Engine) -> Option<JobMeta> {
             file_name: Some(info.filename.clone()),
             content_type: info.content_type.clone(),
             title: None,
+            resolution: None,
         }),
         // Described by what yt-dlp finds on the page -- the resolve in
         // `run_media`, or the formats `run_ytdlp` prints -- and by the file
@@ -647,6 +774,21 @@ fn shelf_for(class: Option<MediaClass>) -> Slot {
 /// audio file or neither -- and `finalize_output` checks it again against the
 /// file that actually arrived.
 fn output_dir(app: &AppHandle, request: &DownloadRequest, engine: &Engine) -> AppResult<PathBuf> {
+    let base = base_output_dir(app, request, engine)?;
+    // A playlist kept together: one folder named after it, inside wherever the
+    // download would otherwise have gone.
+    match request
+        .subfolder
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => paths::ensure_dir(&base.join(paths::sanitize_stem(name)).to_string_lossy()),
+        None => Ok(base),
+    }
+}
+
+fn base_output_dir(app: &AppHandle, request: &DownloadRequest, engine: &Engine) -> AppResult<PathBuf> {
     if request.auto_folder.unwrap_or(false) {
         let slot = match engine {
             Engine::Direct { info, .. } => shelf_for(info.media_class()),
@@ -949,15 +1091,6 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-/// What to ask a site for when the user wants the audio.
-///
-/// AAC first because that is what most sites serve as a plain ranged stream
-/// (YouTube's format 140), which is exactly the shape the parallel engine can
-/// fetch -- and because it is already the audio inside the video, so decoding
-/// it costs nothing. The fallbacks cover Opus-only sources and the sites that
-/// publish nothing but a muxed file, both of which LAME encodes from just as
-/// happily.
-const AUDIO_SELECTOR: &str = "bestaudio[acodec^=mp4a]/bestaudio/best";
 
 /// A media page, on whichever of the two engines can have it.
 ///
@@ -997,6 +1130,8 @@ async fn run_media(
 
     let audio = request.wants_audio();
     let eligible = request.parallel.unwrap_or(true)
+        // Subtitles, SponsorBlock and a partial download are yt-dlp's to do.
+        && !request.needs_ytdlp()
         // Merging and encoding are both ffmpeg's, so without ffmpeg this path
         // cannot finish what it starts. `run_ytdlp` already reports that case
         // properly.
@@ -1015,13 +1150,9 @@ async fn run_media(
         // 90 MB that yt-dlp pulls down one socket at a time -- the same
         // single-connection transfer, against the same throttled CDN, that the
         // whole of this module exists to stop doing.
-        let selector = if audio {
-            AUDIO_SELECTOR.to_string()
-        } else {
-            format_selector(request.quality.as_deref())
-        };
+        let selection = request.selection();
 
-        let resolved = resolve_page(app, cancel, url, &selector, request).await?;
+        let resolved = resolve_page(app, cancel, url, &selection, request).await?;
         title = resolved.as_ref().ok().and_then(|resolved| resolved.title.clone());
 
         if let Some(plan) = usable_plan(resolved, audio) {
@@ -1038,13 +1169,14 @@ async fn run_media(
                         MediaClass::Video
                     }),
                     title: Some(plan.title.clone()),
+                    resolution: if audio { None } else { plan.resolution() },
                     ..JobMeta::default()
                 },
             );
 
             let output_name = request.output_name.as_deref();
             let target = target_for(request, &plan);
-            match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &plan, target, &key)
+            match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &plan, target, embed_for(request), &key)
                 .await
             {
                 Ok(output) => return Ok(output),
@@ -1057,10 +1189,10 @@ async fn run_media(
                     // page straight to yt-dlp threw away every byte fetched so
                     // far and started again on one connection.
                     emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
-                    let again = resolve_page(app, cancel, url, &selector, request).await?;
+                    let again = resolve_page(app, cancel, url, &selection, request).await?;
                     if let Some(retry) = usable_plan(again, audio) {
                         let target = target_for(request, &retry);
-                        match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &retry, target, &key)
+                        match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &retry, target, embed_for(request), &key)
                             .await
                         {
                             Ok(output) => return Ok(output),
@@ -1126,11 +1258,11 @@ async fn resolve_page(
     app: &AppHandle,
     cancel: &CancelSignal,
     url: &str,
-    selector: &str,
+    selection: &[String],
     request: &DownloadRequest,
 ) -> AppResult<AppResult<muxed::Resolved>> {
     cancel
-        .guard(muxed::resolve(app, url, selector, request.cookie_browser()))
+        .guard(muxed::resolve(app, url, selection, request.cookie_browser()))
         .await
 }
 
@@ -1153,12 +1285,30 @@ fn usable_plan(resolved: AppResult<muxed::Resolved>, audio: bool) -> Option<muxe
 /// degrades to an encode instead of failing, which is the same choice
 /// `ops::extract_audio` makes.
 fn target_for(request: &DownloadRequest, plan: &muxed::Plan) -> muxed::Target {
+    use muxed::{AudioEncode, Target};
     if !request.wants_audio() {
-        muxed::Target::Container
-    } else if request.wants_original_audio() && plan.audio_copy_ext().is_some() {
-        muxed::Target::AudioCopy
-    } else {
-        muxed::Target::Mp3
+        return Target::Container(request.container());
+    }
+    let codec = plan.audio_codec();
+    let copyable = plan.audio_copy_ext().is_some();
+    match request.audio_choice() {
+        AudioFormat::Original if copyable => Target::AudioCopy,
+        // A codec with no container this app knows: AAC is the encode that
+        // loses least and plays everywhere.
+        AudioFormat::Original => Target::Encode(AudioEncode::Aac(192)),
+        AudioFormat::M4a if codec == Some("aac") => Target::AudioCopy,
+        AudioFormat::M4a => Target::Encode(AudioEncode::Aac(192)),
+        AudioFormat::Opus if codec == Some("opus") => Target::AudioCopy,
+        AudioFormat::Opus => Target::Encode(AudioEncode::Opus(160)),
+        AudioFormat::Mp3 => Target::Encode(AudioEncode::Mp3(request.mp3_kbps())),
+    }
+}
+
+/// What gets written into the finished file besides the streams.
+fn embed_for(request: &DownloadRequest) -> muxed::Embed {
+    muxed::Embed {
+        metadata: request.embeds_metadata(),
+        thumbnail: request.embeds_thumbnail(),
     }
 }
 
@@ -1246,11 +1396,16 @@ async fn run_ytdlp(
     // `.webm`. m4a is the guess for a copied audio stream because AAC is what
     // the great majority of sites serve as their best audio. A plain file is
     // whatever yt-dlp called it, which `finalize_output` then corrects.
-    let ext = match (file_mode, is_audio, request.wants_original_audio()) {
-        (true, _, _) => "unknown_video",
-        (false, true, true) => "m4a",
-        (false, true, false) => "mp3",
-        (false, false, _) => "mp4",
+    let ext = if file_mode {
+        "unknown_video"
+    } else if is_audio {
+        match request.audio_choice() {
+            AudioFormat::Original | AudioFormat::M4a => "m4a",
+            AudioFormat::Opus => "opus",
+            AudioFormat::Mp3 => "mp3",
+        }
+    } else {
+        request.container()
     };
     let temp = dir.join(TEMP_DIR).join(paths::short_key(url));
 
@@ -1313,28 +1468,96 @@ async fn run_ytdlp(
         // extract. `-x` on an installer ran ffprobe over it and failed the job
         // after the download had finished.
     } else if is_audio {
+        // The same track the fast path would have fetched -- see
+        // `formats::audio_selection`.
+        args.extend(request.selection());
         args.push("-x".into());
-        args.extend(if request.wants_original_audio() {
+        match request.audio_choice() {
             // `best` is yt-dlp's word for "do not re-encode": it lifts the
             // stream out of whatever container it arrived in and leaves the
             // packets alone. The extension follows the codec, which is why the
             // template below is `%(ext)s` rather than a fixed one.
-            ["--audio-format".into(), "best".into()]
-        } else {
-            ["--audio-format".into(), "mp3".into()]
-        });
-        if !request.wants_original_audio() {
-            // LAME's best VBR. Meaningless for a copy, and yt-dlp warns when it
-            // is passed with `--audio-format best`.
-            args.extend(["--audio-quality".into(), "0".into()]);
+            AudioFormat::Original => args.extend(["--audio-format".into(), "best".into()]),
+            // Copied when the selected track already is one; encoded otherwise.
+            AudioFormat::M4a => args.extend([
+                "--audio-format".into(),
+                "m4a".into(),
+                "--audio-quality".into(),
+                "192K".into(),
+            ]),
+            AudioFormat::Opus => args.extend([
+                "--audio-format".into(),
+                "opus".into(),
+                "--audio-quality".into(),
+                "160K".into(),
+            ]),
+            AudioFormat::Mp3 => args.extend([
+                "--audio-format".into(),
+                "mp3".into(),
+                "--audio-quality".into(),
+                // LAME's best VBR, unless a bitrate was chosen.
+                request
+                    .mp3_kbps()
+                    .map_or_else(|| "0".to_string(), |kbps| format!("{kbps}K")),
+            ]),
+        }
+        if request.embeds_metadata() {
+            args.push("--embed-metadata".into());
+        }
+        // Opus and Vorbis covers need mutagen, which the standalone yt-dlp
+        // carries; an .m4a or .mp3 needs only ffmpeg.
+        if request.embeds_thumbnail() {
+            args.extend([
+                "--embed-thumbnail".into(),
+                "--convert-thumbnails".into(),
+                "jpg".into(),
+            ]);
         }
     } else {
-        args.extend([
-            "-f".into(),
-            format_selector(request.quality.as_deref()),
-            "--merge-output-format".into(),
-            "mp4".into(),
-        ]);
+        args.extend(request.selection());
+        args.extend(["--merge-output-format".into(), request.container().into()]);
+        if request.embeds_metadata() {
+            args.extend(["--embed-metadata".into(), "--embed-chapters".into()]);
+        }
+        if request.embeds_thumbnail() {
+            args.extend([
+                "--embed-thumbnail".into(),
+                "--convert-thumbnails".into(),
+                "jpg".into(),
+            ]);
+        }
+        let langs = request.subtitle_langs();
+        if !langs.is_empty() {
+            // Uploaded subtitles first; machine captions fill in for the
+            // languages that have none. SRT, because every player reads it and
+            // because MP4 can only embed text subtitles.
+            args.extend([
+                "--write-subs".into(),
+                "--write-auto-subs".into(),
+                "--sub-langs".into(),
+                langs.join(","),
+                "--convert-subs".into(),
+                "srt".into(),
+            ]);
+            if request.subtitles.as_ref().is_some_and(|subs| subs.embed) {
+                args.push("--embed-subs".into());
+            }
+        }
+        if request.sponsor_block.unwrap_or(false) {
+            args.extend([
+                "--sponsorblock-remove".into(),
+                "sponsor,selfpromo,interaction".into(),
+            ]);
+        }
+        if let Some((start, end)) = request.section_range() {
+            // Cut at keyframes forced at the boundaries, so the clip starts on
+            // the second asked for rather than on the keyframe before it.
+            args.extend([
+                "--download-sections".into(),
+                format!("*{start:.3}-{end:.3}"),
+                "--force-keyframes-at-cuts".into(),
+            ]);
+        }
     }
 
     // yt-dlp shells out to ffmpeg to merge and to transcode audio. Point it at
@@ -1446,13 +1669,14 @@ async fn run_ytdlp(
             // has no formats to read a picture out of. The row already has the
             // file's name.
             if !file_mode {
-                let (media, title) = parse_info(payload, is_audio);
+                let (media, title, resolution) = parse_info(payload, is_audio);
                 emitters.meta(
                     id,
                     JobKind::Download,
                     JobMeta {
                         media,
                         title,
+                        resolution,
                         ..JobMeta::default()
                     },
                 );
@@ -1673,10 +1897,12 @@ impl StreamTotals {
 /// download. With no evidence, nothing is claimed, and the finished file says
 /// what it is (`finalize_output`). An audio request is the exception: `-x`
 /// makes the result audio whatever the source was.
-fn parse_info(payload: &str, wants_audio: bool) -> (Option<MediaClass>, Option<String>) {
-    let mut fields = payload.splitn(3, '|');
+fn parse_info(payload: &str, wants_audio: bool) -> (Option<MediaClass>, Option<String>, Option<u32>) {
+    let mut fields = payload.splitn(5, '|');
     let vcodec = fields.next().unwrap_or("").trim();
     let acodec = fields.next().unwrap_or("").trim();
+    let width = fields.next().and_then(|w| w.trim().parse::<u32>().ok());
+    let height = fields.next().and_then(|h| h.trim().parse::<u32>().ok());
     let title = fields
         .next()
         .map(str::trim)
@@ -1693,7 +1919,15 @@ fn parse_info(payload: &str, wants_audio: bool) -> (Option<MediaClass>, Option<S
     } else {
         None
     };
-    (media, title)
+    let resolution = if media == Some(MediaClass::Video) {
+        match (width, height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some(w.min(h)),
+            (_, h) => h,
+        }
+    } else {
+        None
+    };
+    (media, title, resolution)
 }
 
 /// What the download screen previews after a link is pasted.
@@ -1763,6 +1997,7 @@ pub async fn probe_url(
                     entry_count: None,
                     size_bytes: None,
                     resumable: true,
+                    media: None,
                 },
             },
         );
@@ -1793,11 +2028,11 @@ pub async fn probe_url(
         // wearing two hats.
         in_playlist: entries.is_none() && names_a_playlist(&url),
         entry_count: entries.map(|e| e.len() as u64),
-        // yt-dlp cannot say: the size depends on the format it ends up
-        // choosing, which it does not decide until the download starts.
+        // Per resolution, in `media` -- the size depends on the choice.
         size_bytes: None,
         // yt-dlp writes a `.part` and continues from it, for every site.
         resumable: true,
+        media: if entries.is_some() { None } else { formats::summarize(&value) },
     })
 }
 
@@ -1816,6 +2051,7 @@ fn file_url_info(file: FileInfo) -> UrlInfo {
         entry_count: None,
         size_bytes: file.size_bytes,
         resumable: file.resumable,
+        media: None,
     }
 }
 
@@ -1842,6 +2078,10 @@ pub struct PlaylistEntry {
     /// The watch URL, ready to hand back to `start_download` unchanged.
     pub url: String,
     pub title: String,
+    /// Seconds, when the flat listing says -- YouTube's does.
+    pub duration_secs: Option<f64>,
+    /// The smallest thumbnail the listing offers, for the picker's rows.
+    pub thumbnail: Option<String>,
 }
 
 /// The most videos one press of "download all" will queue.
@@ -1851,11 +2091,13 @@ pub struct PlaylistEntry {
 /// -- and the job list persists a hundred rows, so the other four thousand nine
 /// hundred would not even be visible. The cap is reported rather than silently
 /// applied; see `PlaylistListing::truncated`.
-const MAX_PLAYLIST_ENTRIES: usize = 100;
+const MAX_PLAYLIST_ENTRIES: usize = 500;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistListing {
+    /// The playlist's own name, for the folder it can be saved into.
+    pub title: Option<String>,
     pub entries: Vec<PlaylistEntry>,
     /// How many the playlist actually holds, before the cap.
     pub total: u64,
@@ -1912,12 +2154,32 @@ pub async fn list_playlist(
                     .and_then(|v| v.as_str())
                     .unwrap_or("Untitled")
                     .to_string(),
+                duration_secs: entry.get("duration").and_then(|v| v.as_f64()),
+                thumbnail: entry
+                    .get("thumbnails")
+                    .and_then(|v| v.as_array())
+                    // Listed smallest first; the first one wide enough for a
+                    // 64px row, or the largest there is.
+                    .and_then(|list| {
+                        list.iter()
+                            .find(|t| t.get("width").and_then(|w| w.as_u64()).is_some_and(|w| w >= 120))
+                            .or_else(|| list.last())
+                    })
+                    .and_then(|t| t.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
             })
         })
         .take(MAX_PLAYLIST_ENTRIES)
         .collect();
 
     Ok(PlaylistListing {
+        title: value
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string),
         truncated: total > entries.len() as u64,
         entries,
         total,
@@ -1947,6 +2209,14 @@ mod tests {
             audio_format: audio_format.map(str::to_string),
             cookies_from: None,
             auto_folder: None,
+            video: None,
+            audio: None,
+            subtitles: None,
+            embed_metadata: None,
+            embed_thumbnail: None,
+            sponsor_block: None,
+            section: None,
+            subfolder: None,
         }
     }
 
@@ -2132,78 +2402,10 @@ mod tests {
         assert_eq!(normalized("https://a.com/x\nhttps://b.com/y"), "https://a.com/x");
     }
 
-    #[test]
-    fn selectors_use_at_most_not_equals() {
-        // height=1080 misses a 1920x1084 source entirely.
-        let spec = format_selector(Some("1080"));
-        assert!(spec.contains("height<=1080"), "{spec}");
-        assert!(!spec.contains("height=1080"), "{spec}");
-        assert!(spec.ends_with("/best"), "{spec}");
-    }
 
-    #[test]
-    fn selector_accepts_both_720_and_720p() {
-        assert_eq!(format_selector(Some("720")), format_selector(Some("720p")));
-    }
 
-    #[test]
-    fn best_needs_no_height_filter() {
-        for spec in [format_selector(Some("best")), format_selector(None)] {
-            assert!(!spec.contains("height"), "{spec}");
-            assert!(spec.ends_with("/best"), "{spec}");
-        }
-    }
 
-    /// The output container is mp4, so the first thing asked for has to be
-    /// something every player decodes. Without this, YouTube returns VP9 or AV1
-    /// with Opus, yt-dlp puts them in an .mp4 exactly as told, and the file
-    /// opens to a black screen on Windows.
-    ///
-    /// On the codec and not on `ext`, which was the first attempt: YouTube
-    /// publishes AV1 inside mp4, so `bestvideo[ext=mp4]` selected format 399
-    /// (`av01.0.09M.08`) and landed back in the same problem.
-    #[test]
-    fn asks_for_playable_codecs_before_merely_best_ones() {
-        for quality in [None, Some("best"), Some("1080"), Some("720")] {
-            let spec = format_selector(quality);
 
-            assert!(
-                spec.starts_with("bestvideo[vcodec^=avc1]"),
-                "{quality:?} -> {spec}"
-            );
-            assert!(
-                spec.contains("bestaudio[acodec^=mp4a]"),
-                "{quality:?} -> {spec}"
-            );
-            // The container filter is a fallback now, not the first ask.
-            assert!(
-                spec.find("[ext=mp4]").unwrap() > spec.find("[vcodec^=avc1]").unwrap(),
-                "{quality:?} -> {spec}"
-            );
-            // And it still degrades all the way down, so a source with nothing
-            // but VP9 at this height downloads rather than failing.
-            assert!(spec.ends_with("/best"), "{quality:?} -> {spec}");
-        }
-    }
-
-    /// Every video branch carries the height cap, not just the first one --
-    /// otherwise asking for 720p and getting no H.264 at 720p falls through to
-    /// a branch with no limit at all and downloads the 4K.
-    #[test]
-    fn every_branch_respects_the_requested_height() {
-        let spec = format_selector(Some("720"));
-        let branches: Vec<&str> = spec.split('/').collect();
-
-        for branch in &branches[..branches.len() - 1] {
-            assert!(
-                branch.contains("[height<=720]"),
-                "unbounded branch {branch:?} in {spec}"
-            );
-        }
-        // The last one is the bare "best": a source with nothing at or under
-        // the cap should still download something rather than fail.
-        assert_eq!(branches.last(), Some(&"best"));
-    }
 
     #[test]
     fn spots_the_warning_that_leaves_two_files_behind() {
@@ -2352,16 +2554,19 @@ mod tests {
     /// the generic extractor says about a plain file and is evidence of nothing.
     #[test]
     fn only_a_named_codec_is_evidence() {
-        assert_eq!(parse_info("none|opus|Track", false), (Some(MediaClass::Audio), Some("Track".into())));
-        assert_eq!(parse_info("avc1.64001F|mp4a.40.2|Clip", false).0, Some(MediaClass::Video));
+        assert_eq!(parse_info("none|opus|NA|NA|Track", false), (Some(MediaClass::Audio), Some("Track".into()), None));
+        assert_eq!(parse_info("avc1.64001F|mp4a.40.2|1920|1080|Clip", false).0, Some(MediaClass::Video));
+        // A portrait video is named by its short side.
+        assert_eq!(parse_info("avc1|mp4a|1080|1920|Clip", false).2, Some(1080));
         // What a plain file on the Generic extractor prints. It used to be read
         // as "video", which is how an installer was drawn with a film icon.
-        assert_eq!(parse_info("NA|NA|NA", false), (None, None));
-        assert_eq!(parse_info("none|none|x", false).0, None);
-        // Asked for as audio, the result is audio whatever the page has: `-x`.
-        assert_eq!(parse_info("avc1|mp4a|Clip", true).0, Some(MediaClass::Audio));
+        assert_eq!(parse_info("NA|NA|NA|NA|NA", false), (None, None, None));
+        assert_eq!(parse_info("none|none|NA|NA|x", false).0, None);
+        // Asked for as audio, it is audio whatever the source carried.
+        assert_eq!(parse_info("avc1|mp4a|1280|720|Clip", true).0, Some(MediaClass::Audio));
+        assert_eq!(parse_info("avc1|mp4a|1280|720|Clip", true).2, None);
         // A title with the separator in it survives whole.
-        assert_eq!(parse_info("none|opus|A | B", false).1.as_deref(), Some("A | B"));
+        assert_eq!(parse_info("none|opus|NA|NA|A | B", false).1.as_deref(), Some("A | B"));
     }
 
     /// yt-dlp's answer for a direct link to an installer, trimmed from what
@@ -2446,5 +2651,59 @@ mod tests {
         .unwrap();
         let plain = plain_file_from_json(&value, "https://x/get?id=5").unwrap();
         assert_eq!(plain.name_hint, "get");
+    }
+
+    fn request_json(json: serde_json::Value) -> DownloadRequest {
+        let mut base = serde_json::json!({"url": "https://example.com/v", "outputDir": "/tmp", "mediaType": "video"});
+        base.as_object_mut().unwrap().extend(json.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    #[test]
+    fn video_choice_reads_new_and_old_requests() {
+        let new = request_json(serde_json::json!({"video": {"quality": "2160", "codec": "small", "container": "mkv"}}));
+        assert_eq!(new.video_choice(), (Some(2160), CodecPref::Small));
+        assert_eq!(new.container(), "mkv");
+        assert_eq!(new.selection()[3], "res:2160,fps,+codec:av01:opus");
+
+        // A request stored by an older build: the bare `quality`.
+        let old = request_json(serde_json::json!({"quality": "720"}));
+        assert_eq!(old.video_choice(), (Some(720), CodecPref::Auto));
+        assert_eq!(old.container(), "mp4");
+        let best = request_json(serde_json::json!({"quality": "best"}));
+        assert_eq!(best.video_choice().0, None);
+    }
+
+    #[test]
+    fn audio_choice_reads_new_and_old_requests() {
+        let audio = |extra: serde_json::Value| {
+            let mut value = serde_json::json!({"mediaType": "audio"});
+            value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            request_json(value)
+        };
+        assert_eq!(audio(serde_json::json!({})).audio_choice(), AudioFormat::Mp3);
+        assert_eq!(audio(serde_json::json!({"audioFormat": "original"})).audio_choice(), AudioFormat::Original);
+        let opus = audio(serde_json::json!({"audio": {"format": "opus"}}));
+        assert_eq!(opus.audio_choice(), AudioFormat::Opus);
+        assert_eq!(opus.selection(), vec!["-f", "ba[acodec=opus]/ba/b"]);
+        let mp3 = audio(serde_json::json!({"audio": {"format": "mp3", "bitrateKbps": 999}}));
+        assert_eq!(mp3.mp3_kbps(), Some(320));
+        // Covers default on for audio, off for video; tags on for both.
+        assert!(mp3.embeds_thumbnail() && mp3.embeds_metadata());
+        let video = request_json(serde_json::json!({}));
+        assert!(!video.embeds_thumbnail() && video.embeds_metadata());
+    }
+
+    #[test]
+    fn subtitles_sponsorblock_and_sections_go_to_ytdlp() {
+        assert!(!request_json(serde_json::json!({})).needs_ytdlp());
+        assert!(request_json(serde_json::json!({"subtitles": {"langs": ["fa", "en"], "embed": true}})).needs_ytdlp());
+        assert!(request_json(serde_json::json!({"sponsorBlock": true})).needs_ytdlp());
+        assert!(request_json(serde_json::json!({"section": {"startSecs": 10.0, "endSecs": 20.0}})).needs_ytdlp());
+        // A backwards range is no range.
+        assert!(!request_json(serde_json::json!({"section": {"startSecs": 20.0, "endSecs": 10.0}})).needs_ytdlp());
+        // Only language codes reach the command line.
+        let odd = request_json(serde_json::json!({"subtitles": {"langs": ["en", "--exec rm", "pt-BR"]}}));
+        assert_eq!(odd.subtitle_langs(), vec!["en".to_string(), "pt-BR".to_string()]);
     }
 }

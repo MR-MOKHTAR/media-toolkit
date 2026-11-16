@@ -4,6 +4,7 @@ mod direct;
 mod download;
 mod error;
 mod filetype;
+mod formats;
 mod jobs;
 mod library;
 mod media;
@@ -84,6 +85,10 @@ pub fn run() {
             tray::set_close_to_tray,
             tray::set_tray_labels,
             media::commands::probe_media,
+            media::analyze::analyze_audio,
+            media::analyze::cancel_analysis,
+            media::analyze::allow_preview,
+            media::analyze::make_preview,
             media::commands::estimate_compressed_size,
             media::commands::can_copy_streams,
             media::commands::audio_copy_format,

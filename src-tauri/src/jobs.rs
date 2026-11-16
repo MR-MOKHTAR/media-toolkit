@@ -166,6 +166,10 @@ pub struct JobMeta {
     /// The title the source gave, for a job that could only be named after its
     /// URL when it started.
     pub title: Option<String>,
+    /// The short side of the picture actually fetched -- 1080 for a 1080p
+    /// download -- so the card says what arrived rather than what was asked
+    /// for, which on a 720p-only video were two different numbers.
+    pub resolution: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -837,6 +841,7 @@ mod tests {
                 file_name: Some("a.m4a".into()),
                 content_type: Some("audio/mp4".into()),
                 title: None,
+                resolution: None,
             },
         })
         .unwrap();

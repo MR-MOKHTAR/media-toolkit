@@ -194,6 +194,33 @@ fn build_client(proxy: Option<&str>) -> Client {
         .expect("a client with no TLS backend configured cannot be built")
 }
 
+/// A small file -- a cover picture -- fetched whole into `path`, through the
+/// same client (and so the same proxy) as every other download.
+///
+/// Refuses anything over `limit` bytes, declared or delivered: a "thumbnail"
+/// URL that turns out to be something else is not worth a disk's worth of it.
+pub async fn fetch_small(url: &str, path: &Path, limit: u64) -> AppResult<()> {
+    let response = client()
+        .get(url)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(AppError::network)?;
+    if !response.status().is_success() {
+        return Err(AppError::network(format!("HTTP {}", response.status())));
+    }
+    if response.content_length().is_some_and(|length| length > limit) {
+        return Err(AppError::network("larger than a picture should be"));
+    }
+    let bytes = response.bytes().await.map_err(AppError::network)?;
+    if bytes.len() as u64 > limit {
+        return Err(AppError::network("larger than a picture should be"));
+    }
+    tokio::fs::write(path, &bytes)
+        .await
+        .map_err(|error| AppError::io(path, error))
+}
+
 /// A GET with this module's client, carrying whatever headers the caller was
 /// given.
 ///

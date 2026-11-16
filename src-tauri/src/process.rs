@@ -85,6 +85,71 @@ pub fn spawn(mut cmd: std::process::Command, tool: &str) -> AppResult<Running> {
     Ok(Running { child, lines: rx })
 }
 
+/// A child whose stdout is raw bytes rather than text lines.
+///
+/// `spawn` decodes both pipes as UTF-8 lines, which is right for yt-dlp and
+/// ffmpeg's `-progress` output and hopeless for PCM audio: a line reader would
+/// mangle the bytes and buffer an entire "line" of binary. This keeps stdout
+/// as a plain `ChildStdout` for the caller to read, and still drains stderr in
+/// the background so a chatty tool cannot wedge on a full pipe.
+///
+/// Dropping it kills the whole process tree (same guard `output` uses), so a
+/// cancelled analysis cannot leave an ffmpeg decoding into a closed pipe.
+pub struct RawRunning {
+    pub child: Child,
+    pub stdout: tokio::process::ChildStdout,
+    tail: tokio::task::JoinHandle<StderrTail>,
+    guard: TreeGuard,
+}
+
+impl RawRunning {
+    /// Waits for exit and returns the status with the stderr tail. Call after
+    /// stdout hit EOF (or after killing); disarms the drop guard because the
+    /// pid is reaped.
+    pub async fn wait(mut self, tool: &str) -> AppResult<(std::process::ExitStatus, String)> {
+        let status = self.child.wait().await;
+        self.guard.disarm();
+        let status = status.map_err(|error| AppError::spawn(tool, error))?;
+        let tail = (&mut self.tail).await.unwrap_or_default();
+        Ok((status, tail.into_string()))
+    }
+}
+
+/// Like `spawn`, but stdout stays a raw byte stream. See `RawRunning`.
+pub fn spawn_raw(mut cmd: std::process::Command, tool: &str) -> AppResult<RawRunning> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = Command::from(cmd)
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| AppError::spawn(tool, error))?;
+    let guard = TreeGuard(child.id());
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::spawn(tool, "stdout was not captured"))?;
+    let stderr = child.stderr.take();
+    let tail = tokio::spawn(async move {
+        let mut tail = StderrTail::default();
+        if let Some(stderr) = stderr {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tail.push(line);
+            }
+        }
+        tail
+    });
+
+    Ok(RawRunning { child, stdout, tail, guard })
+}
+
 /// Kills a child and everything it started.
 ///
 /// Killing only the child is not enough, and the child that proves it is
