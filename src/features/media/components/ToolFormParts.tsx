@@ -123,6 +123,11 @@ export function FileDropZone({
                   .join(" · ")
               : "—"}
         </p>
+        {/* What is inside, as chips: the codecs, the sound's bitrate, rate and
+            channels. The audio choices below are judged against these -- a
+            "64k" means something different next to a 320k source than next
+            to a 48k one. */}
+        {info && !loading && <StreamChips info={info} />}
       </div>
       <Button variant="ghost" size="sm" onClick={onBrowse}>
         {t("change")}
@@ -332,4 +337,26 @@ export function FormatGroup({
  *  and worth telling the user before they wait for nothing. */
 export function InstantBadge({ text }: { text: string }) {
   return <Badge tone="success">{text}</Badge>;
+}
+
+function StreamChips({ info }: { info: MediaInfo }) {
+  const chips = [
+    info.video ? info.video.codec.toUpperCase() : null,
+    info.video && info.video.fps > 0 ? `${Math.round(info.video.fps)} fps` : null,
+    info.audio ? info.audio.codec.toUpperCase() : null,
+    info.audio?.bitRate ? `${Math.round(info.audio.bitRate / 1000)} kbps` : null,
+    info.audio?.sampleRate ? `${(info.audio.sampleRate / 1000).toFixed(1).replace(/\.0$/, "")} kHz` : null,
+    info.audio ? (info.audio.channels === 1 ? "mono" : info.audio.channels === 2 ? "stereo" : `${info.audio.channels}ch`) : null,
+    (info.audioStreams?.length ?? 0) > 1 ? `${info.audioStreams!.length}× audio` : null,
+    (info.subtitles?.length ?? 0) > 0 ? `${info.subtitles!.length}× subs` : null,
+  ].filter((chip): chip is string => Boolean(chip));
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {chips.map((chip) => (
+        <span key={chip} dir="ltr" className="rounded-sm border border-line px-1.5 text-xs leading-5 text-fg-muted">
+          {chip}
+        </span>
+      ))}
+    </div>
+  );
 }

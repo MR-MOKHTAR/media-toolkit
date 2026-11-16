@@ -18,12 +18,22 @@ export interface MediaInfo {
     fps: number;
     bitRate: number | null;
   } | null;
-  audio: {
-    codec: string;
-    channels: number;
-    sampleRate: number | null;
-    bitRate: number | null;
-  } | null;
+  /** The first (default) audio track. */
+  audio: AudioTrack | null;
+  /** Every audio track, for the track picker. */
+  audioStreams?: AudioTrack[];
+  subtitles?: { codec: string; language: string | null; bitmap: boolean }[];
+}
+
+export interface AudioTrack {
+  /** 0-based among the audio tracks. */
+  index?: number;
+  codec: string;
+  channels: number;
+  sampleRate: number | null;
+  bitRate: number | null;
+  language?: string | null;
+  title?: string | null;
 }
 
 /**
