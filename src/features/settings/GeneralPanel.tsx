@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
-import { Moon, Sun } from "lucide-react";
+import { Moon, Sparkles, Sun, Wind, ZapOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { SectionLabel } from "../../components/ui/Card";
 import { CheckRow } from "../../components/ui/CheckRow";
 import { Segmented } from "../../components/ui/Segmented";
-import { LANGUAGES, type AppLanguage } from "../../hooks/useAppPreferences";
+import {
+  EFFECTS_LEVELS,
+  LANGUAGES,
+  type AppLanguage,
+  type EffectsLevel,
+} from "../../hooks/useAppPreferences";
 import * as ipc from "../../lib/ipc";
 import type { TraySettings } from "../jobs/types";
 
@@ -14,7 +19,15 @@ interface Props {
   onToggleTheme: () => void;
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
+  effects: EffectsLevel;
+  onEffectsChange: (effects: EffectsLevel) => void;
 }
+
+const EFFECT_ICONS = {
+  full: <Sparkles size={16} />,
+  lite: <Wind size={16} />,
+  off: <ZapOff size={16} />,
+} as const;
 
 /**
  * Theme and language: the two things that change how the whole app looks, and
@@ -29,6 +42,8 @@ export function GeneralPanel({
   onToggleTheme,
   language,
   onLanguageChange,
+  effects,
+  onEffectsChange,
 }: Props) {
   const { t } = useTranslation();
   const [tray, setTray] = useState<TraySettings | null>(null);
@@ -62,6 +77,24 @@ export function GeneralPanel({
             { value: "dark", label: t("theme_dark"), icon: <Moon size={16} /> },
           ]}
         />
+      </section>
+
+      {/* How much the background does. Its own row rather than folded into
+          the theme: it is the one appearance choice that is about the machine
+          -- a laptop on battery, an old GPU -- rather than about taste. */}
+      <section className="flex flex-col gap-2">
+        <SectionLabel>{t("effects")}</SectionLabel>
+        <Segmented
+          label={t("effects")}
+          value={effects}
+          onChange={onEffectsChange}
+          options={EFFECTS_LEVELS.map((value) => ({
+            value,
+            label: t(`effects_${value}`),
+            icon: EFFECT_ICONS[value],
+          }))}
+        />
+        <p className="text-xs text-fg-muted">{t(`effects_${effects}_hint`)}</p>
       </section>
 
       <section className="flex flex-col gap-2">

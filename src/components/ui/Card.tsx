@@ -9,6 +9,11 @@ interface CardProps extends HTMLAttributes<HTMLElement> {
    *  container that rises under the pointer is promising something it does
    *  not do. */
   interactive?: boolean;
+  /** `glass` for a card that sits straight on the page, over the living
+   *  background -- it blurs what is behind it. `inset` (the default) for a card
+   *  inside a dialog or a form card, which is already glass: a second blur
+   *  there would blur the pane, not the background, and cost a frame for it. */
+  surface?: "glass" | "inset";
   as?: "div" | "li" | "section";
 }
 
@@ -31,6 +36,7 @@ const CARD_PADDING = {
 export function Card({
   padding = "md",
   interactive = false,
+  surface = "inset",
   as: Tag = "div",
   className,
   children,
@@ -39,10 +45,12 @@ export function Card({
   return (
     <Tag
       className={cn(
-        "rounded-lg border border-line bg-surface",
+        "rounded-lg border",
+        surface === "glass" ? "glass-card" : "glass-inset",
         CARD_PADDING[padding],
         interactive &&
-          "transition-[box-shadow,transform] duration-(--duration-fast) hover:-translate-y-px hover:shadow-(--shadow-raise)",
+          "glass-spotlight transition-[box-shadow,transform,background-color] duration-(--duration-fast) hover:-translate-y-px hover:shadow-(--shadow-raise)",
+        interactive && surface === "glass" && "hover:bg-card-glass-hover",
         className,
       )}
       {...props}
@@ -81,7 +89,8 @@ export function FormCard({
     <div
       className={cn(
         "flex flex-col gap-5 rounded-xl border border-line-soft p-6",
-        "bg-surface-glass shadow-(--shadow-card) backdrop-blur-glass",
+        "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
+        "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-card)]",
         /* Thin gradient accent along the top edge — visible enough to mark
            the card as the primary surface without competing with anything
            inside it. */
@@ -174,11 +183,15 @@ export function SectionLabel({
 
 export function EmptyState({
   icon,
+  illustration,
   title,
   description,
   action,
 }: {
   icon: ReactNode;
+  // A larger scene (e.g. an animated SVG) that stands in for the icon tile
+  // when a screen has one; `icon` stays the fallback for those that do not.
+  illustration?: ReactNode;
   title: string;
   description?: string;
   action?: ReactNode;
@@ -189,9 +202,11 @@ export function EmptyState({
           glowing mark in the middle of an empty page read as the thing to
           press, next to a button that actually was -- this says "nothing
           here", and leaves the asking to the button. */}
-      <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface-soft text-fg-muted">
-        {icon}
-      </div>
+      {illustration ?? (
+        <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface-soft text-fg-muted">
+          {icon}
+        </div>
+      )}
       <div className="flex flex-col gap-1">
         <p className="text-lg font-medium text-fg">{title}</p>
         {/* `fg-soft`, not `fg-muted`: this is the sentence that says what to

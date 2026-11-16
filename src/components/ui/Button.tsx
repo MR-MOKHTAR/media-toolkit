@@ -27,7 +27,7 @@ const VARIANTS: Record<Variant, string> = {
   // the button had an elevation in one theme and none in the other. The border
   // carries the resting edge in both; the lift is reserved for hover.
   secondary:
-    "bg-surface text-fg border border-line hover:bg-surface-hover hover:border-line-strong hover:shadow-(--shadow-raise)",
+    "bg-surface/65 text-fg border border-line hover:bg-surface-hover hover:border-line-strong hover:shadow-(--shadow-raise)",
   ghost: "text-fg-soft hover:bg-surface-hover hover:text-fg",
   danger: "text-danger-text hover:bg-danger/10",
   /* A quiet action that is still the good one -- reveal, retry, view. It sits

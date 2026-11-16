@@ -100,6 +100,7 @@ pub fn run() {
                 if window.label() == "main" && tray::hide_on_close() {
                     api.prevent_close();
                     let _ = window.hide();
+                    let _ = tauri::Emitter::emit(window, tray::VISIBILITY_EVENT, false);
                 }
             }
         })

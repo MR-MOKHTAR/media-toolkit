@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigation, type ToolRoute } from "../../app/navigation";
 import { TOOL_ICON } from "../../app/tools";
 import { Button } from "../../components/ui/Button";
+import { ToolIllustration } from "../../components/illustrations/ToolIllustration";
 import { EmptyState } from "../../components/ui/Card";
 import { JobList } from "../jobs/components/JobList";
 import { jobsOfKind } from "../jobs/selectors";
@@ -94,7 +95,7 @@ export function ToolScreen({ route, language, children }: Props) {
       {/* The toolbar. It does not scroll: the button that starts a job has to
           be in the same place whether the list below it holds nothing or two
           hundred rows. */}
-      <header className="shrink-0 border-b border-line bg-surface px-6 py-3">
+      <header className="glass-chrome shrink-0 border-b px-6 py-3">
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3 lg:max-w-4xl xl:max-w-5xl">
           {/* The sidebar's own glyph for this tool, so the highlighted row and
               the screen it leads to cannot drift apart. Static -- the animated
@@ -136,6 +137,7 @@ export function ToolScreen({ route, language, children }: Props) {
             empty={
               <EmptyState
                 icon={Icon ? <Icon size={22} /> : null}
+                illustration={<ToolIllustration kind={kind} />}
                 title={t("no_jobs_title")}
                 // How to start, not what the tool is: the header right above
                 // already says that, in the same words. And only what the app

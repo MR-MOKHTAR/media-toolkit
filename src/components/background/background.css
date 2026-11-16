@@ -1,0 +1,204 @@
+/*
+ * The living background, CSS half.
+ *
+ * Everything that moves here moves by `transform` alone, so the compositor
+ * runs it without touching layout or paint. Gradients are soft by their stops,
+ * never by `filter: blur`, which would be re-run on a moving layer.
+ */
+
+/* The element that carries `data-tint`. The aurora colours are registered
+   properties (theme.css), so a change of screen fades between hues here and
+   every layer below inherits the in-between values. */
+.aurora-host {
+  transition:
+    --color-aurora-1 1.4s var(--ease-out-quart),
+    --color-aurora-2 1.4s var(--ease-out-quart),
+    --color-aurora-3 1.4s var(--ease-out-quart);
+}
+
+.mtk-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+  pointer-events: none;
+  background-color: var(--color-aurora-base);
+  contain: strict;
+  /* Pointer parallax, -1..1, written by AppBackground. */
+  --px: 0;
+  --py: 0;
+}
+
+.mtk-bg > * {
+  position: absolute;
+  inset: 0;
+}
+
+/* The still part, drawn in every mode: three washes of the aurora hues. */
+.mtk-bg-base {
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--color-aurora-1) 26%, transparent), transparent 62%),
+    radial-gradient(90% 70% at 100% 8%, color-mix(in srgb, var(--color-aurora-2) 22%, transparent), transparent 60%),
+    radial-gradient(120% 90% at 55% 112%, color-mix(in srgb, var(--color-aurora-3) 24%, transparent), transparent 66%);
+}
+
+/* ----------------------------------------------------------- aurora --- */
+
+.mtk-bg-blob {
+  inset: auto;
+  width: 75vmax;
+  height: 75vmax;
+  border-radius: 50%;
+  will-change: transform;
+  opacity: 0.55;
+}
+
+html.dark .mtk-bg-blob {
+  opacity: 0.6;
+}
+
+.mtk-bg-blob[data-blob="a"] {
+  top: -30vmax;
+  inset-inline-start: -20vmax;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-aurora-1) 70%, transparent) 0%, transparent 62%);
+  animation: mtk-blob-a 34s ease-in-out infinite;
+}
+
+.mtk-bg-blob[data-blob="b"] {
+  top: -20vmax;
+  inset-inline-end: -28vmax;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-aurora-2) 65%, transparent) 0%, transparent 62%);
+  animation: mtk-blob-b 41s ease-in-out infinite;
+}
+
+.mtk-bg-blob[data-blob="c"] {
+  bottom: -38vmax;
+  inset-inline-start: 10vmax;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-aurora-3) 65%, transparent) 0%, transparent 62%);
+  animation: mtk-blob-c 47s ease-in-out infinite;
+}
+
+/* The curtain: one wide band of light sweeping slowly across, the part that
+   makes it read as an aurora rather than as three coloured spots. */
+.mtk-bg-curtain {
+  inset: -20% -40%;
+  background: linear-gradient(
+    100deg,
+    transparent 22%,
+    color-mix(in srgb, var(--color-aurora-1) 22%, transparent) 36%,
+    color-mix(in srgb, var(--color-aurora-2) 18%, transparent) 48%,
+    color-mix(in srgb, var(--color-aurora-3) 14%, transparent) 58%,
+    transparent 72%
+  );
+  will-change: transform;
+  animation: mtk-curtain 38s ease-in-out infinite alternate;
+}
+
+@keyframes mtk-blob-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(14vmax, 10vmax, 0) scale(1.18); }
+}
+
+@keyframes mtk-blob-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1.1); }
+  50% { transform: translate3d(-12vmax, 16vmax, 0) scale(0.92); }
+}
+
+@keyframes mtk-blob-c {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(18vmax, -10vmax, 0) scale(1.22); }
+}
+
+@keyframes mtk-curtain {
+  from { transform: translate3d(-18%, 0, 0) skewX(-14deg); }
+  to { transform: translate3d(18%, -4%, 0) skewX(-4deg); }
+}
+
+/* ------------------------------------------------------------ icons --- */
+
+.mtk-bg-icon {
+  position: absolute;
+  inset-inline-start: var(--x);
+  top: var(--y);
+  width: var(--s);
+  height: var(--s);
+  display: grid;
+  place-items: center;
+  opacity: calc(0.12 + var(--depth) * 0.22);
+  /* The pointer parallax, as `translate` so it composes with the animated
+     `transform` instead of replacing it. */
+  translate: calc(var(--px) * var(--depth) * 26px) calc(var(--py) * var(--depth) * 18px);
+  transition: translate 900ms var(--ease-out-quart);
+  will-change: transform;
+  animation: mtk-float var(--dur) ease-in-out var(--delay) infinite;
+  filter: drop-shadow(0 0 calc(var(--depth) * 14px) color-mix(in srgb, var(--color-aurora-icon) 45%, transparent));
+}
+
+html.dark .mtk-bg-icon {
+  opacity: calc(0.16 + var(--depth) * 0.3);
+}
+
+/* Far away and out of focus. */
+.mtk-bg-icon[data-far] {
+  filter: blur(1.2px);
+}
+
+/* A glass bubble around the glyph: a highlight and a rim, no backdrop blur. */
+.mtk-bg-icon[data-orb] {
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--color-aurora-icon) 30%, transparent);
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.06) 42%, transparent 70%),
+    radial-gradient(circle at 70% 80%, color-mix(in srgb, var(--color-aurora-2) 30%, transparent), transparent 60%);
+  opacity: calc(0.3 + var(--depth) * 0.3);
+}
+
+html.dark .mtk-bg-icon[data-orb] {
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.02) 42%, transparent 70%),
+    radial-gradient(circle at 70% 80%, color-mix(in srgb, var(--color-aurora-2) 35%, transparent), transparent 60%);
+}
+
+@keyframes mtk-float {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  25% { transform: translate3d(calc(var(--drift) * 0.6), calc(var(--drift) * -1), 0) rotate(calc(var(--rot) * 0.5)); }
+  50% { transform: translate3d(calc(var(--drift) * -0.4), calc(var(--drift) * -0.3), 0) rotate(var(--rot)); }
+  75% { transform: translate3d(calc(var(--drift) * -0.8), calc(var(--drift) * 0.5), 0) rotate(calc(var(--rot) * 0.3)); }
+}
+
+/* ------------------------------------------------------- the finish --- */
+
+/* Edges a shade deeper, so the eye settles in the middle of the window. */
+.mtk-bg-vignette {
+  background: radial-gradient(130% 100% at 50% 40%, transparent 55%, rgba(15, 23, 42, 0.08));
+}
+
+html.dark .mtk-bg-vignette {
+  background: radial-gradient(130% 100% at 50% 40%, transparent 50%, rgba(0, 0, 0, 0.45));
+}
+
+/* Film grain, a few percent: breaks up the banding a smooth gradient shows on
+   an 8-bit panel. Static, and tiled from a 160px tile. */
+.mtk-bg-grain {
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 .9 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* The WebGL scene's canvas. Fades in once its first frame is drawn, over the
+   CSS layer it then replaces. */
+.mtk-bg-canvas {
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.2s var(--ease-out-quart);
+}
+
+.mtk-bg-canvas[data-ready] {
+  opacity: 1;
+}
+
+/* Hidden into the tray or minimised: nothing moves for nobody. */
+html[data-bg-paused] .mtk-bg *,
+html[data-effects="off"] .mtk-bg * {
+  animation-play-state: paused !important;
+}

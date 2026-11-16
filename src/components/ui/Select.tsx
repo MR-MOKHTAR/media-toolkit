@@ -88,7 +88,7 @@ export function Select<T extends string>({
           sideOffset={4}
           className={cn(
             "z-50 overflow-hidden rounded-lg border border-line-soft shadow-(--shadow-panel)",
-            "bg-surface-glass backdrop-blur-glass",
+            "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // Matched to the trigger so the menu reads as the field opening
             // rather than as a panel arriving over it, and capped at whatever
             // room the window actually has left below it.

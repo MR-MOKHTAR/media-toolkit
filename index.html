@@ -11,7 +11,7 @@
          a white page background under everything and shows it for a frame
          whenever the window is resized, restored or un-minimised. -->
     <meta name="color-scheme" content="dark light" />
-    <meta name="theme-color" content="#0c111a" />
+    <meta name="theme-color" content="#060a12" />
     <title>Media Toolkit</title>
 
     <!--
@@ -38,8 +38,15 @@
           // Storage disabled. The app's own default is dark.
         }
         var root = document.documentElement;
+        var effects = "full";
+        try {
+          effects = localStorage.getItem("downloader-effects") || "full";
+        } catch (error) {
+          // Same default as the app.
+        }
+        root.dataset.effects = effects;
         if (dark) root.classList.add("dark");
-        root.style.background = dark ? "#0c111a" : "#f3f5f9";
+        root.style.background = dark ? "#060a12" : "#eef2f8";
         root.style.colorScheme = dark ? "dark" : "light";
       })();
     </script>

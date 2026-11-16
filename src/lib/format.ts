@@ -98,6 +98,64 @@ export function formatMegabits(
   return `${numberFormatter(language, megabits >= 100 ? 0 : 1).format(megabits)} Mbps`;
 }
 
+const SPEED_UNITS = ["KB/s", "MB/s", "GB/s"] as const;
+
+/** A transfer rate as a number and a unit, kept apart so the status bar can
+ *  give each its own fixed-width slot. */
+export interface SpeedParts {
+  value: string;
+  unit: string;
+  /** Index into the unit ladder, handed back on the next call so the unit
+   *  does not flap at a boundary -- see `speedParts`. */
+  step: number;
+}
+
+/**
+ * A rate for a figure that updates in place: always one decimal, never bytes.
+ *
+ * `formatSpeed` drops the decimal at 100 and switches unit at exactly 1024,
+ * which is right for a number read once and wrong for one that changes twice a
+ * second -- "99.8 MB/s" to "102 MB/s" changes width, and a rate hovering at
+ * 1 MB/s flips between "1023 KB/s" and "1.0 MB/s" on every update. So: a fixed
+ * shape, and a unit that only changes once the rate is clearly past the
+ * boundary (`previous` is the step the last call returned).
+ */
+export function speedParts(
+  bytesPerSecond: number,
+  language: string,
+  previous?: number,
+): SpeedParts {
+  let step = 0;
+  let value = Math.max(0, bytesPerSecond) / 1024;
+  while (value >= 1024 && step < SPEED_UNITS.length - 1) {
+    value /= 1024;
+    step += 1;
+  }
+  if (previous !== undefined && Math.abs(previous - step) === 1) {
+    const inPrevious = bytesPerSecond / 1024 ** (previous + 1);
+    // Stay put within a margin either side of the boundary.
+    if (inPrevious >= 0.85 && inPrevious < 1200) {
+      step = previous;
+      value = inPrevious;
+    }
+  }
+  const formatter = new Intl.NumberFormat(language, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  return { value: formatter.format(value), unit: SPEED_UNITS[step], step };
+}
+
+/** Megabits per second as a number alone, one decimal, for a fixed slot
+ *  beside the unit "Mbps". */
+export function megabitsValue(bytesPerSecond: number, language: string): string {
+  const formatter = new Intl.NumberFormat(language, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  return formatter.format((Math.max(0, bytesPerSecond) * 8) / 1_000_000);
+}
+
 /**
  * ffmpeg's realtime multiplier, as "2.0×".
  *

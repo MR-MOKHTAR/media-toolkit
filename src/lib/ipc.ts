@@ -250,6 +250,32 @@ export const onSpeedTestProgress = (
     handler(payload.bytesPerSecond),
   );
 
+/** The window going into the tray (false) or coming back out of it (true).
+ *  Emitted by Rust, because a hidden webview is not told by the page itself. */
+export const onAppVisibility = (
+  handler: (visible: boolean) => void,
+): Promise<UnlistenFn> =>
+  listen<boolean>("app-visibility", ({ payload }) => handler(payload));
+
+/** Focus of the native window. Rejects outside Tauri (`vite dev`), which the
+ *  caller treats as "always focused". */
+export const onWindowFocusChange = (
+  handler: (focused: boolean) => void,
+): Promise<UnlistenFn> =>
+  getCurrentWindow().onFocusChanged(({ payload }) => handler(payload));
+
+/** Minimised windows report no visibility change, only a resize. */
+export const onWindowResized = (handler: () => void): Promise<UnlistenFn> =>
+  getCurrentWindow().onResized(() => handler());
+
+export const isWindowMinimized = async () => {
+  try {
+    return await getCurrentWindow().isMinimized();
+  } catch {
+    return false;
+  }
+};
+
 export const onJobMeta = (
   handler: (payload: JobMetaEvent) => void,
 ): Promise<UnlistenFn> =>

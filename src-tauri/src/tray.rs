@@ -17,12 +17,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::error::{AppError, AppResult};
 use crate::settings;
 
 const SHOW_ID: &str = "show";
+
+/// Told to the webview whenever the window goes into the tray or comes back.
+/// A hidden webview keeps running its animation frames on WebKitGTK, so the
+/// living background stops itself on this rather than drawing for nobody.
+pub const VISIBILITY_EVENT: &str = "app-visibility";
 const QUIT_ID: &str = "quit";
 
 /// Whether the close button hides the window. Held in memory because the
@@ -102,6 +107,7 @@ pub fn show_main_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.emit(VISIBILITY_EVENT, true);
     }
 }
 

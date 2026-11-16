@@ -90,7 +90,7 @@ export function WelcomeDialog({ language, onLanguageChange, onDone }: Props) {
             // already a containing block for the hairline below.
             "overflow-hidden rounded-xl border border-line-soft",
             "px-6 py-7 text-center shadow-(--shadow-panel)",
-            "bg-surface-glass backdrop-blur-glass",
+            "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // scale-in animates `scale`, not `transform`: the centring
             // utilities above compile to `translate`, and a transform in the
             // keyframe would add to them rather than replace them.

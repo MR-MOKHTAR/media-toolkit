@@ -88,7 +88,7 @@ export function Segmented<T extends string>({
               "disabled:cursor-not-allowed disabled:opacity-disabled",
               selected
                 ? "border-accent-line bg-accent-soft text-accent shadow-(--shadow-glow)"
-                : "border-line bg-surface text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
+                : "border-line bg-surface/65 text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
             )}
           >
             {option.icon}

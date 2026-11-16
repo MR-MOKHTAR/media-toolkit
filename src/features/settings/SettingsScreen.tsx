@@ -23,7 +23,7 @@ import { Button } from "../../components/ui/Button";
 import { FormCard } from "../../components/ui/Card";
 import { navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
-import type { AppLanguage } from "../../hooks/useAppPreferences";
+import type { AppLanguage, EffectsLevel } from "../../hooks/useAppPreferences";
 import type { ToastType } from "../../types/feedback";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { GeneralPanel } from "./GeneralPanel";
@@ -37,6 +37,8 @@ interface Props {
   onToggleTheme: () => void;
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
+  effects: EffectsLevel;
+  onEffectsChange: (effects: EffectsLevel) => void;
   notify: (type: ToastType, message: string) => void;
   /** Which panel to open on. Set when a tool form sent the user here to change
    *  one particular thing; undefined from the sidebar, which means "wherever
@@ -163,6 +165,8 @@ export function SettingsScreen({
   onToggleTheme,
   language,
   onLanguageChange,
+  effects,
+  onEffectsChange,
   notify,
   initialSection,
 }: Props) {
@@ -223,6 +227,8 @@ export function SettingsScreen({
         onToggleTheme={onToggleTheme}
         language={language}
         onLanguageChange={onLanguageChange}
+        effects={effects}
+        onEffectsChange={onEffectsChange}
       />
     ),
     storage: <StoragePanel notify={notify} />,
@@ -249,7 +255,7 @@ export function SettingsScreen({
         aria-orientation={vertical ? "vertical" : "horizontal"}
         onKeyDown={onKeyDown}
         className={cn(
-          "flex shrink-0 gap-1 border-line bg-surface-soft p-2",
+          "glass-chrome flex shrink-0 gap-1 p-2",
           vertical
             ? // Wide: a column against the app sidebar, sharing its tint and rule.
               "w-48 flex-col overflow-y-auto border-e lg:w-56"

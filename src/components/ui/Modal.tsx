@@ -116,8 +116,9 @@ export function Modal({
             // header and footer do not.
             "w-[min(36rem,calc(100vw-2rem))] max-h-[calc(100vh-4rem)]",
             "-translate-x-1/2 -translate-y-1/2",
-            "overflow-hidden rounded-xl border border-line-soft shadow-(--shadow-panel)",
-            "bg-surface-glass backdrop-blur-glass",
+            "overflow-hidden rounded-xl border border-line-soft",
+            "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-panel)]",
+            "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // scale-in animates `scale`, not `transform`: the two centring
             // utilities above compile to the `translate` property, and a
             // transform in the keyframe would be added to them rather than

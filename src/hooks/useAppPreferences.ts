@@ -10,15 +10,45 @@ const LANGUAGE_STORAGE_KEY = "downloader-language";
  *  "is there a language stored": the language is written on the first render
  *  whether anybody chose it or not, so it cannot say whether it was chosen. */
 const WELCOME_STORAGE_KEY = "downloader-welcomed";
+/** Also read by index.html's bootstrap, so the first paint already has the
+ *  right amount of glass. */
+const EFFECTS_STORAGE_KEY = "downloader-effects";
 
-/** `--color-canvas` in both themes, as literals.
+/** `--color-aurora-base` in both themes, as literals -- the colour the
+ *  background is painted on, and so the one a resize should flash, if any.
  *
  *  They are needed outside CSS: the native window and the webview's base layer
  *  are painted through Tauri, and a resize repaints from those before a single
  *  rule applies. Kept beside the same two values in index.html's bootstrap. */
-const CANVAS = { dark: "#0c111a", light: "#f3f5f9" } as const;
+const CANVAS = { dark: "#060a12", light: "#eef2f8" } as const;
 
 export type AppLanguage = "en" | "fa" | "ar";
+
+/**
+ * How much the background does.
+ *
+ * - `full`: the WebGL aurora with floating 3D icons, falling back to `lite` by
+ *   itself where WebGL is missing or the GPU cannot keep up.
+ * - `lite`: the same aurora drawn with CSS gradients and flat SVG icons.
+ * - `off`: a still gradient and opaque surfaces -- no animation, no blur.
+ */
+export type EffectsLevel = "full" | "lite" | "off";
+
+export const EFFECTS_LEVELS: EffectsLevel[] = ["full", "lite", "off"];
+
+function isEffectsLevel(value: unknown): value is EffectsLevel {
+  return value === "full" || value === "lite" || value === "off";
+}
+
+function getInitialEffects(): EffectsLevel {
+  try {
+    const stored = localStorage.getItem(EFFECTS_STORAGE_KEY);
+    if (isEffectsLevel(stored)) return stored;
+  } catch {
+    // The default below.
+  }
+  return "full";
+}
 
 /**
  * The languages the app speaks, each named in its own script.
@@ -95,6 +125,16 @@ export function useAppPreferences() {
   const [darkMode, setDarkMode] = useState(getInitialDarkMode);
   const [language, setLanguage] = useState<AppLanguage>(getInitialLanguage);
   const [needsWelcome, setNeedsWelcome] = useState(getInitialWelcome);
+  const [effects, setEffects] = useState<EffectsLevel>(getInitialEffects);
+
+  useEffect(() => {
+    document.documentElement.dataset.effects = effects;
+    try {
+      localStorage.setItem(EFFECTS_STORAGE_KEY, effects);
+    } catch {
+      // Applies for this session only.
+    }
+  }, [effects]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -161,5 +201,7 @@ export function useAppPreferences() {
     setLanguage,
     needsWelcome,
     completeWelcome,
+    effects,
+    setEffects,
   };
 }

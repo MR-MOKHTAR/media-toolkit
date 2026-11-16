@@ -277,6 +277,7 @@ function JobCardComponent({
     // under the pointer promised an action that was not there.
     <Card
       padding="sm"
+      surface="glass"
       interactive={Boolean(revealable)}
       className="relative flex items-start gap-3"
     >
@@ -532,7 +533,7 @@ function PendingCard({ job }: { job: Job }) {
   const isLink = /^https?:\/\//i.test(job.title);
 
   return (
-    <Card padding="sm" title={job.title} className="flex items-start gap-3">
+    <Card padding="sm" surface="glass" title={job.title} className="flex items-start gap-3">
       {/* The type icon's square. Which type it is depends on what the link
           turns out to be, which is the question being answered right now. */}
       <span className="size-9 shrink-0 animate-pulse rounded-md bg-line" />

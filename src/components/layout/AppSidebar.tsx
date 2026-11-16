@@ -69,7 +69,7 @@ export function AppSidebar({
     <nav
       aria-label={t("nav_sidebar")}
       className={cn(
-        "flex shrink-0 flex-col gap-1 border-e border-line bg-surface-soft p-2 pt-0",
+        "glass-chrome flex shrink-0 flex-col gap-1 border-e p-2 pt-0",
         "transition-[width] duration-(--duration-fast)",
         collapsed ? "w-14" : "w-60",
       )}
@@ -136,7 +136,7 @@ export function AppSidebar({
           `to right` -- a physical direction, so the fade ran backwards in
           Persian and Arabic, in the one file whose header insists that
           everything in it be logical. */}
-      <div className="flex flex-col gap-1 border-t border-line pt-2">
+      <div className="flex flex-col gap-1 border-t border-glass-line pt-2">
         <NavItem
           icon={ListChecks}
           label={t("nav_jobs")}

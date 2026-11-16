@@ -7,6 +7,9 @@ import type { Job, SpeedTest } from "../jobs/types";
  *  second; digits that rewrite themselves at that rate cannot be read. */
 const REFRESH_MS = 500;
 
+/** Samples kept for the sparkline: 30 seconds at the refresh rate. */
+const HISTORY = 60;
+
 /** How long to wait before asking again while the connection is down. */
 const RETRY_MS = 8000;
 
@@ -53,32 +56,55 @@ export function useSpeedMonitor({
 
   const [shown, setShown] = useState(0);
   const [peak, setPeak] = useState(0);
+  const [result, setResult] = useState<SpeedTest | null>(lastTest);
+  const [testing, setTesting] = useState(false);
+  /** The rate so far, while a test runs. Sampled on the same clock as the
+   *  download figure: the backend reports four times a second, and the bar
+   *  used to rewrite itself at that rate during a test and at half of it
+   *  during a download. */
+  const [measuring, setMeasuring] = useState(0);
+  const measuringRef = useRef(0);
+  const testingRef = useRef(false);
+  /** The figure the bar is showing, over the last half minute -- the
+   *  downloads' total while they run, the test's rate while it runs. */
+  const [history, setHistory] = useState<number[]>([]);
+
   useEffect(() => {
     const timer = setInterval(() => {
       const next = liveRef.current;
       setShown(next);
       // A peak belongs to the downloads that made it; the next ones start over.
       setPeak((current) => (next > 0 ? Math.max(current, next) : current));
+      if (testingRef.current) setMeasuring(measuringRef.current);
+      const sample = testingRef.current ? measuringRef.current : next;
+      setHistory((current) =>
+        sample > 0 || current.length > 0 ? [...current, sample].slice(-HISTORY) : current,
+      );
     }, REFRESH_MS);
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
     if (!downloading) setPeak(0);
   }, [downloading]);
-
-  const [result, setResult] = useState<SpeedTest | null>(lastTest);
-  const [testing, setTesting] = useState(false);
-  /** The rate so far, while a test runs. */
-  const [measuring, setMeasuring] = useState(0);
+  // A new run of downloads, or a new test, draws its own line.
+  useEffect(() => {
+    setHistory([]);
+  }, [downloading, testing]);
   const [failed, setFailed] = useState(false);
   const busy = useRef(false);
 
   const run = useCallback(async () => {
     if (busy.current) return;
     busy.current = true;
+    testingRef.current = true;
+    measuringRef.current = 0;
     setTesting(true);
     setMeasuring(0);
-    const stop = await ipc.onSpeedTestProgress(setMeasuring).catch(() => undefined);
+    const stop = await ipc
+      .onSpeedTestProgress((rate) => {
+        measuringRef.current = rate;
+      })
+      .catch(() => undefined);
     try {
       const found = await ipc.testInternetSpeed();
       lastTest = found;
@@ -89,6 +115,8 @@ export function useSpeedMonitor({
     } finally {
       stop?.();
       busy.current = false;
+      testingRef.current = false;
+      measuringRef.current = 0;
       setTesting(false);
       setMeasuring(0);
     }
@@ -119,5 +147,18 @@ export function useSpeedMonitor({
     if (failed && live > 0) setFailed(false);
   }, [failed, live]);
 
-  return { shown, peak, downloading, result, testing, measuring, failed, run };
+  const active = jobs.filter((job) => job.state === "running").length;
+
+  return {
+    shown,
+    peak,
+    downloading,
+    active,
+    history,
+    result,
+    testing,
+    measuring,
+    failed,
+    run,
+  };
 }

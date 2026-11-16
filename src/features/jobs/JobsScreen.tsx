@@ -101,7 +101,7 @@ export function JobsScreen({ language }: { language: string }) {
         <aside
           aria-label={t("nav_jobs")}
           className={cn(
-            "order-first flex shrink-0 flex-wrap gap-1 border-b border-line bg-surface-soft p-2",
+            "glass-chrome order-first flex shrink-0 flex-wrap gap-1 border-b p-2",
             "@2xl:order-last @2xl:w-48 @2xl:flex-col @2xl:flex-nowrap @2xl:border-b-0 @2xl:border-s @3xl:w-56",
           )}
         >

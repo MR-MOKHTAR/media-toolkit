@@ -40,7 +40,9 @@ exactly the vocabulary below.** Off-palette classes (`bg-blue-500`,
 | Type | `text-xs` 13 · `text-sm` 14 · `text-base` 15 (body **and every control**) · `text-lg` 17 (card/panel titles) · `text-xl` 22 (screen titles) · `text-2xl` 26 |
 | Radius | `rounded-sm` 6 (chips, inputs) · `rounded-md` 10 (buttons, rows) · `rounded-lg` 16 (cards) · `rounded-xl` 24 |
 | Elevation | `shadow-(--shadow-panel)` (floats over the app) · `shadow-(--shadow-card)` (the form card) · `shadow-(--shadow-raise)` (hover lift) · `shadow-(--shadow-glow)` / `shadow-(--shadow-glow-accent)` (accent emphasis) — there are no others, and **never** Tailwind's `shadow-sm`/`shadow-md`, which are pure black and vanish in dark mode |
-| Glass | `bg-surface-glass` + `backdrop-blur-glass` + `border-line-soft` — the three always travel together |
+| Glass | `bg-surface-glass` + `backdrop-blur-glass` + `border-line-soft` — the three always travel together (dialogs, menus, toasts) |
+| Glass shell | `glass-chrome` (title bar, sidebar, rails, status bar, toolbars) · `glass-card` (a card straight on the page — `Card surface="glass"`) · `glass-inset` (a card inside glass: no second blur) · `glass-spotlight` (pointer-following light on an interactive card). Each is fill + blur + edge in one class, and all of them turn opaque under `html[data-effects="off"]` |
+| Background | `--color-aurora-base`, `--color-aurora-1/2/3`, `--color-aurora-icon` — the living background's palette, leaned per screen by `data-tint` on the shell |
 | Motion | `duration-(--duration-fast)` 120ms · `duration-(--duration-base)` 200ms · `ease-out-quart`. Always the **parens** form — the square-bracket variant compiles to an invalid value and silently runs at 0s |
 | States | `disabled:opacity-disabled` — one value, everywhere |
 | Helper | `tnum` — tabular numerals; use on **every** number that counts or measures |

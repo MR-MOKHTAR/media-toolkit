@@ -229,6 +229,34 @@
      expands to blur(blur(16px)). */
   --blur-glass: 16px;
 
+  /* ------------------------------------------------- glass shell ---
+   * The window's chrome and its cards are translucent over a living
+   * background (components/background). Three tiers, each a fill, a blur and
+   * an edge that travel together -- see the `glass-*` utilities below.
+   *
+   * The fills are alphas of the surfaces they replace, so a glass card over a
+   * plain canvas (effects off) still reads as the same white or slate card. */
+  --color-chrome-glass: rgba(255, 255, 255, 0.62);
+  --color-card-glass: rgba(255, 255, 255, 0.6);
+  --color-card-glass-hover: rgba(255, 255, 255, 0.74);
+  /* The edge of a glass surface: light catching its rim, not a drawn line. */
+  --color-glass-edge: rgba(255, 255, 255, 0.75);
+  --color-glass-line: rgba(160, 174, 196, 0.32);
+  /* The sheen across the top of a pane. */
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 42%);
+  --blur-card: 14px;
+  --blur-chrome: 22px;
+
+  /* ---------------------------------------------------- background ---
+   * The aurora behind everything. Read by the CSS layer and by the WebGL
+   * scene alike, so both draw the same colours. Registered with @property
+   * below, which is what lets a screen change tint as a transition. */
+  --color-aurora-base: #eef2f8;
+  --color-aurora-1: #5eead4;
+  --color-aurora-2: #a78bfa;
+  --color-aurora-3: #7dd3fc;
+  --color-aurora-icon: #0b8177;
+
   /* ------------------------------------------------------- states ---
    * One disabled treatment. There were four: 40 on the segmented options,
    * 45 on the buttons, 50 on the model picker and 70 on the check rows,
@@ -302,6 +330,146 @@
     --shadow-glow-accent: 0 4px 28px rgba(45, 212, 191, 0.3);
     --color-surface-glass: rgba(17, 24, 36, 0.6);
     --blur-glass: 20px;
+
+    --color-chrome-glass: rgba(10, 15, 24, 0.58);
+    --color-card-glass: rgba(17, 24, 36, 0.52);
+    --color-card-glass-hover: rgba(23, 32, 47, 0.66);
+    --color-glass-edge: rgba(255, 255, 255, 0.07);
+    --color-glass-line: rgba(148, 163, 184, 0.14);
+    --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 42%);
+
+    --color-aurora-base: #060a12;
+    --color-aurora-1: #0f766e;
+    --color-aurora-2: #5b21b6;
+    --color-aurora-3: #1e40af;
+    --color-aurora-icon: #2dd4bf;
+  }
+
+  /* Each screen leans the aurora towards its own hue. The download screen
+     keeps the defaults above. The values are deliberately close: a tint, not
+     a repaint, so moving between tools reads as one place changing mood. */
+  [data-tint="compress"] {
+    --color-aurora-1: #67e8f9;
+    --color-aurora-3: #a5b4fc;
+  }
+  [data-tint="trim"] {
+    --color-aurora-1: #c4b5fd;
+    --color-aurora-2: #f0abfc;
+  }
+  [data-tint="convert"] {
+    --color-aurora-2: #93c5fd;
+    --color-aurora-3: #6ee7b7;
+  }
+  [data-tint="extractAudio"] {
+    --color-aurora-1: #a78bfa;
+    --color-aurora-3: #f9a8d4;
+  }
+  html.dark [data-tint="compress"] {
+    --color-aurora-1: #0e7490;
+    --color-aurora-3: #3730a3;
+  }
+  html.dark [data-tint="trim"] {
+    --color-aurora-1: #6d28d9;
+    --color-aurora-2: #a21caf;
+  }
+  html.dark [data-tint="convert"] {
+    --color-aurora-2: #1d4ed8;
+    --color-aurora-3: #047857;
+  }
+  html.dark [data-tint="extractAudio"] {
+    --color-aurora-1: #6d28d9;
+    --color-aurora-3: #9d174d;
+  }
+
+  /* Effects turned down (Settings › General, or the background giving up on a
+     slow GPU): no blur anywhere and fills opaque enough to read without it.
+     Blur over a moving layer is the expensive half of glass. */
+  html[data-effects="off"] {
+    --blur-card: 0px;
+    --blur-chrome: 0px;
+    --color-chrome-glass: var(--color-surface);
+    --color-card-glass: var(--color-surface);
+    --color-card-glass-hover: var(--color-surface);
+  }
+}
+
+/* Registered so a change of screen can transition them: an unregistered custom
+   property is a string and snaps. Engines without @property snap too, which is
+   the whole of the fallback. */
+@property --color-aurora-1 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #5eead4;
+}
+@property --color-aurora-2 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #a78bfa;
+}
+@property --color-aurora-3 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #7dd3fc;
+}
+
+/* ------------------------------------------------------- glass utilities ---
+ * Fill, blur and edge in one class, because the three are only ever right
+ * together -- a blur with an opaque fill is wasted work, a translucent fill
+ * with no blur is muddy, and either without the edge loses the pane's shape
+ * against a busy background. */
+
+/* The window's own frame: title bar, sidebar, status bar, screen toolbars. */
+@utility glass-chrome {
+  background-color: var(--color-chrome-glass);
+  -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+  backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+  border-color: var(--color-glass-line);
+}
+
+/* A card on the page. The sheen is a background layer rather than a pseudo
+   element, so it costs nothing and cannot fight a card's own ::before. */
+@utility glass-card {
+  background-color: var(--color-card-glass);
+  background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(1.3);
+  backdrop-filter: blur(var(--blur-card)) saturate(1.3);
+  border-color: var(--color-glass-line);
+  box-shadow:
+    inset 0 1px 0 var(--color-glass-edge),
+    var(--shadow-card);
+}
+
+/* Glass inside glass: a translucent fill and an edge, no blur of its own --
+   a nested backdrop-filter blurs the pane it sits on, not the background, and
+   pays for it on every frame. */
+@utility glass-inset {
+  background-color: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  border-color: var(--color-glass-line);
+}
+
+/* The light that follows the pointer across an interactive card. The card
+   sets --mx/--my (see lib/spotlight.ts); without them it sits in the centre at
+   zero opacity, so a card that never received a pointer shows nothing. */
+@utility glass-spotlight {
+  position: relative;
+  isolation: isolate;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(
+      320px circle at var(--mx, 50%) var(--my, 50%),
+      color-mix(in srgb, var(--color-accent) 14%, transparent),
+      transparent 70%
+    );
+    opacity: 0;
+    transition: opacity var(--duration-base) var(--ease-out-quart);
+  }
+  &:hover::after {
+    opacity: 1;
   }
 }
 

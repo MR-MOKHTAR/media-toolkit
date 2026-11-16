@@ -1,8 +1,9 @@
 import { DirectionProvider } from "@radix-ui/react-direction";
-import { MotionConfig } from "framer-motion";
+import { MotionConfig, motion } from "framer-motion";
 import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
 
 import { NavigationProvider, useNavigation } from "./app/navigation";
+import { AppBackground } from "./components/background/AppBackground";
 import { AppSidebar } from "./components/layout/AppSidebar";
 import { AppTitleBar } from "./components/layout/AppTitleBar";
 import { StatusBar } from "./components/layout/StatusBar";
@@ -33,6 +34,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
     setLanguage,
     needsWelcome,
     completeWelcome,
+    effects,
+    setEffects,
   } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
@@ -66,7 +69,16 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
             column beside it and starts where the sidebar ends. Having no `dir`
             of its own, the sidebar still takes the leading edge in both writing
             directions. */}
-        <div className="flex h-full overflow-hidden bg-canvas">
+        <div
+          // `isolate` makes this the stacking context the background's
+          // negative z-index stays inside: under the sidebar and the column,
+          // above the document. `data-tint` leans the aurora towards the
+          // screen's own hue (theme.css), and `aurora-host` fades between them.
+          className="aurora-host relative isolate flex h-full overflow-hidden"
+          data-tint={route.name}
+        >
+          <AppBackground effects={effects} />
+
           <AppSidebar isRtl={isRtl} collapsed={collapsed} onToggle={toggleSidebar} />
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -88,6 +100,18 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                 The tool screens scroll their own list instead, so that their
                 toolbar stays put: `h-full` inside here is what lets them. */}
             <main className="min-h-0 flex-1 overflow-y-auto">
+              {/* Each screen arrives with a short rise and fade. Entrance only:
+                  an exit would hold the next screen back for its length, and a
+                  tool switch is something people do quickly and often. Keyed on
+                  the screen, not the route, so opening a tool's form -- the same
+                  screen with `composing` set -- does not replay it. */}
+              <motion.div
+                key={route.name}
+                className="h-full"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              >
               {/* Five of the six tools follow one shape: the list is the screen
                   and the form is a dialog over it, mounted only while the route
                   says `composing`. What differs is which form. */}
@@ -112,6 +136,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                   onToggleTheme={toggleDarkMode}
                   language={language}
                   onLanguageChange={setLanguage}
+                  effects={effects}
+                  onEffectsChange={setEffects}
                   notify={notify}
                   // Set when a tool form sent the user here to change one of
                   // its own defaults, so they land on that panel.
@@ -133,7 +159,7 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                   )}
                 </ToolScreen>
               )}
-
+              </motion.div>
             </main>
 
             {/* Along the bottom of every screen; see the component for what
