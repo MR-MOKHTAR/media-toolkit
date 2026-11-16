@@ -5,7 +5,7 @@
  * the backend's shape reviewable in one screen, and it is the only place that
  * has to change when a command signature moves.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -275,6 +275,48 @@ export const isWindowMinimized = async () => {
     return false;
   }
 };
+
+// ------------------------------------------------------- audio analysis
+//
+// The trim studio's waveform, silences and preview. See media/analyze.rs.
+
+/** Mirrors `analyze::AudioAnalysis`. */
+export interface AudioAnalysis {
+  durationSecs: number;
+  windowSecs: number;
+  /** min/max pairs, interleaved: [min0, max0, min1, max1, ...], -1..1. */
+  peaks: number[];
+  /** RMS per window, dBFS, floored at -90. */
+  rmsDb: number[];
+  peakDb: number;
+  meanRmsDb: number;
+  silences: { startSecs: number; endSecs: number }[];
+  silenceTotalSecs: number;
+}
+
+export const analyzeAudio = (path: string, token: string) =>
+  invoke<AudioAnalysis>("analyze_audio", { path, token });
+
+export const cancelAnalysis = (token: string) =>
+  invoke<void>("cancel_analysis", { token }).catch(() => undefined);
+
+export const onAnalysisProgress = (
+  handler: (payload: { token: string; percent: number }) => void,
+): Promise<UnlistenFn> =>
+  listen<{ token: string; percent: number }>("audio-analysis-progress", ({ payload }) =>
+    handler(payload),
+  );
+
+/** A URL the webview can play this file from, once it has been allowed. */
+export const previewUrl = async (path: string): Promise<string> => {
+  await invoke<void>("allow_preview", { path });
+  return convertFileSrc(path);
+};
+
+/** The same, through a small MP3 transcode -- for a codec WebKitGTK cannot
+ *  play. */
+export const transcodedPreviewUrl = async (path: string): Promise<string> =>
+  convertFileSrc(await invoke<string>("make_preview", { path }));
 
 export const onJobMeta = (
   handler: (payload: JobMetaEvent) => void,

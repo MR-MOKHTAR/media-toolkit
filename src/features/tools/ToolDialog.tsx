@@ -21,8 +21,11 @@ export function ToolDialog({
   onClose,
   footer,
   dirty,
+  wide,
   children,
 }: {
+  /** Room for a control that needs it -- see `MediaToolConfig.wide`. */
+  wide?: boolean;
   /** The form holds something worth not losing to a stray click. */
   dirty?: boolean;
   /** The key `tool_${key}`, `tool_${key}_about` and `TOOL_ICON` all share. */
@@ -39,6 +42,7 @@ export function ToolDialog({
   return (
     <Modal
       open
+      className={wide ? "w-[min(56rem,calc(100vw-2rem))]" : undefined}
       keepOnOutsideClick={dirty}
       onOpenChange={(next) => {
         if (!next) onClose();

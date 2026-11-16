@@ -68,6 +68,9 @@ export interface MediaToolConfig<S> {
   toRequest: (
     context: MediaToolContext<S> & { t: TFunction },
   ) => { args: Record<string, unknown>; title: string; detail?: string };
+  /** A wider dialog, for a tool whose controls need the room -- the trim
+   *  studio's waveform is about time, and time wants width. */
+  wide?: boolean;
 }
 
 /**
@@ -148,6 +151,7 @@ export function MediaToolForm({
   return (
     <ToolDialog
       tool={config.kind}
+      wide={config.wide}
       onClose={onDone}
       dirty={Boolean(file.path)}
       footer={

@@ -192,9 +192,23 @@ export function formatTimecode(seconds: number): string {
     : `${pad(minutes)}:${pad(secs)}`;
 }
 
+/**
+ * A timecode to the millisecond: "01:23.450", "1:02:03.007".
+ *
+ * For the trim fields, where a cut snapped to a silence lands between whole
+ * seconds and rounding it for display would put the cut somewhere the user
+ * cannot see. Rule 3: ASCII digits, always.
+ */
+export function formatPreciseTimecode(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "00:00.000";
+  const millis = Math.round(seconds * 1000);
+  const ms = millis % 1000;
+  return `${formatTimecode(Math.floor(millis / 1000))}.${String(ms).padStart(3, "0")}`;
+}
+
 /** Parses "1:23" or "83" back to seconds, for the trim inputs. */
 export function parseTimecode(value: string): number | null {
-  const parts = value.trim().split(":");
+  const parts = value.trim().replace(/[٫,]/g, ".").split(":");
   if (parts.length > 3) return null;
   let seconds = 0;
   for (const part of parts) {
