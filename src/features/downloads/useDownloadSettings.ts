@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import type { AudioFormatChoice, CodecPref } from "../jobs/types";
+
 const STORAGE_KEY = "media-toolkit-download-v1";
 
 /** The heights offered, largest first after "best".
@@ -8,7 +10,7 @@ const STORAGE_KEY = "media-toolkit-download-v1";
  * selector is built from whatever number arrives -- and the list simply never
  * offered them, so a 4K monitor's only route to 4K was "best", which on a phone
  * recording means something else entirely. */
-export const QUALITIES = ["best", "2160", "1440", "1080", "720", "480"] as const;
+export const QUALITIES = ["best", "2160", "1440", "1080", "720", "480", "360"] as const;
 
 export type DownloadQuality = (typeof QUALITIES)[number];
 
@@ -21,9 +23,15 @@ export type DownloadQuality = (typeof QUALITIES)[number];
  *
  * The same two words the extract-audio tool uses, on purpose: it is one promise
  * made in two places. */
-export const AUDIO_FORMATS = ["original", "mp3"] as const;
+export const AUDIO_FORMATS: AudioFormatChoice[] = ["original", "m4a", "opus", "mp3"];
 
-export type AudioFormat = (typeof AUDIO_FORMATS)[number];
+export type AudioFormat = AudioFormatChoice;
+
+/** MP3 bitrates offered, kbps. 0 is LAME's best VBR (about 245k on music),
+ *  which is what every MP3 this app made before the choice existed. */
+export const MP3_BITRATES = [0, 320, 256, 192, 128] as const;
+
+export const CODEC_PREFS: CodecPref[] = ["auto", "compatible", "small"];
 
 /** The browsers yt-dlp can read cookies from. Kept in step with `BROWSERS` in
  *  download.rs by `cookie_browsers`, which Settings asks rather than trusting
@@ -55,6 +63,29 @@ export interface DownloadSettings {
    *  it is the same time night after night -- when a night-time internet
    *  package starts. */
   scheduleTime: string;
+  /** How the codec is weighed against the resolution -- see
+   *  `formats::CodecPref`. */
+  codec: CodecPref;
+  container: "mp4" | "mkv";
+  /** An MP3's bitrate in kbps; 0 is LAME's best VBR. */
+  mp3Bitrate: number;
+  /** Title and artist tags in the file. */
+  embedMetadata: boolean;
+  /** The thumbnail as cover art on audio downloads. */
+  embedCover: boolean;
+  /** Subtitle languages fetched whenever a video has them -- remembered,
+   *  because the language someone reads subtitles in does not change between
+   *  videos. Empty is none. */
+  subtitleLangs: string[];
+  /** Inside the video, rather than .srt files beside it. */
+  subtitleEmbed: boolean;
+  sponsorBlock: boolean;
+  /** A whole playlist goes into a folder named after it, its files numbered
+   *  in playlist order. */
+  playlistFolder: boolean;
+  playlistNumbers: boolean;
+  /** Whether the form's "More options" section is open. */
+  advancedOpen: boolean;
 }
 
 /**
@@ -83,6 +114,17 @@ const DEFAULTS: DownloadSettings = {
   cookiesFrom: NO_COOKIES,
   parallel: true,
   scheduleTime: "02:00",
+  codec: "auto",
+  container: "mp4",
+  mp3Bitrate: 0,
+  embedMetadata: true,
+  embedCover: true,
+  subtitleLangs: [],
+  subtitleEmbed: true,
+  sponsorBlock: false,
+  playlistFolder: true,
+  playlistNumbers: true,
+  advancedOpen: false,
 };
 
 function load(): DownloadSettings {
@@ -92,7 +134,14 @@ function load(): DownloadSettings {
     // Spread over the defaults rather than trusting the parse: a settings blob
     // written by an older build is missing whatever was added since, and a
     // hand-edited one can be missing anything at all.
-    return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<DownloadSettings>) };
+    const stored = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<DownloadSettings>) };
+    // A value this build no longer offers falls back rather than reaching a
+    // request: a hand-edited blob, or a list that shrank.
+    if (!(QUALITIES as readonly string[]).includes(stored.quality)) stored.quality = DEFAULTS.quality;
+    if (!AUDIO_FORMATS.includes(stored.audioFormat)) stored.audioFormat = DEFAULTS.audioFormat;
+    if (!CODEC_PREFS.includes(stored.codec)) stored.codec = DEFAULTS.codec;
+    if (!Array.isArray(stored.subtitleLangs)) stored.subtitleLangs = [];
+    return stored;
   } catch {
     return DEFAULTS;
   }

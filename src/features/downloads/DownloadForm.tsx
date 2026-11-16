@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CalendarClock,
-  FileAudio,
   FileQuestionMark,
   FileVideo2,
-  Gauge,
   Link2,
   ListVideo,
   Loader2,
@@ -15,7 +13,6 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { useNavigation } from "../../app/navigation";
 import { Card, ControlGroup, Field } from "../../components/ui/Card";
 import { Segmented } from "../../components/ui/Segmented";
 import { Select } from "../../components/ui/Select";
@@ -39,10 +36,13 @@ import {
   RunButton,
 } from "../media/components/ToolFormParts";
 import { ToolDialog } from "../tools/ToolDialog";
-import type { UrlInfo } from "../jobs/types";
+import type { PlaylistListing, UrlInfo } from "../jobs/types";
 import { describeWhen, nextOccurrence } from "../jobs/when";
 import { useDownloadForm, type PlaylistChoice } from "./useDownloadForm";
-import { qualityLabel, useDownloadSettings } from "./useDownloadSettings";
+import { useDownloadSettings } from "./useDownloadSettings";
+import { effectiveQuality, secondsOf } from "./downloadChoices";
+import { AudioFormatPicker, MoreOptions, VideoQualityPicker } from "./components/MediaChoices";
+import { PlaylistPicker } from "./components/PlaylistPicker";
 
 interface Props {
   /** What was in the field when this form was last left, if it was left for
@@ -75,13 +75,13 @@ interface Props {
 export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   const { t, i18n } = useTranslation();
   const isRtl = i18n.dir() === "rtl";
-  const { go, replace } = useNavigation();
   const [url, setUrl] = useState(initialUrl ?? "");
   // Read on mount, which is every time this screen is opened -- so a quality
   // changed in Settings applies to the next link without anything to sync.
   // The form's own media toggle writes back into it rather than shadowing it.
   const { settings, update } = useDownloadSettings();
-  const mediaType = settings.mediaType;
+  /** The toggle as the user last set it *for this link*, if they did. */
+  const [typeOverride, setTypeOverride] = useState<"video" | "audio" | null>(null);
   /** The probe result *and the URL it describes*. Keeping the two together is
    *  what lets the rest of the screen tell a fresh answer from the previous
    *  link's, which used to sit under a half-typed URL as if it were about it. */
@@ -123,6 +123,24 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     ? fileKindOf(info.title, info.uploader)
     : null;
 
+  /** Video or audio for this link. A music site, music.youtube.com, or a page
+   *  with no picture opens on Audio by itself -- nobody downloads a SoundCloud
+   *  track as a video -- unless the toggle has been touched for this link.
+   *  The remembered setting is left alone by the automatic switch. */
+  const summary = info?.media ?? null;
+  const mediaType: "video" | "audio" =
+    typeOverride ?? (summary?.suggestsAudio ? "audio" : settings.mediaType);
+  useEffect(() => setTypeOverride(null), [link]);
+  const setMediaType = (value: "video" | "audio") => {
+    setTypeOverride(value);
+    update("mediaType", value);
+  };
+
+  /** Only this stretch of the video, as typed. Per link. */
+  const [section, setSection] = useState<{ start: string; end: string } | null>(null);
+  useEffect(() => setSection(null), [link]);
+  const isYouTube = /(^|\.)(youtube\.com|youtu\.be)$/i.test(hostOf(link));
+
   /** Whether this link raises the playlist question at all: it either is a
    *  playlist page, or it is a video that names one. */
   const namesPlaylist = Boolean(info && (info.isPlaylist || info.inPlaylist));
@@ -131,6 +149,36 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
    *  queue a second list nobody asked for. */
   const [playlist, setPlaylist] = useState<PlaylistChoice>("one");
   useEffect(() => setPlaylist("one"), [link]);
+
+  /** The playlist's videos, fetched as soon as "all" is chosen so they can be
+   *  picked from -- every one ticked to begin with. */
+  const [listing, setListing] = useState<{ url: string; data: PlaylistListing | null; failed: boolean } | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (playlist !== "all" || !looksLikeUrl(link)) return;
+    if (listing?.url === link) return;
+    let cancelled = false;
+    setListing({ url: link, data: null, failed: false });
+    void ipc
+      .listPlaylist(link, settings.cookiesFrom || undefined)
+      .then((data) => {
+        if (cancelled) return;
+        setListing({ url: link, data, failed: false });
+        setPicked(new Set(data.entries.map((entry) => entry.url)));
+      })
+      .catch(() => !cancelled && setListing({ url: link, data: null, failed: true }));
+    return () => {
+      cancelled = true;
+    };
+    // `listing` is read only to skip a refetch of the same link.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlist, link, settings.cookiesFrom]);
+  const playlistData = listing?.url === link ? listing.data : null;
+
+  /** What each link of a batch turned out to be, looked up two at a time
+   *  once the list is on screen -- so a row reads as "Some Video · 12:04"
+   *  rather than as a URL, without a yt-dlp spawn per line all at once. */
+  const batchProbes = useBatchProbes(batch && isOnline ? links : [], settings.cookiesFrom);
 
   /** How many downloads run at once -- a setting now, and what the playlist
    *  hint promises. It used to say "four at a time" whatever was set. */
@@ -236,6 +284,15 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
    *  and come back as a raw backend error. */
   // A batch is not held back by a missing yt-dlp: direct files in it do not
   // need one, and a page that does fails on its own row, saying why.
+  const sectionRange = (() => {
+    if (!section || mediaType !== "video") return null;
+    const start = secondsOf(section.start);
+    const end = secondsOf(section.end);
+    return start !== null && end !== null && end > start ? { startSecs: start, endSecs: end } : undefined;
+  })();
+  /** A section switched on but not readable holds the button back. */
+  const sectionValid = sectionRange !== undefined;
+
   const canSubmit =
     looksLikeUrl(link) &&
     Boolean(savePath) &&
@@ -243,7 +300,10 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
     !starting &&
     // A link nothing has looked at yet is not held back for a missing yt-dlp
     // either: it may be a plain file, and `start` looks before it decides.
-    (batch || toolsReady || isFile || !info);
+    (batch || toolsReady || isFile || !info) &&
+    // A whole playlist with every video unticked is nothing to download.
+    !(namesPlaylist && playlist === "all" && playlistData !== null && picked.size === 0) &&
+    sectionValid;
 
   const submit = () => {
     if (!canSubmit) return;
@@ -251,8 +311,31 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       {
         url: link,
         mediaType,
-        quality: settings.quality,
-        audioFormat: settings.audioFormat,
+        video: {
+          // The remembered quality as it lands on this video: "1080" on a
+          // 720p-only video is sent as 720, which is also what the card says.
+          quality: effectiveQuality(summary, settings.quality),
+          codec: settings.codec,
+          container: settings.container,
+        },
+        audio: {
+          format: settings.audioFormat,
+          bitrateKbps: settings.audioFormat === "mp3" && settings.mp3Bitrate ? settings.mp3Bitrate : undefined,
+        },
+        subtitles: { langs: settings.subtitleLangs, embed: settings.subtitleEmbed },
+        embedMetadata: settings.embedMetadata,
+        embedCover: settings.embedCover,
+        sponsorBlock: isYouTube && settings.sponsorBlock,
+        section: sectionRange ?? null,
+        playlistPicks:
+          namesPlaylist && playlist === "all" && playlistData
+            ? playlistData.entries
+                .map((entry, index) => ({ entry, position: index + 1 }))
+                .filter(({ entry }) => picked.has(entry.url))
+            : undefined,
+        playlistTitle: playlistData?.title ?? null,
+        playlistFolder: settings.playlistFolder,
+        playlistNumbers: settings.playlistNumbers,
         // Only ever "all" for a link that raises the question. A stale choice
         // cannot leak onto the next link -- the effect above resets it -- but
         // the request is the wrong place to rely on that.
@@ -383,6 +466,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       {batch && (
         <BatchList
           links={links}
+          probes={batchProbes}
           onRemove={(target) =>
             setUrl(links.filter((other) => other !== target).join("\n"))
           }
@@ -433,11 +517,11 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         // see below.
         looksLikeUrl(link) &&
         (batch || info || probeFailed) && (
-          <ControlGroup>
+          <>
             <Segmented
               label={t("download_as")}
               value={mediaType}
-              onChange={(value) => update("mediaType", value)}
+              onChange={setMediaType}
               // The same two glyphs the Settings panel puts on this exact
               // choice, so the control the form asks with and the one that
               // remembers the answer are recognisably the same control.
@@ -455,56 +539,47 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
               ]}
             />
 
-            {/* What the choice above will actually produce, as a hint under
-                the control it qualifies rather than a row of its own. It is
-                not a decision being made here -- it was made once in Settings
-                -- so it is written the size of the other things this form
-                states rather than the size of the things it asks.
+            {/* Said when the form chose Audio by itself, so the switch is not
+                a surprise -- and is one click from undone. */}
+            {summary?.suggestsAudio && typeOverride === null && mediaType === "audio" && (
+              <p className="-mt-3 text-xs text-fg-muted">{t("download_audio_suggested")}</p>
+            )}
 
-                Both halves of the toggle get one. Audio used to get a flat
-                sentence with nothing to press: the form said "best quality the
-                site offers" and left the actual question about an audio
-                download -- the track as it came, or MP3 -- unmentioned and
-                unreachable, three clicks away in a Settings section the user
-                had no reason to know existed. */}
-            <SettingHint
-              icon={mediaType === "video" ? <Gauge size={12} /> : <FileAudio size={12} />}
-              label={mediaType === "video" ? t("video_quality") : t("audio_format")}
-              value={
-                mediaType === "video"
-                  ? qualityLabel(settings.quality, t("quality_best"))
-                  : settings.audioFormat === "mp3"
-                    ? "MP3"
-                    : t("audio_format_original")
-              }
-              // The link and the open form both survive the trip: this entry
-              // is what `back` from Settings returns to, so it has to carry
-              // the field and the fact that the dialog was open with it.
-              onOpenSettings={() => {
-                replace({ name: "download", link: url, composing: true });
-                go({ name: "settings", section: "downloads" });
-              }}
-            />
+            {/* The choices themselves, on the form, for this link: which
+                resolutions this video has and what each weighs, or what the
+                audio will end up as. They used to be one global setting,
+                stated here in a line of hint text with a link to Settings. */}
+            {mediaType === "video" ? (
+              <VideoQualityPicker
+                summary={summary}
+                settings={settings}
+                update={update}
+                language={i18n.language}
+              />
+            ) : (
+              <AudioFormatPicker
+                summary={summary}
+                durationSecs={info?.durationSecs ?? null}
+                settings={settings}
+                update={update}
+                language={i18n.language}
+              />
+            )}
 
             {/* Said out loud for a link nobody could identify: the choice is
                 recorded, and applied only if the link does turn out to be a
                 page with video on it. An installer behind it is saved as an
                 installer, not as whatever this control happened to say. */}
             {probeFailed && (
-              <p className="text-xs text-fg-muted">{t("download_as_unknown_hint")}</p>
+              <p className="-mt-3 text-xs text-fg-muted">{t("download_as_unknown_hint")}</p>
             )}
 
             {/* The other question this link raises, and only when it raises
-                one. The backend has been reporting that a link is a playlist
-                since the feature existed, to a form that showed a warning and
-                offered nothing -- so the answer was always "the first video",
-                and the other thirty-nine simply never arrived.
-
-                Defaults to the one video. Queueing forty downloads is not what
-                anybody means by pressing Download once, and it is the choice
-                that is expensive to undo. */}
+                one. Defaults to the one video: queueing forty downloads is not
+                what anybody means by pressing Download once, and it is the
+                choice that is expensive to undo. */}
             {info && namesPlaylist && (
-              <div className="flex flex-col gap-1.5">
+              <ControlGroup>
                 <Segmented
                   label={t("playlist_scope")}
                   value={playlist}
@@ -522,16 +597,40 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
                   ]}
                 />
                 {playlist === "all" && (
-                  <p className="flex items-center gap-1.5 text-xs text-fg-muted">
-                    <ListVideo size={12} className="shrink-0" />
-                    <span>
-                      {t("playlist_all_hint", { slots: formatCount(slots, i18n.language) })}
-                    </span>
-                  </p>
+                  <>
+                    <p className="flex items-center gap-1.5 text-xs text-fg-muted">
+                      <ListVideo size={12} className="shrink-0" />
+                      <span>
+                        {t("playlist_all_hint", { slots: formatCount(slots, i18n.language) })}
+                      </span>
+                    </p>
+                    <PlaylistPicker
+                      listing={playlistData}
+                      loading={listing?.url === link && !listing.data && !listing.failed}
+                      failed={listing?.url === link && listing.failed}
+                      selected={picked}
+                      onSelectedChange={setPicked}
+                      folder={settings.playlistFolder}
+                      onFolderChange={(value) => update("playlistFolder", value)}
+                      numbers={settings.playlistNumbers}
+                      onNumbersChange={(value) => update("playlistNumbers", value)}
+                    />
+                  </>
                 )}
-              </div>
+              </ControlGroup>
             )}
-          </ControlGroup>
+
+            <MoreOptions
+              mediaType={mediaType}
+              summary={summary}
+              durationSecs={info?.durationSecs ?? null}
+              isYouTube={isYouTube}
+              settings={settings}
+              update={update}
+              section={section}
+              onSectionChange={setSection}
+            />
+          </>
         )
       )}
 
@@ -612,12 +711,24 @@ function LinkPreview({
           <Icon size={20} />
         </span>
       ) : info?.thumbnail && !thumbnailFailed ? (
-        <img
-          src={info.thumbnail}
-          alt=""
-          onError={() => setThumbnailFailed(true)}
-          className="h-10 w-16 shrink-0 rounded-sm object-cover"
-        />
+        // Larger than a file's tile: for a video, the picture is most of what
+        // tells you it is the right one.
+        <span className="relative h-16 w-28 shrink-0 overflow-hidden rounded-md">
+          <img
+            src={info.thumbnail}
+            alt=""
+            onError={() => setThumbnailFailed(true)}
+            className="size-full object-cover"
+          />
+          {info.durationSecs ? (
+            <span
+              dir="ltr"
+              className="absolute bottom-1 end-1 rounded-sm bg-black/70 px-1 text-[0.6875rem] leading-4 font-medium text-white tnum"
+            >
+              {formatDuration(info.durationSecs)}
+            </span>
+          ) : null}
+        </span>
       ) : info ? (
         // A page with no picture to show. It used to keep the loading pulse
         // after the probe had answered, which read as a preview still coming.
@@ -636,7 +747,9 @@ function LinkPreview({
           </div>
         ) : (
           <>
-            <p className="truncate text-sm text-fg" title={info?.title}>
+            {/* `auto`: a Latin title in a Persian window truncates at its own
+                end, not at its beginning. */}
+            <p dir="auto" className="truncate text-start text-sm text-fg" title={info?.title}>
               {info?.title}
             </p>
             <p className="truncate text-xs text-fg-muted">
@@ -652,10 +765,12 @@ function LinkPreview({
                   ]
                     .filter(Boolean)
                     .join(" · ")
-                : [info?.uploader, formatDuration(info?.durationSecs)]
+                : [info?.uploader, info?.thumbnail ? null : formatDuration(info?.durationSecs)]
                     .filter(Boolean)
                     .join(" · ")}
             </p>
+
+            {info?.media && <CapabilityChips summary={info.media} />}
 
             {/* That this link carries a playlist. The *choice* about it is a
                 control further down the form -- this line is only the label,
@@ -697,9 +812,11 @@ function LinkPreview({
  */
 function BatchList({
   links,
+  probes,
   onRemove,
 }: {
   links: string[];
+  probes: Map<string, UrlInfo | null>;
   onRemove: (link: string) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -711,10 +828,29 @@ function BatchList({
       <ul className="max-h-40 overflow-y-auto py-1">
         {links.map((link) => (
           <li key={link} className="flex items-center gap-2 px-3 py-1">
-            <Link2 size={13} className="shrink-0 text-fg-muted" />
-            <span dir="ltr" className="min-w-0 flex-1 truncate text-sm text-fg-soft" title={link}>
-              {link}
-            </span>
+            {probes.has(link) ? (
+              probes.get(link)?.thumbnail ? (
+                <img src={probes.get(link)!.thumbnail!} alt="" className="h-6 w-10 shrink-0 rounded-sm object-cover" />
+              ) : (
+                <Link2 size={13} className="shrink-0 text-fg-muted" />
+              )
+            ) : (
+              <Loader2 size={13} className="shrink-0 animate-spin text-fg-muted" />
+            )}
+            {probes.get(link) ? (
+              <span className="min-w-0 flex-1 truncate text-sm text-fg" title={link}>
+                {probes.get(link)!.title}
+                {probes.get(link)!.durationSecs ? (
+                  <span dir="ltr" className="ms-1.5 text-xs text-fg-muted tnum">
+                    {formatDuration(probes.get(link)!.durationSecs)}
+                  </span>
+                ) : null}
+              </span>
+            ) : (
+              <span dir="ltr" className="min-w-0 flex-1 truncate text-sm text-fg-soft" title={link}>
+                {link}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => onRemove(link)}
@@ -837,53 +973,6 @@ function UnknownLinkPreview({ link }: { link: string }) {
   );
 }
 
-/**
- * What this download will ask for, and the way to change it.
- *
- * One line of hint text, not the bordered row this started as. The row was the
- * same size as the controls around it while being the only thing on the form
- * that is not a control -- and it sat there on an empty field, stating the
- * quality of a video nobody had pasted a link to yet. Now it appears with the
- * media choice it belongs to, and says its piece in the space a hint takes.
- *
- * One component for both halves of that choice rather than a quality-shaped one
- * and a sentence: they are the same line saying the same kind of thing -- the
- * standing setting this download will use, and where it lives.
- */
-function SettingHint({
-  icon,
-  label,
-  value,
-  onOpenSettings,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  onOpenSettings: () => void;
-}) {
-  const { t } = useTranslation();
-
-  return (
-    <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
-      <span className="shrink-0">{icon}</span>
-      {label}
-      {/* ltr: "720p" and "MP3" are numbers and Latin letters, the same in every
-          language the interface speaks. A translated word -- "Original" -- is
-          unaffected by the direction of a span that holds one word. */}
-      <span dir="ltr" className="font-medium text-fg-soft">
-        {value}
-      </span>
-      <span aria-hidden>·</span>
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className="text-accent transition-colors hover:text-accent-hover hover:underline"
-      >
-        {t("settings")}
-      </button>
-    </p>
-  );
-}
 
 /**
  * The file branch's answer to the quality picker.
@@ -913,3 +1002,78 @@ function FileNotes({ resumable }: { resumable: boolean }) {
   );
 }
 
+/** The host of a link, lower-cased, or "" for anything unparseable. */
+function hostOf(link: string): string {
+  try {
+    return new URL(link).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * What this video has, at a glance: its top resolution, HDR, high frame rate,
+ * subtitles, chapters, or that it is live. Each is something that changes what
+ * the choices below mean, and each used to be invisible until after the
+ * download.
+ */
+function CapabilityChips({ summary }: { summary: NonNullable<UrlInfo["media"]> }) {
+  const { t, i18n } = useTranslation();
+  const top = summary.heights[0];
+  const chips = [
+    top ? (top.height >= 2160 ? "4K" : top.height >= 1440 ? "2K" : `${top.height}p`) : null,
+    summary.heights.some((h) => h.hdr) ? "HDR" : null,
+    summary.heights.some((h) => h.fps > 30) ? `${Math.round(Math.max(...summary.heights.map((h) => h.fps)))}fps` : null,
+    summary.subtitles.length > 0 || summary.autoCaptions.length > 0 ? t("chip_subtitles") : null,
+    summary.chapters > 0 ? t("chip_chapters", { chapters: formatCount(summary.chapters, i18n.language) }) : null,
+    summary.isLive ? t("chip_live") : null,
+  ].filter((chip): chip is string => Boolean(chip));
+  if (chips.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {chips.map((chip) => (
+        <span
+          key={chip}
+          className="rounded-sm border border-accent-line bg-accent-soft px-1.5 text-xs leading-5 font-medium text-accent"
+        >
+          {chip}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Probes a batch's links two at a time, keeping every answer -- a link that
+ *  leaves the list and comes back is not asked about twice. */
+function useBatchProbes(links: string[], cookiesFrom: string): Map<string, UrlInfo | null> {
+  const [probes, setProbes] = useState<Map<string, UrlInfo | null>>(new Map());
+  const asked = useRef(new Set<string>());
+  const key = links.join("\n");
+
+  useEffect(() => {
+    const pending = links.filter((link) => !asked.current.has(link));
+    if (pending.length === 0) return;
+    let cancelled = false;
+    const worker = async () => {
+      for (;;) {
+        const next = pending.shift();
+        if (!next || cancelled) return;
+        asked.current.add(next);
+        const info = await ipc.probeUrl(next, cookiesFrom || undefined).catch(() => null);
+        if (cancelled) {
+          asked.current.delete(next);
+          return;
+        }
+        setProbes((current) => new Map(current).set(next, info));
+      }
+    };
+    void Promise.all([worker(), worker()]);
+    return () => {
+      cancelled = true;
+    };
+    // `key` stands for `links`, which is a new array every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, cookiesFrom]);
+
+  return probes;
+}

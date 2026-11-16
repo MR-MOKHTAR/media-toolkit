@@ -277,6 +277,13 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
       const name = action.payload.title?.trim() || action.payload.fileName?.trim();
       if (name && isBareUrl(current.title)) next.title = name;
 
+      // The resolution actually fetched replaces the one asked for: on a video
+      // that tops out at 720p, "1080p" on the card was a promise not kept.
+      if (action.payload.resolution && action.payload.media === "video") {
+        const actual = String(action.payload.resolution);
+        if (current.detail !== actual) next.detail = actual;
+      }
+
       return Object.keys(next).length ? patch(state, id, next) : state;
     }
 

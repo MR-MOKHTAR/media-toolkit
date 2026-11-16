@@ -74,7 +74,7 @@ const AUDIO_DETAILS = new Set(["MP3", "M4A", "WAV"]);
  *  pre-1.0 history was migrated into -- see `migrateLegacy` -- so a row from
  *  back then still says which of the two it was, long after its file is
  *  gone. */
-const VIDEO_DETAILS = new Set(["best", "1080", "720", "480"]);
+const VIDEO_DETAILS = new Set(["best", "2160", "1440", "1080", "720", "480", "360", "240", "144"]);
 
 /**
  * Which icon and hue this job earns, from the best evidence available.

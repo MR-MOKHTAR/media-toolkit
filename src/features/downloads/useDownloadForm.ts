@@ -20,12 +20,19 @@ import { formatCount } from "../../lib/format";
 import * as ipc from "../../lib/ipc";
 import { normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
-import { detailKey } from "../jobs/detail";
 import { describeAppError } from "../jobs/errorText";
 import { describeWhen } from "../jobs/when";
 import { useJobs } from "../jobs/useJobs";
-import type { JobFileKind, LibrarySlot, UrlInfo } from "../jobs/types";
-import type { AudioFormat } from "./useDownloadSettings";
+import type {
+  AudioPrefs,
+  DownloadRequest,
+  JobFileKind,
+  LibrarySlot,
+  PlaylistEntry,
+  UrlInfo,
+  VideoPrefs,
+} from "../jobs/types";
+import { audioDetail } from "./downloadChoices";
 
 interface Options {
   isOnline: boolean;
@@ -41,10 +48,26 @@ interface Options {
 export interface DownloadFormValues {
   url: string;
   mediaType: "video" | "audio";
-  quality: string;
+  /** Resolution (already applied to this video), codec preference, container. */
+  video: VideoPrefs;
   /** What an audio download should end up as. Ignored for video, and for a
    *  direct file link, which is fetched as whatever it already is. */
-  audioFormat: AudioFormat;
+  audio: AudioPrefs;
+  subtitles?: { langs: string[]; embed: boolean };
+  embedMetadata: boolean;
+  /** Cover art -- asked of audio downloads only. */
+  embedCover: boolean;
+  sponsorBlock: boolean;
+  /** Only this stretch of the video, in seconds. */
+  section?: { startSecs: number; endSecs: number } | null;
+  /** The videos picked from a playlist, each with its position in the
+   *  playlist. When present, "all" queues exactly these and asks nothing more
+   *  of the backend. */
+  playlistPicks?: { entry: PlaylistEntry; position: number }[];
+  /** The playlist's name, for its folder. */
+  playlistTitle?: string | null;
+  playlistFolder?: boolean;
+  playlistNumbers?: boolean;
   /** Whether a link that names a playlist takes the one video or the whole
    *  list. `one` for every link that names no playlist at all. */
   playlist: PlaylistChoice;
@@ -214,13 +237,30 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       /** What every download off this form carries, whether it is the one
        *  link that was pasted, one of several, or the fortieth video of a
        *  playlist. Only the URL and the name differ between them. */
-      const requestFor = (target: string, dir: string, outputName: string | undefined) => ({
+      const audio = values.mediaType === "audio";
+      const requestFor = (
+        target: string,
+        dir: string,
+        outputName: string | undefined,
+        subfolder?: string,
+      ): DownloadRequest => ({
         url: target,
         outputDir: dir,
         outputName,
         mediaType: values.mediaType,
-        quality: values.mediaType === "audio" ? undefined : values.quality,
-        audioFormat: values.mediaType === "audio" ? values.audioFormat : undefined,
+        // The older pair is still sent, for an older build reading this
+        // request back off a retry button; the backend prefers `video` and
+        // `audio` when they are there.
+        quality: audio ? undefined : values.video.quality,
+        audioFormat: audio && values.audio.format === "original" ? "original" : audio ? "mp3" : undefined,
+        video: audio ? undefined : values.video,
+        audio: audio ? values.audio : undefined,
+        subtitles: !audio && values.subtitles && values.subtitles.langs.length > 0 ? values.subtitles : undefined,
+        embedMetadata: values.embedMetadata,
+        embedThumbnail: audio ? values.embedCover : false,
+        sponsorBlock: values.sponsorBlock || undefined,
+        section: !audio && values.section ? values.section : undefined,
+        subfolder,
         // Always auto. The probe is a preview, not a decision: it can be stale
         // by the time the bytes are requested, and the backend is the one that
         // has to be right.
@@ -362,10 +402,8 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
               // is labelled with.
               // A token, put into words when the row is drawn -- see
               // `renderDetail` -- so it follows the app's language.
-              values.audioFormat === "original"
-              ? detailKey("audio_format_original")
-              : "MP3"
-            : values.quality;
+              audioDetail(values.audio.format, values.audio.bitrateKbps ?? 0)
+            : values.video.quality;
       // A playlist's entries are all media -- yt-dlp listed them -- whatever
       // the probe of the playlist page itself managed to say.
       const entryKind: JobFileKind = values.mediaType;
@@ -383,8 +421,9 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         title: string,
         outputName: string | undefined,
         kind: JobFileKind,
+        subfolder?: string,
       ) => {
-        const request = requestFor(target, dir, outputName);
+        const request = requestFor(target, dir, outputName, subfolder);
         // The URL is the last resort, not the default. It used to be what
         // every direct download was called, because the name was deliberately
         // left out of the request and the card read the same field.
@@ -408,36 +447,50 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         // own job, so each gets its own row, its own progress and its own retry
         // button -- and the network semaphore already runs four at a time
         // rather than forty.
-        const listing = await ipc
-          .listPlaylist(url, values.cookiesFrom || undefined)
-          .catch((error) => {
-          notify("error", describeAppError(ipc.toAppError(error), t));
-          return null;
-        });
-        if (!listing || listing.entries.length === 0) return abandon();
+        // Picked on the form when the form had the listing; fetched here
+        // otherwise (a schedule set before the list arrived, an old path).
+        const listing = values.playlistPicks
+          ? null
+          : await ipc.listPlaylist(url, values.cookiesFrom || undefined).catch((error) => {
+              notify("error", describeAppError(ipc.toAppError(error), t));
+              return null;
+            });
+        const picks =
+          values.playlistPicks ??
+          listing?.entries.map((entry, index) => ({ entry, position: index + 1 })) ??
+          [];
+        if (picks.length === 0) return abandon();
 
-        // `outputName` is left undefined for every entry: the pasted link's
-        // title belongs to the playlist, not to any video in it, and yt-dlp
-        // names each file from its own page.
-        for (const entry of listing.entries) {
-          void queue(entry.url, entry.title, undefined, entryKind);
+        // Numbered by position in the playlist, padded to the longest number,
+        // so the files sort in the order the playlist plays them.
+        const width = String(Math.max(...picks.map((pick) => pick.position))).length;
+        const folderName =
+          values.playlistFolder !== false
+            ? (values.playlistTitle ?? listing?.title ?? undefined) || undefined
+            : undefined;
+        for (const { entry, position } of picks) {
+          const numbered =
+            values.playlistNumbers !== false
+              ? `${String(position).padStart(width, "0")} - ${entry.title}`
+              : undefined;
+          void queue(entry.url, entry.title, numbered, entryKind, folderName);
         }
 
-        if (listing.truncated) {
+        if (listing?.truncated) {
           notify(
             "warning",
             t("playlist_queued_capped", {
-              queued: formatCount(listing.entries.length, i18n.language),
+              queued: formatCount(picks.length, i18n.language),
               total: formatCount(listing.total, i18n.language),
             }),
           );
         } else if (startAt !== null) {
-          announce(listing.entries.length);
+          announce(picks.length);
         } else {
           notify(
             "info",
             t("playlist_queued", {
-              queued: formatCount(listing.entries.length, i18n.language),
+              queued: formatCount(picks.length, i18n.language),
             }),
           );
         }
