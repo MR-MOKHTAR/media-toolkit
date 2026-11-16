@@ -10,7 +10,8 @@ use tauri::{AppHandle, Manager, State};
 use crate::error::AppResult;
 use crate::jobs::{JobKind, Jobs};
 use crate::media::ops::{
-    self, CompressPreset, CompressRequest, ConvertRequest, ExtractAudioRequest, TrimRequest,
+    self, AudioOpts, CompressPreset, CompressRequest, ConvertPreview, ConvertRequest,
+    ExtractAudioRequest, TrimRequest, VideoCodec,
 };
 use crate::media::probe::MediaInfo;
 use crate::media::runner;
@@ -28,9 +29,36 @@ pub async fn estimate_compressed_size(
     path: String,
     preset: CompressPreset,
     max_height: Option<u32>,
+    audio: Option<AudioOpts>,
+    video_codec: Option<VideoCodec>,
+    max_fps: Option<u32>,
+    drop_audio: Option<bool>,
 ) -> AppResult<u64> {
     let info = crate::media::probe(&app, &PathBuf::from(path)).await?;
-    Ok(ops::estimate_compressed_bytes(&info, preset, max_height))
+    Ok(ops::estimate_compressed_bytes(
+        &info,
+        preset,
+        max_height,
+        &audio,
+        video_codec,
+        max_fps,
+        drop_audio.unwrap_or(false),
+    ))
+}
+
+/// What a conversion would do to each stream, for the "instant / re-encoding"
+/// badge. Pure: no process, no job.
+#[tauri::command]
+pub async fn convert_preview(
+    app: AppHandle,
+    path: String,
+    format: String,
+    audio: Option<AudioOpts>,
+    max_height: Option<u32>,
+    fps: Option<u32>,
+) -> AppResult<ConvertPreview> {
+    let info = crate::media::probe(&app, &PathBuf::from(path)).await?;
+    ops::convert_preview(&format, audio.as_ref(), max_height, fps, &info)
 }
 
 /// Whether a conversion would be a plain container swap, so the UI can promise

@@ -91,6 +91,7 @@ pub fn run() {
             media::analyze::make_preview,
             media::commands::estimate_compressed_size,
             media::commands::can_copy_streams,
+            media::commands::convert_preview,
             media::commands::audio_copy_format,
             media::commands::start_compress,
             media::commands::start_trim,
