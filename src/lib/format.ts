@@ -146,14 +146,22 @@ export function speedParts(
   return { value: formatter.format(value), unit: SPEED_UNITS[step], step };
 }
 
-/** Megabits per second as a number alone, one decimal, for a fixed slot
- *  beside the unit "Mbps". */
-export function megabitsValue(bytesPerSecond: number, language: string): string {
-  const formatter = new Intl.NumberFormat(language, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
-  return formatter.format((Math.max(0, bytesPerSecond) * 8) / 1_000_000);
+/**
+ * A line rate in bits, the way a provider sells it, split for a fixed slot.
+ *
+ * Mbps with one decimal for the usual range; Kbps below one megabit, where
+ * "0.0 Mbps" said a slow line was no line at all; Gbps from a thousand up.
+ */
+export function bitRateParts(bytesPerSecond: number, language: string): { value: string; unit: string } {
+  const megabits = (Math.max(0, bytesPerSecond) * 8) / 1_000_000;
+  const format = (value: number, digits: number) =>
+    new Intl.NumberFormat(language, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+  if (megabits >= 1000) return { value: format(megabits / 1000, 2), unit: "Gbps" };
+  if (megabits >= 1) return { value: format(megabits, 1), unit: "Mbps" };
+  return { value: format(megabits * 1000, 0), unit: "Kbps" };
 }
 
 /**

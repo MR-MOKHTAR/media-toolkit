@@ -2,6 +2,30 @@
    only (plus the progress arc's dash offset), slow and gentle: this is
    decoration, not a loading indicator. Every animated element needs its own
    transform box, hence fill-box on the shared base class. */
+/* The illustration as a whole: a soft shadow so the tile lifts off the
+   background, and the pane strengths each theme needs -- a pale tint on a pale
+   aurora vanishes, so light mode gets a whiter, more opaque pane under it. */
+.mtk-ill {
+  --ill-pane-a: 0.34;
+  --ill-pane-b: 0.12;
+  filter: drop-shadow(0 10px 24px rgba(31, 43, 68, 0.12));
+  overflow: visible;
+}
+
+html.dark .mtk-ill {
+  --ill-pane-a: 0.3;
+  --ill-pane-b: 0.08;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.35));
+}
+
+.mtk-ill-pane {
+  fill: rgba(255, 255, 255, 0.62);
+}
+
+html.dark .mtk-ill-pane {
+  fill: rgba(17, 24, 36, 0.4);
+}
+
 .mtk-ill-a {
   transform-box: fill-box;
   transform-origin: center;

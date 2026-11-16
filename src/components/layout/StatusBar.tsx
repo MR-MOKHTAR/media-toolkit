@@ -4,7 +4,7 @@ import { Activity, AlertCircle, ArrowDownToLine, Gauge, Loader2, Radar, Zap } fr
 import { useTranslation } from "react-i18next";
 
 import { useNavigation } from "../../app/navigation";
-import { formatCount, megabitsValue, speedParts } from "../../lib/format";
+import { bitRateParts, formatCount, speedParts } from "../../lib/format";
 import { useSpeedMonitor } from "../../features/downloads/useSpeedMonitor";
 import { jobsOfKind } from "../../features/jobs/selectors";
 import { useJobs } from "../../features/jobs/useJobs";
@@ -126,8 +126,7 @@ function Line({
       {result && (
         <>
           <Stat icon={<Zap size={13} />} label={t("speed_line")}>
-            <Figure value={megabitsValue(result.bytesPerSecond, language)} />
-            <Unit>Mbps</Unit>
+            <BitRate bytesPerSecond={result.bytesPerSecond} language={language} />
           </Stat>
           {result.latencyMs > 0 && (
             // Its own item, label and number apart. It was a translated phrase
@@ -199,6 +198,16 @@ function Figure({
   );
 }
 
+function BitRate({ bytesPerSecond, language }: { bytesPerSecond: number; language: string }) {
+  const { value, unit } = bitRateParts(bytesPerSecond, language);
+  return (
+    <>
+      <Figure value={value} />
+      <Unit>{unit}</Unit>
+    </>
+  );
+}
+
 function Unit({ children }: { children: ReactNode }) {
   return <span className="min-w-[2.6ch] text-start">{children}</span>;
 }
@@ -243,8 +252,7 @@ function Rate({
       <Unit>{parts.unit}</Unit>
       {withMegabits && (
         <span className="ms-1 flex items-baseline gap-1 opacity-80">
-          <Figure value={megabitsValue(eased, language)} />
-          <Unit>Mbps</Unit>
+          <BitRate bytesPerSecond={eased} language={language} />
         </span>
       )}
     </Stat>

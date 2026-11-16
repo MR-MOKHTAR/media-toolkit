@@ -20,7 +20,7 @@ const EFFECTS_STORAGE_KEY = "downloader-effects";
  *  They are needed outside CSS: the native window and the webview's base layer
  *  are painted through Tauri, and a resize repaints from those before a single
  *  rule applies. Kept beside the same two values in index.html's bootstrap. */
-const CANVAS = { dark: "#060a12", light: "#eef2f8" } as const;
+const CANVAS = { dark: "#060a12", light: "#e8edf5" } as const;
 
 export type AppLanguage = "en" | "fa" | "ar";
 

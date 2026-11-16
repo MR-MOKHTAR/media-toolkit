@@ -197,7 +197,7 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center gap-5 px-6 py-12 text-center">
       {/* Neutral, not the accent tile the screen header carries. A filled,
           glowing mark in the middle of an empty page read as the thing to
           press, next to a button that actually was -- this says "nothing
@@ -207,13 +207,18 @@ export function EmptyState({
           {icon}
         </div>
       )}
-      <div className="flex flex-col gap-1">
-        <p className="text-lg font-medium text-fg">{title}</p>
+      <div className="flex flex-col items-center gap-2">
+        <p className="text-xl font-semibold text-fg">{title}</p>
         {/* `fg-soft`, not `fg-muted`: this is the sentence that says what to
             do next, and muted sits at 3.4:1 on the light canvas -- under AA
             for text this size. */}
+        {/* Balanced, so a two-line hint breaks into two even lines instead
+            of a full line and a stray word -- the ragged break read as untidy
+            in the middle of an otherwise empty page. */}
         {description && (
-          <p className="max-w-xs text-sm text-fg-soft">{description}</p>
+          <p className="max-w-md text-base leading-relaxed text-balance text-fg-soft">
+            {description}
+          </p>
         )}
       </div>
       {action}

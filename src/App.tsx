@@ -100,66 +100,71 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                 The tool screens scroll their own list instead, so that their
                 toolbar stays put: `h-full` inside here is what lets them. */}
             <main className="min-h-0 flex-1 overflow-y-auto">
-              {/* Each screen arrives with a short rise and fade. Entrance only:
-                  an exit would hold the next screen back for its length, and a
-                  tool switch is something people do quickly and often. Keyed on
-                  the screen, not the route, so opening a tool's form -- the same
-                  screen with `composing` set -- does not replay it. */}
-              <motion.div
-                key={route.name}
-                className="h-full"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-              >
-              {/* Five of the six tools follow one shape: the list is the screen
-                  and the form is a dialog over it, mounted only while the route
-                  says `composing`. What differs is which form. */}
-              {route.name === "download" && (
+              {/* All five tools are one ToolScreen at one position in the tree,
+                  so moving between them keeps its toolbar mounted: the glass
+                  bar stays exactly where it is and only what is inside it, and
+                  the list under it, fades over (see ToolScreen). Two branches
+                  -- Download and the media tools -- used to remount the whole
+                  screen on the way across, and with the entrance animation on
+                  top the toolbar visibly dropped and settled every time.
+
+                  The list is the screen and the form is a dialog over it,
+                  mounted only while the route says `composing`. What differs
+                  between tools is which form. */}
+              {(route.name === "download" || isMediaToolRoute(route)) && (
                 <ToolScreen route={route} language={language}>
-                  {(close) => (
-                    <DownloadForm
-                      // Set only when the form recorded itself on the way to
-                      // Settings, so coming back finds the link still there.
-                      initialUrl={route.link}
-                      isOnline={isOnline}
-                      notify={notify}
-                      onDone={close}
-                    />
-                  )}
+                  {(close) =>
+                    route.name === "download" ? (
+                      <DownloadForm
+                        // Set only when the form recorded itself on the way to
+                        // Settings, so coming back finds the link still there.
+                        initialUrl={route.link}
+                        isOnline={isOnline}
+                        notify={notify}
+                        onDone={close}
+                      />
+                    ) : (
+                      // Four tools, one form. The config is the only thing
+                      // that changes between them -- see features/media/tools.
+                      <MediaToolForm
+                        config={MEDIA_TOOLS[route.name]}
+                        initialFile={route.file}
+                        language={language}
+                        notify={notify}
+                        onDone={close}
+                      />
+                    )
+                  }
                 </ToolScreen>
               )}
-              {route.name === "jobs" && <JobsScreen language={language} />}
-              {route.name === "settings" && (
-                <SettingsScreen
-                  darkMode={darkMode}
-                  onToggleTheme={toggleDarkMode}
-                  language={language}
-                  onLanguageChange={setLanguage}
-                  effects={effects}
-                  onEffectsChange={setEffects}
-                  notify={notify}
-                  // Set when a tool form sent the user here to change one of
-                  // its own defaults, so they land on that panel.
-                  initialSection={route.section}
-                />
-              )}
-              {/* Four tools, one form. The config is the only thing that
-                  changes between them -- see features/media/tools. */}
-              {isMediaToolRoute(route) && (
-                <ToolScreen route={route} language={language}>
-                  {(close) => (
-                    <MediaToolForm
-                      config={MEDIA_TOOLS[route.name]}
-                      initialFile={route.file}
+
+              {/* The two screens that are not tools fade in -- opacity only.
+                  A rise as well moved their glass rails along with them. */}
+              {(route.name === "jobs" || route.name === "settings") && (
+                <motion.div
+                  key={route.name}
+                  className="h-full"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  {route.name === "jobs" && <JobsScreen language={language} />}
+                  {route.name === "settings" && (
+                    <SettingsScreen
+                      darkMode={darkMode}
+                      onToggleTheme={toggleDarkMode}
                       language={language}
+                      onLanguageChange={setLanguage}
+                      effects={effects}
+                      onEffectsChange={setEffects}
                       notify={notify}
-                      onDone={close}
+                      // Set when a tool form sent the user here to change one
+                      // of its own defaults, so they land on that panel.
+                      initialSection={route.section}
                     />
                   )}
-                </ToolScreen>
+                </motion.div>
               )}
-              </motion.div>
             </main>
 
             {/* Along the bottom of every screen; see the component for what

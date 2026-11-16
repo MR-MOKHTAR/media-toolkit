@@ -349,7 +349,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
     uniforms.uB.value.lerp(target.b, k);
     uniforms.uC.value.lerp(target.c, k);
     iconColor.lerp(target.icon, k);
-    uniforms.uStrength.value += ((target.dark ? 0.62 : 0.48) - uniforms.uStrength.value) * k;
+    uniforms.uStrength.value += ((target.dark ? 0.62 : 0.55) - uniforms.uStrength.value) * k;
     uniforms.uTime.value = time;
 
     pointer.x += (pointer.tx - pointer.x) * 0.05;

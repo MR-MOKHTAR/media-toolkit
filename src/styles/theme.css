@@ -236,12 +236,15 @@
    *
    * The fills are alphas of the surfaces they replace, so a glass card over a
    * plain canvas (effects off) still reads as the same white or slate card. */
-  --color-chrome-glass: rgba(255, 255, 255, 0.62);
-  --color-card-glass: rgba(255, 255, 255, 0.6);
-  --color-card-glass-hover: rgba(255, 255, 255, 0.74);
+  /* Light glass is more opaque than dark: a pale pane over a pale aurora has
+     nothing to separate it, and at 60% the sidebar and the page read as one
+     wash on a modest laptop screen. */
+  --color-chrome-glass: rgba(255, 255, 255, 0.76);
+  --color-card-glass: rgba(255, 255, 255, 0.72);
+  --color-card-glass-hover: rgba(255, 255, 255, 0.86);
   /* The edge of a glass surface: light catching its rim, not a drawn line. */
   --color-glass-edge: rgba(255, 255, 255, 0.75);
-  --color-glass-line: rgba(160, 174, 196, 0.32);
+  --color-glass-line: rgba(100, 116, 139, 0.24);
   /* The sheen across the top of a pane. */
   --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 42%);
   --blur-card: 14px;
@@ -251,10 +254,10 @@
    * The aurora behind everything. Read by the CSS layer and by the WebGL
    * scene alike, so both draw the same colours. Registered with @property
    * below, which is what lets a screen change tint as a transition. */
-  --color-aurora-base: #eef2f8;
-  --color-aurora-1: #5eead4;
+  --color-aurora-base: #e8edf5;
+  --color-aurora-1: #2dd4bf;
   --color-aurora-2: #a78bfa;
-  --color-aurora-3: #7dd3fc;
+  --color-aurora-3: #60a5fa;
   --color-aurora-icon: #0b8177;
 
   /* ------------------------------------------------------- states ---
@@ -349,20 +352,20 @@
      keeps the defaults above. The values are deliberately close: a tint, not
      a repaint, so moving between tools reads as one place changing mood. */
   [data-tint="compress"] {
-    --color-aurora-1: #67e8f9;
-    --color-aurora-3: #a5b4fc;
+    --color-aurora-1: #22d3ee;
+    --color-aurora-3: #818cf8;
   }
   [data-tint="trim"] {
-    --color-aurora-1: #c4b5fd;
-    --color-aurora-2: #f0abfc;
+    --color-aurora-1: #a78bfa;
+    --color-aurora-2: #e879f9;
   }
   [data-tint="convert"] {
-    --color-aurora-2: #93c5fd;
-    --color-aurora-3: #6ee7b7;
+    --color-aurora-2: #60a5fa;
+    --color-aurora-3: #34d399;
   }
   [data-tint="extractAudio"] {
-    --color-aurora-1: #a78bfa;
-    --color-aurora-3: #f9a8d4;
+    --color-aurora-1: #8b5cf6;
+    --color-aurora-3: #f472b6;
   }
   html.dark [data-tint="compress"] {
     --color-aurora-1: #0e7490;
@@ -399,7 +402,7 @@
 @property --color-aurora-1 {
   syntax: "<color>";
   inherits: true;
-  initial-value: #5eead4;
+  initial-value: #2dd4bf;
 }
 @property --color-aurora-2 {
   syntax: "<color>";
@@ -409,7 +412,7 @@
 @property --color-aurora-3 {
   syntax: "<color>";
   inherits: true;
-  initial-value: #7dd3fc;
+  initial-value: #60a5fa;
 }
 
 /* ------------------------------------------------------- glass utilities ---

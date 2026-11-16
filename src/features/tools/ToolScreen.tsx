@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { motion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -97,23 +98,31 @@ export function ToolScreen({ route, language, children }: Props) {
           hundred rows. */}
       <header className="glass-chrome shrink-0 border-b px-6 py-3">
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3 lg:max-w-4xl xl:max-w-5xl">
-          {/* The sidebar's own glyph for this tool, so the highlighted row and
-              the screen it leads to cannot drift apart. Static -- the animated
-              version of this mark introduced a form, and this introduces a
-              list. */}
-          {Icon && (
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow)">
-              <Icon size={18} strokeWidth={1.75} />
-            </span>
-          )}
-          <div className="flex min-w-0 flex-1 flex-col">
-            <h1 className="truncate text-lg font-medium text-fg">
-              {t(`tool_${kind}`)}
-            </h1>
-            <p className="truncate text-sm text-fg-muted">
-              {t(`tool_${kind}_about`)}
-            </p>
-          </div>
+          {/* The sidebar's own glyph for this tool and its name. The toolbar
+              itself stays mounted across tools (see App); only these cross-fade,
+              keyed on the tool -- opacity alone, so the bar never appears to
+              move. */}
+          <motion.div
+            key={kind}
+            className="flex min-w-0 flex-1 items-center gap-3"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+          >
+            {Icon && (
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow)">
+                <Icon size={18} strokeWidth={1.75} />
+              </span>
+            )}
+            <div className="flex min-w-0 flex-1 flex-col">
+              <h1 className="truncate text-lg font-medium text-fg">
+                {t(`tool_${kind}`)}
+              </h1>
+              <p className="truncate text-sm text-fg-muted">
+                {t(`tool_${kind}_about`)}
+              </p>
+            </div>
+          </motion.div>
           {/* The screen's one primary action. */}
           <Button
             variant="primary"
@@ -130,7 +139,15 @@ export function ToolScreen({ route, language, children }: Props) {
 
       {/* The only thing that scrolls. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-6 py-6 lg:max-w-4xl xl:max-w-5xl">
+        {/* Each tool's list arrives with a short rise; the toolbar above does
+            not move. */}
+        <motion.div
+          key={kind}
+          className="mx-auto w-full max-w-2xl px-6 py-6 lg:max-w-4xl xl:max-w-5xl"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+        >
           <JobList
             jobs={mine}
             language={language}
@@ -155,14 +172,19 @@ export function ToolScreen({ route, language, children }: Props) {
                 // glowing buttons a hand-span apart split the eye between
                 // them and left neither as *the* action.
                 action={
-                  <Button variant="secondary" onClick={open} icon={actionIcon}>
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    onClick={open}
+                    icon={<Plus size={19} strokeWidth={2.25} />}
+                  >
                     {t(`tool_${kind}_action`)}
                   </Button>
                 }
               />
             }
           />
-        </div>
+        </motion.div>
       </div>
 
       {route.composing && children(close)}
