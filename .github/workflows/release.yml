@@ -3,7 +3,23 @@ on:
   push:
     tags:
       - "v*"
+    # Every push to these branches builds the installers too, so a fresh build
+    # is always waiting in the run's artifacts. tagName is empty on these runs,
+    # which makes tauri-action build without creating or touching a release --
+    # only a `v*` tag publishes one.
+    branches:
+      - main
+      - "feat/**"
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   workflow_dispatch:
+
+# A newer push to the same branch makes the older build pointless; cancel it.
+# Tag runs never cancel each other -- each one is a release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   release:
