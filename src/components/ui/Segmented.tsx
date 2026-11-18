@@ -87,7 +87,7 @@ export function Segmented<T extends string>({
               "text-center transition-all duration-(--duration-fast)",
               "disabled:cursor-not-allowed disabled:opacity-disabled",
               selected
-                ? "border-accent-line bg-accent-soft text-accent shadow-(--shadow-glow)"
+                ? "relative holo-rim border-transparent bg-accent-soft text-accent shadow-(--shadow-glow)"
                 : "border-line bg-surface/65 text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
             )}
           >

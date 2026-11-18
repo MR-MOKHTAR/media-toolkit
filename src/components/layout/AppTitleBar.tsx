@@ -51,7 +51,7 @@ export function AppTitleBar({
     // middle of the window. Inheriting the direction puts them back in the
     // outer corner -- top-right in English, top-left in Persian and Arabic,
     // which is where the sidebar is not.
-    <header className="glass-chrome flex h-11 shrink-0 items-center gap-1 border-b px-2">
+    <header className="glass-chrome relative flex h-11 shrink-0 items-center gap-1 border-b px-2 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-(image:--gradient-holo) after:opacity-50">
       {/* The drag region has to be its own element. Marking the header would
           swallow clicks on the buttons inside it. */}
       <div

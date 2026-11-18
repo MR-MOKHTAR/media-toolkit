@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { DirectionProvider } from "@radix-ui/react-direction";
 import { MotionConfig, motion } from "framer-motion";
 import { Provider as TooltipProvider } from "@radix-ui/react-tooltip";
@@ -43,6 +44,14 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
   // Read here rather than inside the sidebar, because the title bar needs the
   // same answer: it prints the app name only when the sidebar is too narrow to.
   const { collapsed, toggle: toggleSidebar } = useSidebarCollapsed();
+
+  // The screen's tint on <html> as well as on the window below. Dialogs,
+  // toasts and tooltips are portalled to the end of <body>, outside the
+  // window's subtree, so a tint set only there would leave every dialog in
+  // the default colours while the screen behind it wore its tool's.
+  useEffect(() => {
+    document.documentElement.dataset.tint = route.name;
+  }, [route.name]);
 
   return (
     // Radix positions its popovers and maps their arrow keys off this, not off

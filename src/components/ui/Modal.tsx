@@ -117,6 +117,9 @@ export function Modal({
             "w-[min(36rem,calc(100vw-2rem))] max-h-[calc(100vh-4rem)]",
             "-translate-x-1/2 -translate-y-1/2",
             "overflow-hidden rounded-xl border border-line-soft",
+            // The dialog's edge catches the holographic light; its own
+            // hairline stays under it so the edge holds with effects off.
+            "holo-rim [--rim-over:1px] [--rim-opacity:0.6]",
             "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-panel)]",
             "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // scale-in animates `scale`, not `transform`: the two centring
@@ -132,7 +135,7 @@ export function Modal({
               ConfirmDialog carry. It marks the primary surface. */}
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-x-0 top-0 h-px bg-(image:--gradient-accent) opacity-40"
+            className="pointer-events-none absolute inset-x-0 top-0 h-px bg-(image:--gradient-accent) opacity-80"
           />
 
           <header className="flex shrink-0 items-center gap-3 border-b border-line px-5 py-4">

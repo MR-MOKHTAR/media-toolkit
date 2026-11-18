@@ -8,14 +8,14 @@
 .mtk-ill {
   --ill-pane-a: 0.34;
   --ill-pane-b: 0.12;
-  filter: drop-shadow(0 10px 24px rgba(31, 43, 68, 0.12));
+  filter: drop-shadow(0 12px 28px color-mix(in srgb, var(--tool-a) 24%, transparent));
   overflow: visible;
 }
 
 html.dark .mtk-ill {
   --ill-pane-a: 0.3;
   --ill-pane-b: 0.08;
-  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.35));
+  filter: drop-shadow(0 14px 32px color-mix(in srgb, var(--tool-a) 30%, transparent));
 }
 
 .mtk-ill-pane {
@@ -23,7 +23,7 @@ html.dark .mtk-ill {
 }
 
 html.dark .mtk-ill-pane {
-  fill: rgba(17, 24, 36, 0.4);
+  fill: rgba(14, 15, 34, 0.45);
 }
 
 .mtk-ill-a {

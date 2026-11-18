@@ -96,7 +96,9 @@ export function ToolScreen({ route, language, children }: Props) {
       {/* The toolbar. It does not scroll: the button that starts a job has to
           be in the same place whether the list below it holds nothing or two
           hundred rows. */}
-      <header className="glass-chrome shrink-0 border-b px-6 py-3">
+      {/* A faint wash of the tool's own colour across the bar, from its mark
+          outward, so the toolbar says which tool this is before it is read. */}
+      <header className="glass-chrome relative shrink-0 border-b bg-[radial-gradient(60%_140%_at_0%_0%,color-mix(in_srgb,var(--tool-a)_10%,transparent),transparent)] px-6 py-3 rtl:bg-[radial-gradient(60%_140%_at_100%_0%,color-mix(in_srgb,var(--tool-a)_10%,transparent),transparent)]">
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3 lg:max-w-4xl xl:max-w-5xl">
           {/* The sidebar's own glyph for this tool and its name. The toolbar
               itself stays mounted across tools (see App); only these cross-fade,
@@ -110,12 +112,12 @@ export function ToolScreen({ route, language, children }: Props) {
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
           >
             {Icon && (
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow)">
-                <Icon size={18} strokeWidth={1.75} />
+              <span className="tool-tile holo-rim holo-rim-live relative flex size-11 shrink-0 items-center justify-center rounded-lg">
+                <Icon size={21} strokeWidth={1.85} />
               </span>
             )}
             <div className="flex min-w-0 flex-1 flex-col">
-              <h1 className="truncate text-lg font-medium text-fg">
+              <h1 className="holo-text truncate text-xl leading-tight font-semibold">
                 {t(`tool_${kind}`)}
               </h1>
               <p className="truncate text-sm text-fg-muted">

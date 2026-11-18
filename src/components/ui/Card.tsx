@@ -45,7 +45,9 @@ export function Card({
   return (
     <Tag
       className={cn(
-        "rounded-lg border",
+        // A faint holographic rim over the card's own hairline: the cards
+        // catch the same light as the window's frame.
+        "relative rounded-lg border holo-rim [--rim-over:1px] [--rim-opacity:0.3]",
         surface === "glass" ? "glass-card" : "glass-inset",
         CARD_PADDING[padding],
         interactive &&
@@ -91,11 +93,11 @@ export function FormCard({
         "flex flex-col gap-5 rounded-xl border border-line-soft p-6",
         "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
         "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-card)]",
-        /* Thin gradient accent along the top edge — visible enough to mark
+        /* A holographic hairline along the top edge -- visible enough to mark
            the card as the primary surface without competing with anything
            inside it. */
         "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",
-        "before:bg-(image:--gradient-accent) before:opacity-40 before:rounded-t-xl",
+        "before:bg-(image:--gradient-holo) before:opacity-70 before:rounded-t-xl",
         "relative overflow-hidden",
         className,
       )}

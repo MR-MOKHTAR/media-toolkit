@@ -81,9 +81,13 @@ function Glass({ id, from, to }: { id: string; from: string; to: string }) {
           <stop offset="0" style={{ stopColor: `var(--color-${from})`, stopOpacity: 0.35 }} />
           <stop offset="1" style={{ stopColor: `var(--color-${from})`, stopOpacity: 0 }} />
         </radialGradient>
-        <linearGradient id={`${id}e`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" style={{ stopColor: "var(--color-glass-edge)" }} />
-          <stop offset="1" style={{ stopColor: "var(--color-glass-line)" }} />
+        {/* The pane's rim in the holographic spectrum, the same light the
+            app's panels and controls catch. */}
+        <linearGradient id={`${id}e`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" style={{ stopColor: "var(--holo-1)" }} />
+          <stop offset="0.35" style={{ stopColor: "var(--holo-2)" }} />
+          <stop offset="0.65" style={{ stopColor: "var(--holo-3)" }} />
+          <stop offset="1" style={{ stopColor: "var(--holo-4)" }} />
         </linearGradient>
       </defs>
       <circle cx={CX} cy={CY} r="58" fill={`url(#${id}r)`} />
@@ -97,7 +101,8 @@ function Glass({ id, from, to }: { id: string; from: string; to: string }) {
         rx="23.5"
         fill="none"
         stroke={`url(#${id}e)`}
-        strokeWidth="1"
+        strokeWidth="1.5"
+        style={{ strokeOpacity: "var(--holo-rim-opacity)" }}
       />
     </>
   );

@@ -18,7 +18,8 @@ interface Props {
  * `glass-*`). Pointer events never reach it.
  *
  * Built in layers so every mode is a subset of the next:
- *   off  -- a still wash of the aurora hues, film grain, a vignette.
+ *   off  -- a still wash of the aurora hues, a dot lattice, film grain, a
+ *           vignette.
  *   lite -- plus drifting aurora blobs, a sweeping curtain, floating glyphs.
  *   full -- the WebGL scene (aurora shader + 3D icons) in place of the
  *           blobs and glyphs. The CSS layer stays until the scene's first
@@ -80,6 +81,8 @@ export function AppBackground({ effects }: Props) {
         </>
       )}
       {useWebgl && <AuroraCanvas activity={activity} onReady={onReady} onFail={onFail} />}
+      {/* Over the scene, not under it: the WebGL canvas is opaque. */}
+      <div className="mtk-bg-grid" />
       <div className="mtk-bg-vignette" />
       <div className="mtk-bg-grain" />
     </div>

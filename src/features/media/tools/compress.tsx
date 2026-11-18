@@ -318,14 +318,14 @@ function LevelList({
             className={cn(
               "flex items-center gap-3 rounded-md border px-3.5 py-2.5 text-start transition-all duration-(--duration-fast)",
               on
-                ? "border-accent-line bg-accent-soft shadow-(--shadow-glow)"
+                ? "relative holo-rim border-transparent bg-accent-soft shadow-(--shadow-glow)"
                 : "border-line bg-surface/65 hover:border-line-strong",
             )}
           >
             <span
               className={cn(
                 "flex size-4 shrink-0 items-center justify-center rounded-full border",
-                on ? "border-accent bg-accent text-on-accent" : "border-line-strong",
+                on ? "tool-tile border-transparent" : "border-line-strong",
               )}
             >
               {on && <Check size={11} strokeWidth={3} />}

@@ -69,7 +69,10 @@ export function AppSidebar({
     <nav
       aria-label={t("nav_sidebar")}
       className={cn(
-        "glass-chrome flex shrink-0 flex-col gap-1 border-e p-2 pt-0",
+        "glass-chrome relative flex shrink-0 flex-col gap-1 border-e p-2 pt-0",
+        // The rail's inner edge catches the same holographic light as the title
+        // bar's and status bar's, a hairline down its full height.
+        "after:pointer-events-none after:absolute after:inset-y-0 after:-end-px after:w-px after:bg-(image:--gradient-holo) after:opacity-40",
         "transition-[width] duration-(--duration-fast)",
         collapsed ? "w-14" : "w-60",
       )}
@@ -119,6 +122,7 @@ export function AppSidebar({
         {TOOLS.map(({ route: target, key, icon }) => (
           <NavItem
             key={key}
+            tool={key}
             icon={icon}
             label={t(`tool_${key}`)}
             collapsed={collapsed}
@@ -186,6 +190,7 @@ export function AppSidebar({
 }
 
 function NavItem({
+  tool,
   icon: Icon,
   label,
   collapsed,
@@ -193,6 +198,10 @@ function NavItem({
   busy,
   onSelect,
 }: {
+  /** A tool's key: the row then wears that tool's colours (theme.css, "tool
+   *  identity") whichever screen is open, so each tool is recognisable by its
+   *  mark before its name is read. Tasks and Settings have none. */
+  tool?: string;
   icon: LucideIcon;
   label: string;
   collapsed: boolean;
@@ -212,12 +221,15 @@ function NavItem({
       // text to read. No `title` beside it, or the OS tooltip draws on top of
       // the styled one.
       aria-label={label}
+      data-tool={tool}
       className={cn(
         navRow(state),
         // The bar sits on the sidebar's own leading edge, which is the window
         // edge it is docked against.
-        "border-s-2",
+        "relative border-s-2",
         NAV_ROW_MARKER[state],
+        // The row you are on carries the turning holographic rim.
+        active && "holo-rim holo-rim-live",
         collapsed && "justify-center px-0",
         // The hover nudge, as 2px of leading padding rather than a 2px
         // translate.
@@ -238,8 +250,17 @@ function NavItem({
         state === "idle" && !collapsed && "hover:ps-3",
       )}
     >
-      <span className="relative flex shrink-0 items-center">
-        <Icon size={17} />
+      <span
+        className={cn(
+          "relative flex shrink-0 items-center justify-center",
+          // A tool's glyph sits on a small tile of its own gradient, lit when
+          // it is the current screen and dimmed a little when it is not, so
+          // the rail reads as five colours with one of them switched on.
+          tool && "size-7 rounded-sm tool-tile transition-opacity duration-(--duration-fast)",
+          tool && !active && "opacity-80",
+        )}
+      >
+        <Icon size={tool ? 15 : 17} strokeWidth={tool ? 2 : undefined} />
         {/* Collapsed there is no room for a number, but "something is
             happening" is the part worth keeping. */}
         {collapsed && busy && (

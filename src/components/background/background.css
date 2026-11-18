@@ -13,7 +13,9 @@
   transition:
     --color-aurora-1 1.4s var(--ease-out-quart),
     --color-aurora-2 1.4s var(--ease-out-quart),
-    --color-aurora-3 1.4s var(--ease-out-quart);
+    --color-aurora-3 1.4s var(--ease-out-quart),
+    --tool-a 0.6s var(--ease-out-quart),
+    --tool-b 0.6s var(--ease-out-quart);
 }
 
 .mtk-bg {
@@ -36,10 +38,34 @@
 
 /* The still part, drawn in every mode: three washes of the aurora hues. */
 .mtk-bg-base {
+  --wash: 34%;
   background:
-    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--color-aurora-1) 26%, transparent), transparent 62%),
-    radial-gradient(90% 70% at 100% 8%, color-mix(in srgb, var(--color-aurora-2) 22%, transparent), transparent 60%),
-    radial-gradient(120% 90% at 55% 112%, color-mix(in srgb, var(--color-aurora-3) 24%, transparent), transparent 66%);
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--color-aurora-1) var(--wash), transparent), transparent 62%),
+    radial-gradient(90% 70% at 100% 8%, color-mix(in srgb, var(--color-aurora-2) calc(var(--wash) - 4%), transparent), transparent 60%),
+    radial-gradient(120% 90% at 55% 112%, color-mix(in srgb, var(--color-aurora-3) calc(var(--wash) - 2%), transparent), transparent 66%);
+}
+
+html.dark .mtk-bg-base {
+  --wash: 42%;
+}
+
+/* The technical layer: a fine dot lattice, strongest in the middle of the
+   window and fading out towards its edges, like a stage under the glass.
+   Static and drawn in every mode -- a repeating gradient costs one paint. */
+.mtk-bg-grid {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--color-fg) 55%, var(--color-aurora-3)) 0.7px,
+    transparent 1.1px
+  );
+  background-size: 22px 22px;
+  opacity: 0.09;
+  -webkit-mask-image: radial-gradient(70% 65% at 55% 45%, #000 20%, transparent 100%);
+  mask-image: radial-gradient(70% 65% at 55% 45%, #000 20%, transparent 100%);
+}
+
+html.dark .mtk-bg-grid {
+  opacity: 0.12;
 }
 
 /* ----------------------------------------------------------- aurora --- */

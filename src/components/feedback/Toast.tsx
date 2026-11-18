@@ -64,7 +64,13 @@ export function Toast({
             exit={{ opacity: 0, x: isRtl ? -20 : 20, scale: 0.95 }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className={cn(
-              "flex w-full items-start gap-2.5 rounded-lg",
+              "relative flex w-full items-start gap-2.5 rounded-lg",
+              // Rimmed in its own status colour; an info toast in the
+              // holographic spectrum.
+              "holo-rim [--rim-over:1px] [--rim-opacity:0.7]",
+              toast.type === "success" && "[--rim:linear-gradient(120deg,var(--color-success),transparent_75%)]",
+              toast.type === "error" && "[--rim:linear-gradient(120deg,var(--color-danger),transparent_75%)]",
+              toast.type === "warning" && "[--rim:linear-gradient(120deg,var(--color-warning),transparent_75%)]",
               "border border-line-soft bg-surface-glass p-3",
               "shadow-(--shadow-panel) backdrop-blur-glass",
               /* Coloured inline-start border marking the toast's kind. */

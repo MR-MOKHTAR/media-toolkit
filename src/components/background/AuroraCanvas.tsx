@@ -24,7 +24,7 @@ function readColors(element: Element): SceneColors {
   const read = (name: string, fallback: string) =>
     style.getPropertyValue(name).trim() || fallback;
   return {
-    base: read("--color-aurora-base", "#060a12"),
+    base: read("--color-aurora-base", "#05051a"),
     a: read("--color-aurora-1", "#0f766e"),
     b: read("--color-aurora-2", "#5b21b6"),
     c: read("--color-aurora-3", "#1e40af"),

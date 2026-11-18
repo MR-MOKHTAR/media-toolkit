@@ -47,7 +47,7 @@ export function StatusBar({
   });
 
   return (
-    <footer className="glass-chrome grid h-7 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-t px-3 text-xs leading-none text-fg-muted">
+    <footer className="glass-chrome relative grid h-7 shrink-0 before:pointer-events-none before:absolute before:inset-x-0 before:-top-px before:h-px before:bg-(image:--gradient-holo) before:opacity-50 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-t px-3 text-xs leading-none text-fg-muted">
       <Now monitor={monitor} language={language} />
       <Line monitor={monitor} isOnline={isOnline} language={language} />
     </footer>
