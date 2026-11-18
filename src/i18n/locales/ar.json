@@ -71,7 +71,7 @@
   "codec_pref": "الترميز",
   "codec_small": "الأصغر حجمًا",
   "codec_small_hint": "AV1 وOpus: نحو نصف الحجم للصورة نفسها. يحتاج مشغلًا حديثًا.",
-  "compress_audio_note": "الصيغة والقنوات ومعدّل العيّنة تُختار تلقائيًا. الناتج ملف M4A يعمل في كل مكان — حجم الملف الآن {{size}}.",
+  "compress_audio_note": "القنوات ومعدّل العيّنة تُختار تلقائيًا، ويبقى الناتج بصيغة {{format}} مثل الأصل. حجم الملف الآن {{size}}.",
   "compress_balanced": "متوازن",
   "compress_drop_audio": "إزالة الصوت",
   "compress_drop_audio_hint": "لتسجيل شاشة أو مقطع لا يحتاج إلا الصورة.",
@@ -427,5 +427,6 @@
   "compress_vlevel_balanced": "متوازن",
   "compress_vlevel_balanced_hint": "صورة جيدة وحجم معقول",
   "compress_vlevel_high": "جودة عالية",
-  "compress_vlevel_high_hint": "قريبة من الأصل"
+  "compress_vlevel_high_hint": "قريبة من الأصل",
+  "compress_audio_note_converted": "القنوات ومعدّل العيّنة تُختار تلقائيًا، والناتج بصيغة {{format}} التي تعمل في كل مكان. حجم الملف الآن {{size}}."
 }

@@ -68,6 +68,10 @@ interface CompressState {
    *  options" were set by hand. Kept as a key, not as the values, so it can
    *  be re-applied to the next file. */
   videoLevel: VideoLevelKey | null;
+  /** The same for a sound file: a row, "recommended" until one is picked, or
+   *  null once the audio settings were set by hand. A key rather than values,
+   *  because the values depend on the file (its codec, its bitrate). */
+  audioLevel: AudioLevelKey | "recommended" | null;
   advancedOpen: boolean;
 }
 
@@ -101,38 +105,60 @@ const VIDEO_LEVELS: { key: VideoLevelKey; preset: Preset; height: number | null;
 
 /**
  * The one choice a sound file asks for: how small. Each level carries every
- * other setting with it -- AAC so the result plays on any phone or car stereo,
- * mono where the bitrate is a speech bitrate (stereo at 48k spends half its
- * bits on a second copy of the same voice), a lower sample rate at the very
- * bottom where 44.1k would leave too few bits per sample to sound like a person.
+ * other setting with it -- mono where the bitrate is a speech bitrate (stereo
+ * at 48k spends half its bits on a second copy of the same voice), a lower
+ * sample rate at the very bottom where 44.1k would leave too few bits per
+ * sample to sound like a person. The codec is the source's own; see
+ * `levelCodec`.
  */
 type AudioLevelKey = "tiny" | "speech" | "podcast" | "balanced" | "music" | "high";
 
-const AUDIO_LEVELS: { key: AudioLevelKey; value: AudioOptionsValue }[] = [
-  { key: "tiny", value: { codec: "aac", bitrateKbps: 32, channels: "mono", sampleRate: 24000 } },
-  { key: "speech", value: { codec: "aac", bitrateKbps: 48, channels: "mono", sampleRate: null } },
-  { key: "podcast", value: { codec: "aac", bitrateKbps: 64, channels: "mono", sampleRate: null } },
-  { key: "balanced", value: { codec: "aac", bitrateKbps: 96, channels: "auto", sampleRate: null } },
-  { key: "music", value: { codec: "aac", bitrateKbps: 128, channels: "auto", sampleRate: null } },
-  { key: "high", value: { codec: "aac", bitrateKbps: 192, channels: "auto", sampleRate: null } },
+type AudioSource = Parameters<typeof sourceKbps>[0];
+type LevelCodec = "aac" | "opus" | "mp3";
+
+const AUDIO_LEVELS: { key: AudioLevelKey; value: Omit<AudioOptionsValue, "codec"> }[] = [
+  { key: "tiny", value: { bitrateKbps: 32, channels: "mono", sampleRate: 24000 } },
+  { key: "speech", value: { bitrateKbps: 48, channels: "mono", sampleRate: null } },
+  { key: "podcast", value: { bitrateKbps: 64, channels: "mono", sampleRate: null } },
+  { key: "balanced", value: { bitrateKbps: 96, channels: "auto", sampleRate: null } },
+  { key: "music", value: { bitrateKbps: 128, channels: "auto", sampleRate: null } },
+  { key: "high", value: { bitrateKbps: 192, channels: "auto", sampleRate: null } },
 ];
 
+/**
+ * A smaller file in the format it came in: an MP3 stays an MP3, so it still
+ * opens wherever the original did and keeps its extension. Anything the
+ * levels cannot write as itself (FLAC, WAV, Vorbis, AC-3...) becomes AAC in
+ * M4A, the format that plays on the most devices.
+ */
+function levelCodec(source: AudioSource): LevelCodec {
+  const codec = source?.codec.toLowerCase() ?? "";
+  if (codec === "mp3" || codec === "mp3float") return "mp3";
+  if (codec === "opus") return "opus";
+  return "aac";
+}
+
+/** What the result is saved as, for the note under the list. */
+const LEVEL_FORMAT: Record<LevelCodec, string> = { aac: "M4A (AAC)", opus: "Opus", mp3: "MP3" };
+
 /** A level has to save at least this much to be worth offering: below it the
- *  re-encode costs quality and M4A's own overhead eats most of the gain. */
+ *  re-encode costs quality and the container's own overhead eats most of the
+ *  gain. */
 const MIN_SAVING = 0.2;
 
-/** The levels that would actually shrink this source. A lossless or unknown
- *  source can take any of them. */
-const levelsFor = (source: Parameters<typeof sourceKbps>[0]) => {
+/** The levels that would actually shrink this source, in its own codec. A
+ *  lossless or unknown source can take any of them. */
+const levelsFor = (source: AudioSource) => {
+  const codec = levelCodec(source);
   const ceiling = sourceKbps(source);
-  return ceiling === null
-    ? AUDIO_LEVELS
-    : AUDIO_LEVELS.filter(({ value }) => value.bitrateKbps! <= ceiling * (1 - MIN_SAVING));
+  return AUDIO_LEVELS.filter(
+    ({ value }) => ceiling === null || value.bitrateKbps! <= ceiling * (1 - MIN_SAVING),
+  ).map(({ key, value }) => ({ key, value: { ...value, codec } as AudioOptionsValue }));
 };
 
 /** Roughly half the source, the way most people mean "make it smaller":
  *  128k → 64k, 320k → 128k. A source too small for that gets its smallest. */
-const recommendedLevel = (levels: typeof AUDIO_LEVELS, source: Parameters<typeof sourceKbps>[0]) => {
+const recommendedLevel = (levels: ReturnType<typeof levelsFor>, source: AudioSource) => {
   const ceiling = sourceKbps(source);
   if (!levels.length) return null;
   if (ceiling === null) return levels.find((level) => level.key === "music") ?? levels[0];
@@ -593,8 +619,9 @@ function VideoCompress({
 }
 
 /**
- * Compress for a sound file. Each row carries its codec, channels and sample
- * rate; Opus or an exact bitrate are under "More options".
+ * Compress for a sound file. Each row carries its channels and sample rate,
+ * in the source's own codec; another codec or an exact bitrate are under
+ * "More options".
  */
 function AudioCompress({
   info,
@@ -613,21 +640,25 @@ function AudioCompress({
   const levels = levelsFor(info.audio);
   const recommended = recommendedLevel(levels, info.audio);
   const sized = state.target !== null;
-  const active = sized ? undefined : levels.find(({ value }) => sameAudio(value, state.audio));
-  const custom = !sized && !active && !sameAudio(state.audio, AUTO_AUDIO);
-
-  // Something is always picked. A fresh form, or one whose level a newly
-  // chosen file cannot use (a 64k pick on a 48k source), lands on the
-  // recommendation; a hand-made setting from "More options" is left alone.
-  const stale =
-    sameAudio(state.audio, AUTO_AUDIO) ||
-    (AUDIO_LEVELS.some(({ value }) => sameAudio(value, state.audio)) && !active && !sized);
   const recommendedKey = recommended?.key;
+
+  // The picked row, as this file gets it. A row the file cannot use (a 64k
+  // pick, then a 48k source) falls back to the recommendation.
+  const chosen =
+    state.audioLevel === null
+      ? undefined
+      : (levels.find(({ key }) => key === state.audioLevel) ?? recommended ?? undefined);
+  const active = sized ? undefined : chosen;
+  const custom = !sized && state.audioLevel === null;
+
+  // The row's values follow the file: an MP3 after an M4A turns the same row
+  // into MP3 at that bitrate. A hand-made setting is never touched.
+  const chosenKey = chosen ? JSON.stringify(chosen.value) : null;
   useEffect(() => {
-    if (stale && recommended) set({ audio: recommended.value });
-    // `recommendedKey` stands for `recommended`; `set` is rebuilt every render.
+    if (chosen && !sameAudio(chosen.value, state.audio)) set({ audio: chosen.value });
+    // `chosenKey` stands for `chosen`; `set` is rebuilt every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stale, recommendedKey]);
+  }, [chosenKey, state.audio]);
 
   // Audio-only output is the bitrate times the length, plus a sliver of M4A.
   const sizeAt = (kbps: number) =>
@@ -647,14 +678,29 @@ function AudioCompress({
             activeKey={active?.key}
             recommendedKey={recommendedKey}
             sourceBytes={info.sizeBytes}
-            onPick={(key) => set({ audio: levels.find((level) => level.key === key)!.value, target: null })}
+            onPick={(key) =>
+              set({
+                audioLevel: key as AudioLevelKey,
+                audio: levels.find((level) => level.key === key)!.value,
+                target: null,
+              })
+            }
             language={language}
           />
-          {/* Only true of the rows: a hand-picked Opus or MP3 is neither M4A
-              nor set for you. */}
+          {/* Only true of the rows: a hand-picked codec is not set for you. */}
           {!custom && (
             <p className="text-xs text-fg-muted">
-              {t("compress_audio_note", { size: formatBytes(info.sizeBytes, language) })}
+              {t(
+                // FLAC, WAV and the like are not kept as themselves; saying
+                // "like the original" there would be untrue.
+                info.audio?.codec.toLowerCase().startsWith(levelCodec(info.audio))
+                  ? "compress_audio_note"
+                  : "compress_audio_note_converted",
+                {
+                  format: LEVEL_FORMAT[levelCodec(info.audio)],
+                  size: formatBytes(info.sizeBytes, language),
+                },
+              )}
             </p>
           )}
         </Labeled>
@@ -682,10 +728,11 @@ function AudioCompress({
       >
         <AudioOptions
           value={state.audio}
-          onChange={(audio) => set({ audio })}
+          onChange={(audio) => set({ audio, audioLevel: null })}
           source={info.audio}
           codecs={["aac", "opus", "mp3"]}
           presets={false}
+          defaultCodec={levelCodec(info.audio)}
         />
         <ControlGroup>{targetRow}</ControlGroup>
       </Disclosure>
@@ -706,6 +753,7 @@ export const compressTool: MediaToolConfig<CompressState> = {
     dropAudio: false,
     audio: AUTO_AUDIO,
     videoLevel: "balanced",
+    audioLevel: "recommended",
     advancedOpen: false,
   },
   Controls: CompressControls,

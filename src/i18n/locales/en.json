@@ -71,7 +71,7 @@
   "codec_pref": "Codec",
   "codec_small": "Smallest",
   "codec_small_hint": "AV1 + Opus: about half the size for the same picture. Needs a recent player.",
-  "compress_audio_note": "Format, channels and sample rate are picked for you. The result is an M4A that plays everywhere — the file is {{size}} now.",
+  "compress_audio_note": "Channels and sample rate are picked for you; the result stays {{format}}, like the original. The file is {{size}} now.",
   "compress_balanced": "Balanced",
   "compress_drop_audio": "Remove the sound",
   "compress_drop_audio_hint": "For a screen recording or a clip that only needs the picture.",
@@ -427,5 +427,6 @@
   "compress_vlevel_balanced": "Balanced",
   "compress_vlevel_balanced_hint": "Good picture, sensible size",
   "compress_vlevel_high": "High quality",
-  "compress_vlevel_high_hint": "Close to the original"
+  "compress_vlevel_high_hint": "Close to the original",
+  "compress_audio_note_converted": "Channels and sample rate are picked for you; the result is {{format}}, which plays everywhere. The file is {{size}} now."
 }

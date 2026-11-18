@@ -71,7 +71,7 @@
   "codec_pref": "کدک",
   "codec_small": "کم‌حجم‌ترین",
   "codec_small_hint": "AV1 و Opus: برای همان تصویر حدود نصف حجم. به پخش‌کننده‌ی جدید نیاز دارد.",
-  "compress_audio_note": "فرمت، کانال و نرخ نمونه‌برداری خودکار انتخاب می‌شود. خروجی M4A است و همه‌جا پخش می‌شود — حجم فعلی فایل {{size}} است.",
+  "compress_audio_note": "کانال و نرخ نمونه‌برداری خودکار انتخاب می‌شود و فرمت خروجی مثل فایل اصلی {{format}} می‌ماند. حجم فعلی فایل {{size}} است.",
   "compress_balanced": "متعادل",
   "compress_drop_audio": "حذف صدا",
   "compress_drop_audio_hint": "برای ضبط صفحه یا کلیپی که فقط تصویرش لازم است.",
@@ -427,5 +427,6 @@
   "compress_vlevel_balanced": "متعادل",
   "compress_vlevel_balanced_hint": "تصویر خوب، حجم معقول",
   "compress_vlevel_high": "کیفیت بالا",
-  "compress_vlevel_high_hint": "نزدیک به اصل"
+  "compress_vlevel_high_hint": "نزدیک به اصل",
+  "compress_audio_note_converted": "کانال و نرخ نمونه‌برداری خودکار انتخاب می‌شود و خروجی {{format}} است که همه‌جا پخش می‌شود. حجم فعلی فایل {{size}} است."
 }
