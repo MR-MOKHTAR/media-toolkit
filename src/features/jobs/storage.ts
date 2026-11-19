@@ -70,7 +70,7 @@ function trimForStorage(job: Job): Job {
   }
   return {
     ...job,
-    error: { ...job.error, tail: job.error.tail.slice(0, MAX_ERROR_TAIL) },
+    error: { ...job.error, tail: job.error.tail.slice(-MAX_ERROR_TAIL) },
   };
 }
 

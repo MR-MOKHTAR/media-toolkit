@@ -135,7 +135,10 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         target?.tagName === "TEXTAREA" ||
         target?.isContentEditable;
 
-      if (event.key === "Escape" && !typing) back();
+      if (typing) return;
+      // Not from inside a dialog either: the key belongs to whatever is open.
+      if (target?.closest("[role=dialog], [role=alertdialog]")) return;
+      if (event.key === "Escape") back();
       if (event.key === "ArrowLeft" && event.altKey) back();
     };
     window.addEventListener("keydown", onKeyDown);

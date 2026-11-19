@@ -468,13 +468,20 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
           values.playlistFolder !== false
             ? (values.playlistTitle ?? listing?.title ?? undefined) || undefined
             : undefined;
-        for (const { entry, position } of picks) {
-          const numbered =
-            values.playlistNumbers !== false
-              ? `${String(position).padStart(width, "0")} - ${entry.title}`
-              : undefined;
-          void queue(entry.url, entry.title, numbered, entryKind, folderName);
-        }
+        // One after another, not all at once: each start is a round trip that
+        // registers a job, and the backend queues them in the order those
+        // land. Fired together, a 30-video playlist downloaded in whatever
+        // order the calls happened to finish -- `retryFailed` waits for the
+        // same reason. Not awaited here, so the form still closes at once.
+        void (async () => {
+          for (const { entry, position } of picks) {
+            const numbered =
+              values.playlistNumbers !== false
+                ? `${String(position).padStart(width, "0")} - ${entry.title}`
+                : undefined;
+            await queue(entry.url, entry.title, numbered, entryKind, folderName);
+          }
+        })();
 
         if (listing?.truncated) {
           notify(

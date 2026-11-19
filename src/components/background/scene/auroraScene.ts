@@ -316,6 +316,9 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
     });
   };
 
+  /** Repaints a still scene after a resize. Assigned once the loop exists. */
+  let redrawStill = () => {};
+
   const resize = () => {
     const box = canvas.parentElement?.getBoundingClientRect();
     width = Math.max(1, Math.round(box?.width ?? window.innerWidth));
@@ -327,6 +330,10 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
     camera.updateProjectionMatrix();
     uniforms.uAspect.value = width / height;
     place();
+    // `setSize` clears the drawing buffer. A scene that is not looping --
+    // reduced motion, or a hidden window -- would stay black until something
+    // else asked for a frame.
+    redrawStill();
   };
 
   const observer = new ResizeObserver(resize);
@@ -435,6 +442,10 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
     if (fps > 0) frame = requestAnimationFrame(loop);
   };
 
+  redrawStill = () => {
+    if (fps === 0 && !firstFrame) draw(last || startedAt + 12_000);
+  };
+
   const onLost = (event: Event) => {
     event.preventDefault();
     options.onFail();
@@ -471,6 +482,11 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
       auroraTarget.dispose();
       environment.dispose();
       renderer.dispose();
+      // `dispose` frees what three.js made, not the context itself. Each
+      // switch of Effects mounts a new canvas, and the browser's cap on live
+      // contexts was eventually reached -- which reads as a GPU failure and
+      // turned WebGL off for the session.
+      renderer.forceContextLoss();
     },
   };
 }

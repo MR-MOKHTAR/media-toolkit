@@ -203,9 +203,21 @@ export function JobsProvider({
    * So they are kept here, by id, and replayed the moment the id is known.
    */
   const earlyRef = useRef(new Map<string, EarlyEvents>());
+  /** Settles once the backend has said which jobs it is still running. */
+  const reconciledRef = useRef(false);
+  const settleReconciled = useRef<() => void>(() => {});
+  const reconciled = useRef(
+    new Promise<void>((resolve) => {
+      settleReconciled.current = resolve;
+    }),
+  );
   /** Ids handed to the reducer, so an event landing in the gap before the
    *  next render -- when `stateRef` has not caught up -- is not held back. */
   const claimedRef = useRef(new Set<string>());
+
+  /** Placeholders "Cancel all" caught before their job existed. Their start
+   *  still lands, and is cancelled the moment it does (see `claim`). */
+  const cancelOnClaimRef = useRef(new Set<string>());
 
   const isKnown = (id: string) =>
     Boolean(stateRef.current.byId[id]) || claimedRef.current.has(id);
@@ -295,7 +307,11 @@ export function JobsProvider({
       })
       // Not in Tauri, or the command failed. The revived history is a
       // reasonable answer either way; it is only ever an improvement on it.
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        reconciledRef.current = true;
+        settleReconciled.current();
+      });
 
     return () => {
       disposed = true;
@@ -341,8 +357,19 @@ export function JobsProvider({
    */
   const claim = useCallback((placeholderId: string, job: Job) => {
     claimedRef.current.add(job.id);
+    // Visible to the announcement at once. A job that ends before the next
+    // render used to pass `isKnown`, skip `earlyRef`, and then find no row in
+    // `stateRef` -- so its toast was never shown.
+    stateRef.current = {
+      ...stateRef.current,
+      byId: { ...stateRef.current.byId, [job.id]: job },
+    };
     dispatch({ type: "started", placeholderId, job });
     replayEarly(job.id, job);
+    if (cancelOnClaimRef.current.delete(placeholderId)) {
+      dispatch({ type: "cancelRequested", id: job.id });
+      void ipc.cancelJob(job.id).catch(() => undefined);
+    }
   }, []);
 
   const beginJob = useCallback((job: JobMeta & { kind: JobKind }) => {
@@ -445,6 +472,10 @@ export function JobsProvider({
   /** Ids a scheduled start is in flight for, so the timer and a "Start now"
    *  click landing together start it once. */
   const startingRef = useRef(new Set<string>());
+  /** Scheduled rows the user removed while their start was in flight. The
+   *  start still lands -- the backend has the job by then -- so it is
+   *  cancelled and its row dropped, instead of reappearing and running. */
+  const removedWhileStartingRef = useRef(new Set<string>());
 
   const startScheduled = useCallback(
     async (id: string) => {
@@ -453,13 +484,18 @@ export function JobsProvider({
       startingRef.current.add(id);
       try {
         // In place: the scheduled row becomes the running job.
-        await startDownload(
+        const started = await startDownload(
           row.request,
           { title: row.title, source: row.source, detail: row.detail, fileKind: row.fileKind },
           id,
           "keep",
         );
+        if (removedWhileStartingRef.current.has(id)) {
+          await ipc.cancelJob(started).catch(() => undefined);
+          dispatch({ type: "discard", id: started });
+        }
       } catch (error) {
+        if (removedWhileStartingRef.current.has(id)) return;
         // Kept, as a failure with a retry button: it is the user's download,
         // and a schedule that silently vanished would be worse than one that
         // says it could not start.
@@ -477,6 +513,7 @@ export function JobsProvider({
         notify("error", describeAppError(ipc.toAppError(error), t));
       } finally {
         startingRef.current.delete(id);
+        removedWhileStartingRef.current.delete(id);
       }
     },
     [notify, startDownload, t],
@@ -522,6 +559,13 @@ export function JobsProvider({
     async (id: string) => {
       const job = stateRef.current.byId[id];
       if (!job?.request || retryingRef.current.has(id)) return;
+      // Until `listJobs` answers, an "interrupted" row may still be running in
+      // the backend (a webview reload), and retrying it would start a second
+      // download into the same `.part` file.
+      if (!reconciledRef.current) {
+        await reconciled.current;
+        if (stateRef.current.byId[id]?.state !== job.state) return;
+      }
       retryingRef.current.add(id);
       dispatch({ type: "retryRequested", id });
       try {
@@ -557,10 +601,24 @@ export function JobsProvider({
   }, [retry]);
 
   const cancelAll = useCallback(async () => {
-    const active = selectJobs(stateRef.current).filter(
+    const all = selectJobs(stateRef.current);
+    const active = all.filter(
       (job) => !job.pending && (job.state === "running" || job.state === "queued"),
     );
     for (const job of active) dispatch({ type: "cancelRequested", id: job.id });
+    for (const job of all) {
+      if (job.pending) {
+        cancelOnClaimRef.current.add(job.id);
+      }
+      // A schedule is a download that has not started; cancelling everything
+      // includes it. It stays in the list as cancelled, with its retry button.
+      if (job.state === "scheduled" && !startingRef.current.has(job.id)) {
+        dispatch({
+          type: "status",
+          payload: { id: job.id, kind: job.kind, state: "cancelled" },
+        });
+      }
+    }
     try {
       await ipc.cancelAllJobs();
     } catch (error) {
@@ -715,7 +773,10 @@ export function JobsProvider({
       cancelAll,
       retry,
       retryFailed,
-      remove: (id) => dispatch({ type: "remove", id }),
+      remove: (id) => {
+        if (startingRef.current.has(id)) removedWhileStartingRef.current.add(id);
+        dispatch({ type: "remove", id });
+      },
       select: (id) => dispatch({ type: "select", id }),
       clearFinished: () => dispatch({ type: "clearFinished" }),
       reveal,
