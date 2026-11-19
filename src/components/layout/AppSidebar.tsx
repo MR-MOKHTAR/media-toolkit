@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 
 import { useNavigation, type Route } from "../../app/navigation";
 import { TOOLS } from "../../app/tools";
+import { APP_VERSION } from "../../lib/appVersion";
 import { cn } from "../../lib/cn";
 import { isActiveJob } from "../../features/jobs/types";
 import { useJobs } from "../../features/jobs/useJobs";
@@ -68,7 +69,10 @@ export function AppSidebar({
     <nav
       aria-label={t("nav_sidebar")}
       className={cn(
-        "flex shrink-0 flex-col gap-1 border-e border-line bg-surface-soft p-2 pt-0",
+        "glass-chrome relative flex shrink-0 flex-col gap-1 border-e p-2 pt-0",
+        // The rail's inner edge catches the same holographic light as the title
+        // bar's and status bar's, a hairline down its full height.
+        "after:pointer-events-none after:absolute after:inset-y-0 after:-end-px after:w-px after:bg-(image:--gradient-holo) after:opacity-40",
         "transition-[width] duration-(--duration-fast)",
         collapsed ? "w-14" : "w-60",
       )}
@@ -99,7 +103,7 @@ export function AppSidebar({
 
         <IconButton
           label={collapsed ? t("sidebar_expand") : t("sidebar_collapse")}
-          tooltipSide="right"
+          tooltipSide="end"
           onClick={onToggle}
           aria-expanded={!collapsed}
           className="no-drag"
@@ -111,10 +115,14 @@ export function AppSidebar({
       {/* Scrolls rather than pushing the bottom group off: nine rows plus the
           toggle just fit the 500px minimum window height, and nothing here
           should depend on that staying true. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      {/* The 2px of padding is room for the focus ring: a scroll container
+          clips what its children draw outside their boxes, and the outline
+          with its offset was cut off on both sides of every row. */}
+      <div className="-mx-0.5 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-0.5 py-0.5">
         {TOOLS.map(({ route: target, key, icon }) => (
           <NavItem
             key={key}
+            tool={key}
             icon={icon}
             label={t(`tool_${key}`)}
             collapsed={collapsed}
@@ -132,7 +140,7 @@ export function AppSidebar({
           `to right` -- a physical direction, so the fade ran backwards in
           Persian and Arabic, in the one file whose header insists that
           everything in it be logical. */}
-      <div className="flex flex-col gap-1 border-t border-line pt-2">
+      <div className="flex flex-col gap-1 border-t border-glass-line pt-2">
         <NavItem
           icon={ListChecks}
           label={t("nav_jobs")}
@@ -155,11 +163,34 @@ export function AppSidebar({
           }
         />
       </div>
+
+      {/* Which build this is, in the window's bottom-start corner. Last in
+          the rail and in muted text, because it is something looked up when a
+          bug is being reported, not something read on every visit.
+
+          The line follows the sidebar's direction so it sits on the same edge
+          as the rows above it; only the number itself is pinned ltr -- "v1.5.0"
+          reads the same way in every language, in ASCII digits like every
+          other version string in the app. */}
+      {APP_VERSION && (
+        <p
+          title={t("app_version", { version: APP_VERSION })}
+          className={cn(
+            "shrink-0 truncate pb-1 text-[11px] leading-4 text-fg-muted select-text",
+            collapsed ? "text-center" : "ps-3 text-start",
+          )}
+        >
+          <span dir="ltr" className="tnum">
+            v{APP_VERSION}
+          </span>
+        </p>
+      )}
     </nav>
   );
 }
 
 function NavItem({
+  tool,
   icon: Icon,
   label,
   collapsed,
@@ -167,6 +198,10 @@ function NavItem({
   busy,
   onSelect,
 }: {
+  /** A tool's key: the row then wears that tool's colours (theme.css, "tool
+   *  identity") whichever screen is open, so each tool is recognisable by its
+   *  mark before its name is read. Tasks and Settings have none. */
+  tool?: string;
   icon: LucideIcon;
   label: string;
   collapsed: boolean;
@@ -186,12 +221,15 @@ function NavItem({
       // text to read. No `title` beside it, or the OS tooltip draws on top of
       // the styled one.
       aria-label={label}
+      data-tool={tool}
       className={cn(
         navRow(state),
         // The bar sits on the sidebar's own leading edge, which is the window
         // edge it is docked against.
-        "border-s-2",
+        "relative border-s-2",
         NAV_ROW_MARKER[state],
+        // The row you are on carries the turning holographic rim.
+        active && "holo-rim holo-rim-live",
         collapsed && "justify-center px-0",
         // The hover nudge, as 2px of leading padding rather than a 2px
         // translate.
@@ -212,8 +250,17 @@ function NavItem({
         state === "idle" && !collapsed && "hover:ps-3",
       )}
     >
-      <span className="relative flex shrink-0 items-center">
-        <Icon size={17} />
+      <span
+        className={cn(
+          "relative flex shrink-0 items-center justify-center",
+          // A tool's glyph sits on a small tile of its own gradient, lit when
+          // it is the current screen and dimmed a little when it is not, so
+          // the rail reads as five colours with one of them switched on.
+          tool && "size-7 rounded-sm tool-tile transition-opacity duration-(--duration-fast)",
+          tool && !active && "opacity-80",
+        )}
+      >
+        <Icon size={tool ? 15 : 17} strokeWidth={tool ? 2 : undefined} />
         {/* Collapsed there is no room for a number, but "something is
             happening" is the part worth keeping. */}
         {collapsed && busy && (

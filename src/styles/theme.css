@@ -76,8 +76,9 @@
   --radius-xl: 1.5rem;     /* 24 -- dialogs, tool cards */
 
   /* --------------------------------------------------------- color ---
-   * One accent, one neutral ramp, three semantic, and four hues that exist
-   * only to mark what a file is.
+   * One accent concept, one neutral ramp, three semantic, and four hues that
+   * exist only to mark what a file is. The accent below is the default
+   * (holographic violet); each tool swaps in its own -- see "tool identity".
    *
    * The audio one was removed once, on the theory that icon shape alone
    * could separate audio from video inside a neutral container. It could
@@ -89,30 +90,33 @@
    * results, and they arrive in a list where the eye is scanning for one
    * row. Video still reuses the accent, and document and unknown share the
    * neutral, so seven kinds cost three new colours rather than six. */
-  --color-canvas: #f3f5f9;
+  --color-canvas: #f2f0fa;
   --color-surface: #ffffff;
-  --color-surface-soft: #f7f9fc;
+  --color-surface-soft: #f8f7fd;
   /* The neutral hover fill. Tinted a degree towards the accent rather than
      left on the canvas' blue-grey, so a plain row hover and an accent row
      hover read as the same gesture at two intensities. */
-  --color-surface-hover: #eff6f7;
+  --color-surface-hover: #f1eefc;
 
-  --color-fg: #172033;
-  --color-fg-soft: #526079;
-  --color-fg-muted: #7a8599;
+  --color-fg: #16142e;
+  --color-fg-soft: #4a4868;
+  /* 5.4:1 on white. It was #7a8599, 3.7:1 -- and it is the colour of every
+     hint, every metadata line and every subtitle in the app, so most of the
+     small text was under the 4.5:1 floor. */
+  --color-fg-muted: #5d5b7a;
 
-  --color-line: #dfe4ec;
-  --color-line-strong: #cfd6e2;
+  --color-line: #e2dff0;
+  --color-line-strong: #cfcbe4;
   /* The hairline on a translucent surface. This existed as `border-line/60`
      in six places before it had a name, which meant the glass panels were
      bordered by an undeclared sixth line colour that no dark override could
      reach. Solid rather than an alpha of --color-line: a hairline that blends
      with whatever happens to slide underneath a glass panel is not a hairline. */
-  --color-line-soft: #e4e9f0;
+  --color-line-soft: #e9e6f5;
 
   /* The tint behind a modal or an overlay panel. Was `bg-fg/20` in one place
      and `bg-fg/25` in another, for the same job. */
-  --color-scrim: rgba(23, 32, 51, 0.25);
+  --color-scrim: rgba(22, 20, 46, 0.28);
 
   /* The tooltip. Its own three colours because it is the one surface that has
      to stand apart from whatever it opens over -- the title bar, the rail, a
@@ -120,19 +124,19 @@
      those. It was the glass panel with the soft hairline, and over the white
      title bar that was white on white. Inverted in light: a dark bubble reads
      against the surface and the blue-grey canvas alike. */
-  --color-tooltip: #1d2638;
-  --color-tooltip-fg: #f3f6fb;
-  --color-tooltip-line: #3a475e;
+  --color-tooltip: #1c1a36;
+  --color-tooltip-fg: #f4f3ff;
+  --color-tooltip-line: #3d3a63;
 
   /* A step deeper than the teal the fills would have taken on their own.
      `text-accent` is a small-text colour in a dozen places -- nav rows, chips,
      the checked option in a picker -- and at #0d9488 that text sat at 3.7:1 on
      white, under the 4.5:1 floor. This clears it at 4.8:1 and is the same hue,
      so nothing about the accent reads differently. */
-  --color-accent: #0b8177;
-  --color-accent-hover: #0f766e;
-  --color-accent-soft: #e6fbf7;
-  --color-accent-line: #a7e8de;
+  --color-accent: #5b3fd1;
+  --color-accent-hover: #4c32b8;
+  --color-accent-soft: #efebff;
+  --color-accent-line: #c9bdf7;
   --color-on-accent: #ffffff;
 
   /* Green, not the blue-green it was. The accent is teal now, and a success
@@ -141,6 +145,14 @@
   --color-success: #12924e;
   --color-danger: #db3d4b;
   --color-warning: #d4870d;
+  /* The same three hues a step deeper, for small text. The fills and ticks
+     above stay as they are; as 12px text on white they measured 4.0:1, 4.4:1
+     and 2.9:1 -- the warning under the download field and the offline banner
+     were the hardest things in the app to read. Dark mode has room at the
+     base colours and simply repeats them. */
+  --color-success-text: #0f7a41;
+  --color-danger-text: #c42b3a;
+  --color-warning-text: #a65f00;
 
   /* Audio. Far enough from the accent blue to read as a different kind at a
      glance, and not close to danger red or success green. */
@@ -162,23 +174,25 @@
   --duration-fast: 120ms;
   --duration-base: 200ms;
 
-  --shadow-panel: 0 18px 55px rgba(31, 43, 68, 0.16);
+  --shadow-panel: 0 18px 55px rgba(40, 30, 96, 0.18);
   /* The form card. Far lighter than the panel shadow above: a card that sits
      in the middle of the canvas needs to lift off it, not float over it. */
-  --shadow-card: 0 10px 30px rgba(31, 43, 68, 0.07);
+  --shadow-card: 0 10px 30px rgba(40, 30, 96, 0.08);
   /* Hover. Every lift in the app used Tailwind's own `shadow-md`, which is
      pure black at 10% -- invisible against the #111824 surface dark mode
      paints cards on, so the interaction simply vanished in one theme. A token
      gets the dark override the defaults can never have. */
-  --shadow-raise: 0 6px 18px rgba(31, 43, 68, 0.1);
+  --shadow-raise: 0 6px 18px rgba(40, 30, 96, 0.12);
 
   /* ------------------------------------------------------- modern ---
    * Gradients, glows and glass for the modernisation pass. Every token
    * here is consumed only by the components that were updated; nothing
    * in the base layer depends on them, so the old look is still the
    * fallback if a class is missing. */
-  --gradient-accent: linear-gradient(135deg, #0b8177, #22c7b8);
-  --gradient-accent-hover: linear-gradient(135deg, #0f766e, #10a99b);
+  /* Dark enough end to end for the white label on a primary button: the light
+     end was #22c7b8, where "Start download" read at about 2:1. */
+  --gradient-accent: linear-gradient(135deg, #4f46e5, #9333ea);
+  --gradient-accent-hover: linear-gradient(135deg, #4338ca, #7e22ce);
   /* The halo that turns behind a tool's mark. Conic rather than linear because
      it is rotated: a linear gradient spun around its centre reverses direction
      twice a turn and reads as a wobble, while a conic one has no seam to catch
@@ -188,21 +202,25 @@
   --gradient-halo: conic-gradient(
     from 0deg,
     transparent 0deg,
-    #22c7b8 90deg,
-    #7048c9 190deg,
+    #2dd4bf 90deg,
+    #a78bfa 190deg,
     transparent 300deg
   );
-  --shadow-glow: 0 0 20px rgba(11, 129, 119, 0.16);
-  --shadow-glow-accent: 0 4px 24px rgba(11, 129, 119, 0.26);
+  --shadow-glow: 0 0 20px rgba(91, 63, 209, 0.18);
+  --shadow-glow-accent: 0 4px 24px rgba(91, 63, 209, 0.28);
 
   /* The ring on a focused text field. A token because it was written out in
      full in three places, and because a focus ring is exactly the kind of
      thing that must be identical everywhere or it reads as a rendering bug.
      The controls that are not typed into keep the global :focus-visible
      outline instead -- one idiom for entry, one for everything else. */
-  --shadow-focus: 0 0 0 3px var(--color-accent-soft), var(--shadow-glow);
+  /* The accent itself, one pixel outside the accent border: a 2px edge a
+     focused field can be found by. It was a 3px ring of accent-soft, which on
+     a white field in light mode is white on white -- focus showed only as the
+     border's change of colour. */
+  --shadow-focus: 0 0 0 1px var(--color-accent), var(--shadow-glow);
 
-  --color-surface-glass: rgba(255, 255, 255, 0.55);
+  --color-surface-glass: rgba(255, 255, 255, 0.6);
   /* A length, not `blur(16px)`, and named into Tailwind's --blur-* namespace
      so it generates `backdrop-blur-glass`. As a full filter function it had no
      working utility form at all: the seven `backdrop-[var(...)]` sites this
@@ -211,6 +229,37 @@
      `backdrop-blur-(--glass-blur)` would not have fixed it either -- that
      expands to blur(blur(16px)). */
   --blur-glass: 16px;
+
+  /* ------------------------------------------------- glass shell ---
+   * The window's chrome and its cards are translucent over a living
+   * background (components/background). Three tiers, each a fill, a blur and
+   * an edge that travel together -- see the `glass-*` utilities below.
+   *
+   * The fills are alphas of the surfaces they replace, so a glass card over a
+   * plain canvas (effects off) still reads as the same white or slate card. */
+  /* Light glass is more opaque than dark: a pale pane over a pale aurora has
+     nothing to separate it, and at 60% the sidebar and the page read as one
+     wash on a modest laptop screen. */
+  --color-chrome-glass: rgba(255, 255, 255, 0.7);
+  --color-card-glass: rgba(255, 255, 255, 0.66);
+  --color-card-glass-hover: rgba(255, 255, 255, 0.84);
+  /* The edge of a glass surface: light catching its rim, not a drawn line. */
+  --color-glass-edge: rgba(255, 255, 255, 0.75);
+  --color-glass-line: rgba(120, 100, 200, 0.22);
+  /* The sheen across the top of a pane. */
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 42%);
+  --blur-card: 14px;
+  --blur-chrome: 22px;
+
+  /* ---------------------------------------------------- background ---
+   * The aurora behind everything. Read by the CSS layer and by the WebGL
+   * scene alike, so both draw the same colours. Registered with @property
+   * below, which is what lets a screen change tint as a transition. */
+  --color-aurora-base: #ece8f8;
+  --color-aurora-1: #2dd4bf;
+  --color-aurora-2: #a78bfa;
+  --color-aurora-3: #60a5fa;
+  --color-aurora-icon: #5b3fd1;
 
   /* ------------------------------------------------------- states ---
    * One disabled treatment. There were four: 40 on the segmented options,
@@ -223,66 +272,498 @@
 /* Dark is a token override, not a second stylesheet. `data-theme` wins in
    both directions so an explicit choice beats the OS preference. */
 @layer theme {
+  /* The holographic layer: one four-hue spectrum, used where the app wants to
+     look like light on a surface rather than paint -- the rims of panes and
+     controls, the hairlines on the window's frame. Not a tool colour: every
+     screen shares it, which is what keeps five tool gradients reading as one
+     product. */
+  :root {
+    --holo-1: #2dd4bf;
+    --holo-2: #60a5fa;
+    --holo-3: #a78bfa;
+    --holo-4: #f472b6;
+    --gradient-holo: linear-gradient(
+      120deg,
+      var(--holo-1),
+      var(--holo-2) 35%,
+      var(--holo-3) 65%,
+      var(--holo-4)
+    );
+    --holo-rim-opacity: 0.55;
+    /* The default identity: Tasks, Settings, anything not a tool. */
+    --tool-a: #4f46e5;
+    --tool-b: #9333ea;
+  }
+
   html.dark {
+    --holo-rim-opacity: 0.7;
+    --tool-a: #60a5fa;
+    --tool-b: #c084fc;
+
     color-scheme: dark;
 
-    --color-canvas: #0c111a;
-    --color-surface: #111824;
-    --color-surface-soft: #151e2c;
-    --color-surface-hover: #17262e;
+    --color-canvas: #07071a;
+    --color-surface: #0e0f22;
+    --color-surface-soft: #13142b;
+    --color-surface-hover: #1a1b38;
 
-    --color-fg: #edf3fb;
-    --color-fg-soft: #a8b4c6;
-    --color-fg-muted: #7f8ca1;
+    --color-fg: #eef0ff;
+    --color-fg-soft: #b0b4d6;
+    --color-fg-muted: #8e93bd;
 
-    --color-line: #263244;
-    --color-line-strong: #344258;
-    --color-line-soft: #1e2837;
-    --color-scrim: rgba(0, 0, 0, 0.5);
+    --color-line: #262845;
+    --color-line-strong: #343660;
+    --color-line-soft: #1c1d36;
+    --color-scrim: rgba(2, 2, 12, 0.55);
 
     /* Lifted rather than inverted: a white bubble in a dark window is a flash.
        Two steps above the surface, with an edge well past line-strong so it
        holds against the canvas and the surface alike. */
-    --color-tooltip: #243044;
-    --color-tooltip-fg: #f4f8fd;
-    --color-tooltip-line: #55657f;
+    --color-tooltip: #1d1e3c;
+    --color-tooltip-fg: #f4f5ff;
+    --color-tooltip-line: #4a4c80;
 
-    --color-accent: #2dd4bf;
-    --color-accent-hover: #5eead4;
-    --color-accent-soft: #0c3b38;
-    --color-accent-line: #1c6b62;
+    --color-accent: #a78bfa;
+    --color-accent-hover: #c4b5fd;
+    --color-accent-soft: #221a4a;
+    --color-accent-line: #4c3a9e;
     /* Near-black on a light teal fill, the same inversion the blue accent
        used: at this lightness the accent is the light surface, so white
        label text on it would sit at barely 1.6:1. */
-    --color-on-accent: #04161a;
+    --color-on-accent: #070814;
 
     --color-success: #45d17f;
     --color-danger: #f06470;
     --color-warning: #f0ac40;
+    --color-success-text: #45d17f;
+    --color-danger-text: #f06470;
+    --color-warning-text: #f0ac40;
 
     --color-media-audio: #a68bfa;
     --color-media-image: #e8944a;
     --color-media-archive: #6aa5fb;
     --color-media-app: #f07aa8;
 
-    --shadow-panel: 0 22px 70px rgba(0, 0, 0, 0.5);
-    --shadow-card: 0 12px 34px rgba(0, 0, 0, 0.32);
-    --shadow-raise: 0 6px 20px rgba(0, 0, 0, 0.42);
+    --shadow-panel: 0 22px 70px rgba(0, 0, 8, 0.6);
+    --shadow-card: 0 12px 34px rgba(0, 0, 8, 0.4);
+    --shadow-raise: 0 6px 20px rgba(0, 0, 8, 0.5);
 
-    --gradient-accent: linear-gradient(135deg, #2dd4bf, #5eead4);
-    --gradient-accent-hover: linear-gradient(135deg, #22b8a6, #4bd8c4);
     --gradient-halo: conic-gradient(
       from 0deg,
       transparent 0deg,
       #2dd4bf 90deg,
-      #a68bfa 190deg,
+      #c084fc 190deg,
       transparent 300deg
     );
-    --shadow-glow: 0 0 24px rgba(45, 212, 191, 0.18);
-    --shadow-glow-accent: 0 4px 28px rgba(45, 212, 191, 0.3);
-    --color-surface-glass: rgba(17, 24, 36, 0.6);
+    --color-surface-glass: rgba(14, 15, 34, 0.62);
     --blur-glass: 20px;
+
+    --color-chrome-glass: rgba(10, 10, 30, 0.55);
+    --color-card-glass: rgba(14, 15, 34, 0.5);
+    --color-card-glass-hover: rgba(24, 25, 52, 0.64);
+    --color-glass-edge: rgba(255, 255, 255, 0.08);
+    --color-glass-line: rgba(167, 139, 250, 0.16);
+    --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 42%);
+
+    --color-aurora-base: #05051a;
+    --color-aurora-1: #0d9488;
+    --color-aurora-2: #6d28d9;
+    --color-aurora-3: #1d4ed8;
+    --color-aurora-icon: #a78bfa;
   }
+
+  /* ------------------------------------------------------ tool identity ---
+   * Every tool owns a gradient. A screen carries it as `data-tint` (on the
+   * window and mirrored onto <html>, so portalled dialogs and toasts follow),
+   * and a single element can carry another tool's as `data-tool` -- each row of
+   * the sidebar does, so every tool keeps its colour while another screen is
+   * open. Only the identity is set here; everything derived from it (the
+   * button gradient, the glows, the focus ring) is computed from --tool-a and
+   * --tool-b by the rule below, so a component never names a tool.
+   *
+   * Light accents are the 700 steps, every one at or over 4.5:1 on white and on
+   * its own soft fill; the button stops all carry a white label at 4.5:1 or
+   * better. Dark inverts the label to near-black on the 300-400 steps. Tasks
+   * and Settings keep the default holographic violet. */
+  [data-tint="download"],
+  [data-tool="download"] {
+    --color-accent: #0e7490;
+    --color-accent-hover: #155e75;
+    --color-accent-soft: #e0f7fa;
+    --color-accent-line: #9fdde6;
+    --tool-a: #0e7490;
+    --tool-b: #0369a1;
+    --color-aurora-1: #2dd4bf;
+    --color-aurora-2: #38bdf8;
+    --color-aurora-3: #a78bfa;
+  }
+  [data-tint="compress"],
+  [data-tool="compress"] {
+    --color-accent: #7c3aed;
+    --color-accent-hover: #6d28d9;
+    --color-accent-soft: #f1eafe;
+    --color-accent-line: #cdb6fb;
+    --tool-a: #7c3aed;
+    --tool-b: #db2777;
+    --color-aurora-1: #a78bfa;
+    --color-aurora-2: #f472b6;
+    --color-aurora-3: #60a5fa;
+  }
+  [data-tint="trim"],
+  [data-tool="trim"] {
+    --color-accent: #c2410c;
+    --color-accent-hover: #9a3412;
+    --color-accent-soft: #fff0e8;
+    --color-accent-line: #fbc4a8;
+    --tool-a: #c2410c;
+    --tool-b: #e11d48;
+    --color-aurora-1: #fb923c;
+    --color-aurora-2: #f472b6;
+    --color-aurora-3: #a78bfa;
+  }
+  [data-tint="convert"],
+  [data-tool="convert"] {
+    --color-accent: #1d4ed8;
+    --color-accent-hover: #1e40af;
+    --color-accent-soft: #e8efff;
+    --color-accent-line: #b3c8fb;
+    --tool-a: #2563eb;
+    --tool-b: #4f46e5;
+    --color-aurora-1: #60a5fa;
+    --color-aurora-2: #818cf8;
+    --color-aurora-3: #2dd4bf;
+  }
+  [data-tint="extractAudio"],
+  [data-tool="extractAudio"] {
+    --color-accent: #a21caf;
+    --color-accent-hover: #86198f;
+    --color-accent-soft: #fbe8fd;
+    --color-accent-line: #eeb2f5;
+    --tool-a: #c026d3;
+    --tool-b: #6d28d9;
+    --color-aurora-1: #e879f9;
+    --color-aurora-2: #a78bfa;
+    --color-aurora-3: #f472b6;
+  }
+  html.dark[data-tint="download"],
+  html.dark [data-tint="download"],
+  html.dark [data-tool="download"] {
+    --color-accent: #2dd4bf;
+    --color-accent-hover: #5eead4;
+    --color-accent-soft: #08303a;
+    --color-accent-line: #146a78;
+    --tool-a: #2dd4bf;
+    --tool-b: #38bdf8;
+    --color-aurora-1: #0d9488;
+    --color-aurora-2: #0369a1;
+    --color-aurora-3: #6d28d9;
+  }
+  html.dark[data-tint="compress"],
+  html.dark [data-tint="compress"],
+  html.dark [data-tool="compress"] {
+    --color-accent: #c084fc;
+    --color-accent-hover: #d8b4fe;
+    --color-accent-soft: #2a1850;
+    --color-accent-line: #5b3aa8;
+    --tool-a: #a78bfa;
+    --tool-b: #f472b6;
+    --color-aurora-1: #6d28d9;
+    --color-aurora-2: #be185d;
+    --color-aurora-3: #1d4ed8;
+  }
+  html.dark[data-tint="trim"],
+  html.dark [data-tint="trim"],
+  html.dark [data-tool="trim"] {
+    --color-accent: #fb923c;
+    --color-accent-hover: #fdba74;
+    --color-accent-soft: #3a1a12;
+    --color-accent-line: #8a3a22;
+    --tool-a: #fb923c;
+    --tool-b: #fb7185;
+    --color-aurora-1: #c2410c;
+    --color-aurora-2: #be185d;
+    --color-aurora-3: #6d28d9;
+  }
+  html.dark[data-tint="convert"],
+  html.dark [data-tint="convert"],
+  html.dark [data-tool="convert"] {
+    --color-accent: #60a5fa;
+    --color-accent-hover: #93c5fd;
+    --color-accent-soft: #14224d;
+    --color-accent-line: #2f4fb0;
+    --tool-a: #60a5fa;
+    --tool-b: #818cf8;
+    --color-aurora-1: #1d4ed8;
+    --color-aurora-2: #4338ca;
+    --color-aurora-3: #0d9488;
+  }
+  html.dark[data-tint="extractAudio"],
+  html.dark [data-tint="extractAudio"],
+  html.dark [data-tool="extractAudio"] {
+    --color-accent: #e879f9;
+    --color-accent-hover: #f0abfc;
+    --color-accent-soft: #3a1240;
+    --color-accent-line: #8a2a99;
+    --tool-a: #e879f9;
+    --tool-b: #a78bfa;
+    --color-aurora-1: #a21caf;
+    --color-aurora-2: #6d28d9;
+    --color-aurora-3: #be185d;
+  }
+  /* Derived from the identity, and declared again on every element that sets
+     one: a custom property that refers to another is resolved where it is
+     declared, so a gradient defined once on :root would keep :root's colours
+     inside every tinted subtree. */
+  :root,
+  [data-tint],
+  [data-tool] {
+    --gradient-accent: linear-gradient(135deg, var(--tool-a), var(--tool-b));
+    --gradient-accent-hover: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--tool-a) 84%, black),
+      color-mix(in oklab, var(--tool-b) 84%, black)
+    );
+    --shadow-glow: 0 0 22px color-mix(in srgb, var(--tool-a) 22%, transparent);
+    --shadow-glow-accent: 0 6px 26px color-mix(in srgb, var(--tool-b) 30%, transparent);
+    --shadow-focus: 0 0 0 1px var(--color-accent), var(--shadow-glow);
+    /* The background's glyphs glow in the screen's own colour -- the CSS layer
+       and the WebGL scene both read this token. */
+    --color-aurora-icon: var(--tool-a);
+  }
+  html.dark,
+  html.dark [data-tint],
+  html.dark [data-tool] {
+    --gradient-accent: linear-gradient(135deg, var(--tool-a), var(--tool-b));
+    --gradient-accent-hover: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--tool-a) 80%, white),
+      color-mix(in oklab, var(--tool-b) 80%, white)
+    );
+    --shadow-glow: 0 0 26px color-mix(in srgb, var(--tool-a) 30%, transparent);
+    --shadow-glow-accent: 0 6px 30px color-mix(in srgb, var(--tool-b) 38%, transparent);
+  }
+
+  /* Effects turned down (Settings › General, or the background giving up on a
+     slow GPU): no blur anywhere and fills opaque enough to read without it.
+     Blur over a moving layer is the expensive half of glass. */
+  html[data-effects="off"] {
+    --holo-rim-opacity: 0.35;
+    --blur-card: 0px;
+    --blur-chrome: 0px;
+    --color-chrome-glass: var(--color-surface);
+    --color-card-glass: var(--color-surface);
+    --color-card-glass-hover: var(--color-surface);
+  }
+}
+
+/* Registered so a change of screen can transition them: an unregistered custom
+   property is a string and snaps. Engines without @property snap too, which is
+   the whole of the fallback. */
+@property --color-aurora-1 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #2dd4bf;
+}
+@property --color-aurora-2 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #a78bfa;
+}
+@property --color-aurora-3 {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #60a5fa;
+}
+@property --tool-a {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #4f46e5;
+}
+@property --tool-b {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #9333ea;
+}
+/* The angle a holographic rim is turned to. Registered so it can be animated;
+   without @property the rim simply stands still. Not inherited: each rim turns
+   on its own. */
+@property --holo-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* ------------------------------------------------------- glass utilities ---
+ * Fill, blur and edge in one class, because the three are only ever right
+ * together -- a blur with an opaque fill is wasted work, a translucent fill
+ * with no blur is muddy, and either without the edge loses the pane's shape
+ * against a busy background. */
+
+/* The window's own frame: title bar, sidebar, status bar, screen toolbars. */
+@utility glass-chrome {
+  background-color: var(--color-chrome-glass);
+  -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+  backdrop-filter: blur(var(--blur-chrome)) saturate(1.4);
+  border-color: var(--color-glass-line);
+}
+
+/* A card on the page. The sheen is a background layer rather than a pseudo
+   element, so it costs nothing and cannot fight a card's own ::before. */
+@utility glass-card {
+  background-color: var(--color-card-glass);
+  background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: blur(var(--blur-card)) saturate(1.3);
+  backdrop-filter: blur(var(--blur-card)) saturate(1.3);
+  border-color: var(--color-glass-line);
+  box-shadow:
+    inset 0 1px 0 var(--color-glass-edge),
+    var(--shadow-card);
+}
+
+/* Glass inside glass: a translucent fill and an edge, no blur of its own --
+   a nested backdrop-filter blurs the pane it sits on, not the background, and
+   pays for it on every frame. */
+@utility glass-inset {
+  background-color: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  border-color: var(--color-glass-line);
+}
+
+/* The light that follows the pointer across an interactive card. The card
+   sets --mx/--my (see lib/spotlight.ts); without them it sits in the centre at
+   zero opacity, so a card that never received a pointer shows nothing. */
+@utility glass-spotlight {
+  position: relative;
+  isolation: isolate;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(
+      320px circle at var(--mx, 50%) var(--my, 50%),
+      color-mix(in srgb, var(--color-accent) 14%, transparent),
+      transparent 70%
+    );
+    opacity: 0;
+    transition: opacity var(--duration-base) var(--ease-out-quart);
+  }
+  &:hover::after {
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------- holo utilities ---
+ * The holographic finish. A rim is a 1px ring drawn by a pseudo element and
+ * masked down to its own border, rather than a border-image or the
+ * background-clip trick: both of those need an opaque fill behind them and
+ * every surface here is translucent glass.
+ *
+ * The element has to be positioned (`relative`, `absolute` or `fixed`); the
+ * utility does not set it, so it cannot fight a dialog's own `fixed`. */
+
+/* A static rim in the four-hue spectrum, or in --rim when the element sets
+   one (a toast rims itself in its status colour). On an element that has a
+   1px border of its own, `[--rim-over:1px]` lays the rim over that border
+   instead of a pixel inside it. The conic gradient is
+   written out here, not taken from a token: a custom property referring to
+   --holo-angle is resolved where it is declared, and the turning in
+   holo-rim-live happens on this pseudo element. */
+@utility holo-rim {
+  &::before {
+    content: "";
+    position: absolute;
+    inset: calc(-1 * var(--rim-over, 0px));
+    border-radius: inherit;
+    padding: 1px;
+    background: var(
+      --rim,
+      conic-gradient(
+        from var(--holo-angle),
+        var(--holo-1),
+        var(--holo-2),
+        var(--holo-3),
+        var(--holo-4),
+        var(--holo-1)
+      )
+    );
+    opacity: var(--rim-opacity, var(--holo-rim-opacity));
+    pointer-events: none;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box exclude,
+      linear-gradient(#000 0 0);
+    transition: opacity var(--duration-base) var(--ease-out-quart);
+  }
+}
+
+/* The same rim, turning. Kept to the few things that are "where you are" --
+   the current sidebar row, the screen's mark, a hovered primary button --
+   because each turning rim repaints over blurred glass every frame. */
+@utility holo-rim-live {
+  &::before {
+    animation: holo-spin 8s linear infinite;
+  }
+}
+
+/* A band of light that crosses the control once on hover. */
+@utility holo-sheen {
+  overflow: hidden;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(
+        115deg,
+        transparent 35%,
+        rgba(255, 255, 255, 0.38) 50%,
+        transparent 65%
+      )
+      no-repeat;
+    background-size: 250% 100%;
+    background-position: 150% 0;
+    opacity: 0;
+  }
+  &:hover::after {
+    opacity: 1;
+    animation: holo-sweep 0.9s var(--ease-out-quart) forwards;
+  }
+}
+
+/* Display text in the screen's own gradient. Titles only -- at body sizes a
+   gradient's light end drops under the contrast floor. */
+@utility holo-text {
+  background-image: linear-gradient(90deg, var(--tool-a), var(--tool-b));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* A tool's mark: its gradient as a fill, the label colour that reads on it,
+   and a lit top edge so the tile looks like a lens rather than a sticker. */
+@utility tool-tile {
+  background-image: linear-gradient(135deg, var(--tool-a), var(--tool-b));
+  color: var(--color-on-accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 10px color-mix(in srgb, var(--tool-a) 32%, transparent);
+}
+
+/* Nothing turns while the window is hidden or effects are off; the rims stay,
+   still. Reduced motion is the global rule at the end of this file. */
+html[data-bg-paused] *::before,
+html[data-bg-paused] *::after {
+  animation-play-state: paused;
+}
+html[data-effects="off"] [class*="holo-rim-live"]::before,
+html[data-effects="off"] [class*="holo-sheen"]::after {
+  animation: none;
 }
 
 @layer base {
@@ -502,5 +983,20 @@
   50% {
     transform: scale(1.12);
     opacity: 0.85;
+  }
+}
+
+/* The holographic rim turning, and the sheen crossing. */
+@keyframes holo-spin {
+  to {
+    --holo-angle: 360deg;
+  }
+}
+@keyframes holo-sweep {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
   }
 }

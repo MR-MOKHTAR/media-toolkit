@@ -4,6 +4,9 @@ import App from "./App";
 import "./index.css";
 import { I18nextProvider } from "react-i18next";
 import i18n from "./i18n";
+import { installSpotlight } from "./lib/spotlight";
+
+installSpotlight();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

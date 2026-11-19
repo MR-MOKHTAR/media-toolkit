@@ -5,6 +5,13 @@ import { useTranslation } from "react-i18next";
 import { ControlGroup } from "../../../components/ui/Card";
 import { Segmented } from "../../../components/ui/Segmented";
 import { formatBytes } from "../../../lib/format";
+import {
+  AUTO_AUDIO,
+  AudioOptions,
+  audioRequest,
+  effectiveKbps,
+  type AudioOptionsValue,
+} from "../components/AudioOptions";
 import type {
   MediaToolConfig,
   MediaToolContext,
@@ -15,11 +22,12 @@ import { defaultOutputName } from "../useMediaJob";
 /** The one value that is not a format: the file decides what comes out. */
 const ORIGINAL = "original";
 
-const FORMATS = ["mp3", "m4a", "wav"] as const;
+const FORMATS = ["mp3", "m4a", "opus", "ogg", "flac", "wav"] as const;
+const LOSSLESS = ["flac", "wav"];
 
-/** What the two lossy formats are asked to produce. Mirrors the encoder
- *  settings in media/ops.rs, so the estimate and the file agree. */
-const KBPS: Record<string, number> = { mp3: 190, m4a: 192 };
+/** What the lossy formats spend when no bitrate is chosen. Mirrors the
+ *  defaults in media/ops.rs, so the estimate and the file agree. */
+const KBPS: Record<string, number> = { mp3: 190, m4a: 160, opus: 128, ogg: 160 };
 
 interface ExtractAudioState {
   /** `original`, or one of FORMATS. */
@@ -33,22 +41,29 @@ interface ExtractAudioState {
    * honest; disabling it for the moment before any answer is a flicker.
    */
   copyExt?: string | null;
+  /** Bitrate, channels, sample rate -- for the formats that encode. */
+  audio: AudioOptionsValue;
+  /** Which audio track, for a file with several (a dubbed film). */
+  track: number;
 }
 
 /** Rough output size, so picking a format is not a guess. WAV is exact --
  *  uncompressed PCM is arithmetic -- and the other two are close, because a
  *  target bitrate is very nearly what VBR delivers over a whole file. */
 function estimateBytes(
-  format: string,
+  state: ExtractAudioState,
   info: NonNullable<MediaToolContext<ExtractAudioState>["info"]>,
 ) {
   const seconds = info.durationSecs;
-  if (format === "wav") {
-    const rate = info.audio?.sampleRate ?? 44_100;
-    const channels = info.audio?.channels || 2;
-    return seconds * rate * channels * 2;
+  const source = info.audioStreams?.[state.track] ?? info.audio;
+  if (LOSSLESS.includes(state.format)) {
+    const rate = state.audio.sampleRate ?? source?.sampleRate ?? 44_100;
+    const channels = state.audio.channels === "mono" ? 1 : source?.channels || 2;
+    // FLAC lands at about 60% of the PCM it encodes.
+    return seconds * rate * channels * 2 * (state.format === "flac" ? 0.6 : 1);
   }
-  return ((KBPS[format] ?? 192) * 1000 * seconds) / 8;
+  const kbps = effectiveKbps(state.audio, KBPS[state.format] ?? 160, source);
+  return (kbps * 1000 * seconds) / 8;
 }
 
 /**
@@ -125,18 +140,44 @@ function ExtractAudioControls({
           },
           ...FORMATS.map((format) => ({
             value: format as string,
-            label: format.toUpperCase(),
-            hint: t(`extract_audio_hint_${format}`),
+            label: format === "opus" ? "Opus" : format.toUpperCase(),
           })),
         ]}
+        columns={4}
       />
+      {state.format !== ORIGINAL && (
+        <p className="text-xs text-fg-muted">{t(`extract_audio_hint_${state.format}`)}</p>
+      )}
+
+      {/* A film with three dubs has three answers to "the audio". */}
+      {(info.audioStreams?.length ?? 0) > 1 && (
+        <Segmented
+          label={t("audio_track")}
+          value={String(state.track)}
+          onChange={(value) => setState((current) => ({ ...current, track: Number(value) }))}
+          options={info.audioStreams!.map((stream, index) => ({
+            value: String(index),
+            label: stream.title || stream.language?.toUpperCase() || t("audio_track_n", { n: index + 1 }),
+            hint: `${stream.codec.toUpperCase()}${stream.channels > 2 ? ` · ${stream.channels}ch` : ""}`,
+          }))}
+        />
+      )}
+
+      {state.format !== ORIGINAL && !LOSSLESS.includes(state.format) && (
+        <AudioOptions
+          value={state.audio}
+          onChange={(audio) => setState((current) => ({ ...current, audio }))}
+          source={info.audioStreams?.[state.track] ?? info.audio}
+          presets={state.format !== "flac"}
+        />
+      )}
 
       {isCopy ? (
         <InstantBadge text={t("instant_copy")} />
       ) : (
         info.durationSecs > 0 && (
           <p className="text-xs text-fg-muted tnum">
-            ≈ {formatBytes(estimateBytes(state.format, info), language)}
+            ≈ {formatBytes(estimateBytes(state, info), language)}
           </p>
         )
       )}
@@ -151,7 +192,7 @@ export const extractAudioTool: MediaToolConfig<ExtractAudioState> = {
   // wrong format is the same job, and refusing it would send someone to Convert
   // to do the identical thing.
   requires: "audio",
-  initialState: { format: ORIGINAL },
+  initialState: { format: ORIGINAL, audio: AUTO_AUDIO, track: 0 },
   Controls: ExtractAudioControls,
   toRequest: ({ path, state }) => {
     const stem = defaultOutputName(path);
@@ -160,7 +201,13 @@ export const extractAudioTool: MediaToolConfig<ExtractAudioState> = {
     const ext =
       state.format === ORIGINAL ? (state.copyExt ?? "m4a") : state.format;
     return {
-      args: { input: path, outputName: stem, format: state.format },
+      args: {
+        input: path,
+        outputName: stem,
+        format: state.format,
+        audio: state.format === ORIGINAL ? undefined : audioRequest(state.audio),
+        streamIndex: state.track,
+      },
       title: `${stem}.${ext}`,
       detail: ext.toUpperCase(),
     };

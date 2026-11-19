@@ -30,16 +30,32 @@ interface Props {
 export function StoragePanel({ notify }: Props) {
   const { t } = useTranslation();
   const [info, setInfo] = useState<LibraryInfo | null>(null);
+  /** The first read failed. Without this the panel sat blank -- an empty path
+   *  and three buttons disabled for good, with nothing saying why. */
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** Which action the wait is for, so the spinner sits on that one: it used
+   *  to turn on the Change button whatever was actually running. */
+  const [busyWith, setBusyWith] = useState<"change" | "other" | null>(null);
 
-  useEffect(() => {
-    void ipc.getLibraryInfo().then(setInfo).catch(() => undefined);
-  }, []);
+  const load = () => {
+    setLoadFailed(false);
+    void ipc
+      .getLibraryInfo()
+      .then(setInfo)
+      .catch(() => setLoadFailed(true));
+  };
+  useEffect(load, []);
 
   /** Every mutation is the same shape: run it, adopt what Rust answers, and
    *  surface the real message when it refuses. */
-  const apply = async (action: () => Promise<LibraryInfo>, success?: string) => {
+  const apply = async (
+    action: () => Promise<LibraryInfo>,
+    success?: string,
+    which: "change" | "other" = "other",
+  ) => {
     setBusy(true);
+    setBusyWith(which);
     try {
       setInfo(await action());
       if (success) notify("success", success);
@@ -47,6 +63,7 @@ export function StoragePanel({ notify }: Props) {
       notify("error", describe(ipc.toAppError(error), t));
     } finally {
       setBusy(false);
+      setBusyWith(null);
     }
   };
 
@@ -59,7 +76,7 @@ export function StoragePanel({ notify }: Props) {
       return;
     }
     if (!selected) return;
-    await apply(() => ipc.setLibraryRoot(selected), t("library_moved"));
+    await apply(() => ipc.setLibraryRoot(selected), t("library_moved"), "change");
   };
 
   const open = async () => {
@@ -71,19 +88,36 @@ export function StoragePanel({ notify }: Props) {
     }
   };
 
+  if (loadFailed && !info) {
+    return (
+      <Card padding="sm" className="flex flex-wrap items-center gap-3">
+        <p className="min-w-0 flex-1 text-sm text-danger-text">{t("load_failed")}</p>
+        <Button variant="secondary" size="sm" onClick={load}>
+          {t("try_again")}
+        </Button>
+      </Card>
+    );
+  }
+
   return (
     <Card padding="sm" className="flex flex-col gap-3">
       {/* Pinned to ltr for the same reason the tool screens' folder row is: a
           path reads one way in every language, and mirroring the row put the
-          buttons on the far side of text that still ran left to right. */}
-      <div dir="ltr" className="flex items-center gap-3">
+          buttons on the far side of text that still ran left to right.
+
+          It wraps: with the sidebar open in a narrow window the three buttons
+          took the whole width, the path shrank to nothing, and the buttons
+          spilled out of the card. Now the path keeps a readable minimum and
+          the buttons move under it. */}
+      <div dir="ltr" className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <FolderOpen size={16} className="shrink-0 text-fg-muted" />
         <span
-          className="min-w-0 flex-1 truncate text-sm text-fg-soft"
+          className="min-w-48 flex-1 truncate text-sm text-fg-soft"
           title={info?.root}
         >
           {info?.root ?? ""}
         </span>
+        <span className="flex shrink-0 flex-wrap items-center gap-1">
         {/* Asks first, because this one moves files. `change` below does not
             need to: the folder picker it opens is its own confirmation, and
             cancelling that is how you back out of it. */}
@@ -106,9 +140,10 @@ export function StoragePanel({ notify }: Props) {
           {t("open_folder")}
         </Button>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => void change()}>
-          {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+          {busyWith === "change" ? <Loader2 size={14} className="animate-spin" /> : null}
           {t("change")}
         </Button>
+        </span>
       </div>
 
       {/* Switches rather than checkboxes: both of these are written to

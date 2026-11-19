@@ -9,6 +9,10 @@ import { cn } from "../../lib/cn";
 interface ModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Something is loaded that a stray click outside would throw away -- a
+   *  picked file with its trim range, a pasted link. Escape and the close
+   *  button still close; only the click that may have been a miss does not. */
+  keepOnOutsideClick?: boolean;
   title: string;
   /** One line under the title. Optional, but a dialog that asks for something
    *  usually has to say what for. */
@@ -44,6 +48,7 @@ interface ModalProps {
 export function Modal({
   open,
   onOpenChange,
+  keepOnOutsideClick,
   title,
   description,
   icon,
@@ -72,7 +77,17 @@ export function Modal({
           // in the capture phase, which runs before anything on window bubbles
           // -- so stopping propagation from inside this callback is enough, and
           // neither component has to know the other exists.
-          onEscapeKeyDown={(event) => event.stopPropagation()}
+          onPointerDownOutside={(event) => {
+            if (keepOnOutsideClick) event.preventDefault();
+          }}
+          onEscapeKeyDown={(event) => {
+            event.stopPropagation();
+            // A field with an Escape of its own -- the trim time fields undo an
+            // edit with it -- keeps the key. Radix's listener runs before the
+            // field's, so without this the whole form closed instead.
+            const target = event.target as HTMLElement | null;
+            if (target?.closest("[data-own-escape]")) event.preventDefault();
+          }}
           // Focus the form, not the way out of it.
           //
           // Radix opens on the first tabbable thing inside the content, which
@@ -101,8 +116,12 @@ export function Modal({
             // header and footer do not.
             "w-[min(36rem,calc(100vw-2rem))] max-h-[calc(100vh-4rem)]",
             "-translate-x-1/2 -translate-y-1/2",
-            "overflow-hidden rounded-xl border border-line-soft shadow-(--shadow-panel)",
-            "bg-surface-glass backdrop-blur-glass",
+            "overflow-hidden rounded-xl border border-line-soft",
+            // The dialog's edge catches the holographic light; its own
+            // hairline stays under it so the edge holds with effects off.
+            "holo-rim [--rim-over:1px] [--rim-opacity:0.6]",
+            "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-panel)]",
+            "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // scale-in animates `scale`, not `transform`: the two centring
             // utilities above compile to the `translate` property, and a
             // transform in the keyframe would be added to them rather than
@@ -116,7 +135,7 @@ export function Modal({
               ConfirmDialog carry. It marks the primary surface. */}
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-x-0 top-0 h-px bg-(image:--gradient-accent) opacity-40"
+            className="pointer-events-none absolute inset-x-0 top-0 h-px bg-(image:--gradient-accent) opacity-80"
           />
 
           <header className="flex shrink-0 items-center gap-3 border-b border-line px-5 py-4">

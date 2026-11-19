@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS = [
   "general",
   "storage",
   "downloads",
+  "network",
   "tools",
 ] as const;
 

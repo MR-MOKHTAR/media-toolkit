@@ -25,7 +25,11 @@ pub struct MediaInfo {
     pub size_bytes: u64,
     pub bit_rate: Option<u64>,
     pub video: Option<VideoStream>,
+    /// The first audio stream, kept for callers that only care about "the" track.
     pub audio: Option<AudioStream>,
+    /// Every audio stream, in file order. Extract-audio lets the user pick one.
+    pub audio_streams: Vec<AudioStream>,
+    pub subtitles: Vec<SubtitleStream>,
 }
 
 impl MediaInfo {
@@ -60,10 +64,29 @@ pub struct VideoStream {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioStream {
+    /// 0-based among the audio streams, i.e. the `N` in `-map 0:a:N`.
+    pub index: usize,
+    pub language: Option<String>,
+    pub title: Option<String>,
     pub codec: String,
     pub channels: u32,
     pub sample_rate: Option<u32>,
     pub bit_rate: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleStream {
+    pub codec: String,
+    pub language: Option<String>,
+    /// Picture-based (PGS, VobSub...). These cannot be converted to text
+    /// subtitles, so mp4/webm targets drop them instead of failing.
+    pub bitmap: bool,
+}
+
+/// Subtitle codecs that are images rather than text.
+pub fn is_bitmap_subtitle(codec: &str) -> bool {
+    matches!(codec, "hdmv_pgs_subtitle" | "dvd_subtitle" | "dvb_subtitle" | "xsub")
 }
 
 // ---------------------------------------------------------- ffprobe's shape
@@ -143,10 +166,38 @@ async fn probe_uncached(app: &AppHandle, path: &Path) -> AppResult<MediaInfo> {
         // as video would offer to resize an audio file.
         .filter(|s| s.width.unwrap_or(0) > 0 && frame_rate(s) > 0.0);
 
+    let audio_streams: Vec<AudioStream> = probe
+        .streams
+        .iter()
+        .filter(|s| s.codec_type.as_deref() == Some("audio"))
+        .enumerate()
+        .map(|(index, s)| AudioStream {
+            index,
+            language: tag(&s.tags, "language"),
+            title: tag(&s.tags, "title"),
+            codec: s.codec_name.clone().unwrap_or_default(),
+            channels: s.channels.unwrap_or(0),
+            sample_rate: s.sample_rate.as_deref().and_then(|v| v.parse().ok()),
+            bit_rate: s.bit_rate.as_deref().and_then(|v| v.parse().ok()),
+        })
+        .collect();
     let audio = probe
         .streams
         .iter()
         .find(|s| s.codec_type.as_deref() == Some("audio"));
+    let subtitles: Vec<SubtitleStream> = probe
+        .streams
+        .iter()
+        .filter(|s| s.codec_type.as_deref() == Some("subtitle"))
+        .map(|s| {
+            let codec = s.codec_name.clone().unwrap_or_default();
+            SubtitleStream {
+                bitmap: is_bitmap_subtitle(&codec),
+                language: tag(&s.tags, "language"),
+                codec,
+            }
+        })
+        .collect();
 
     let size_bytes = probe
         .format
@@ -177,13 +228,18 @@ async fn probe_uncached(app: &AppHandle, path: &Path) -> AppResult<MediaInfo> {
             fps: frame_rate(s),
             bit_rate: s.bit_rate.as_deref().and_then(|v| v.parse().ok()),
         }),
-        audio: audio.map(|s| AudioStream {
-            codec: s.codec_name.clone().unwrap_or_default(),
-            channels: s.channels.unwrap_or(0),
-            sample_rate: s.sample_rate.as_deref().and_then(|v| v.parse().ok()),
-            bit_rate: s.bit_rate.as_deref().and_then(|v| v.parse().ok()),
-        }),
+        audio: audio_streams.first().cloned(),
+        audio_streams,
+        subtitles,
     })
+}
+
+/// Case-insensitive tag lookup; MKV tags are often upper-case.
+fn tag(tags: &HashMap<String, String>, key: &str) -> Option<String> {
+    tags.iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// ffprobe reports frame rate as a rational string like "30000/1001", which is

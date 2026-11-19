@@ -1,0 +1,94 @@
+/* Ambient motion for the empty-state illustrations. Transform and opacity
+   only (plus the progress arc's dash offset), slow and gentle: this is
+   decoration, not a loading indicator. Every animated element needs its own
+   transform box, hence fill-box on the shared base class. */
+/* The illustration as a whole: a soft shadow so the tile lifts off the
+   background, and the pane strengths each theme needs -- a pale tint on a pale
+   aurora vanishes, so light mode gets a whiter, more opaque pane under it. */
+.mtk-ill {
+  --ill-pane-a: 0.34;
+  --ill-pane-b: 0.12;
+  filter: drop-shadow(0 12px 28px color-mix(in srgb, var(--tool-a) 24%, transparent));
+  overflow: visible;
+}
+
+html.dark .mtk-ill {
+  --ill-pane-a: 0.3;
+  --ill-pane-b: 0.08;
+  filter: drop-shadow(0 14px 32px color-mix(in srgb, var(--tool-a) 30%, transparent));
+}
+
+.mtk-ill-pane {
+  fill: rgba(255, 255, 255, 0.62);
+}
+
+html.dark .mtk-ill-pane {
+  fill: rgba(14, 15, 34, 0.45);
+}
+
+.mtk-ill-a {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.mtk-ill-bob { animation-name: mtk-ill-bob; animation-duration: 2.8s; }
+.mtk-ill-sweep { animation-name: mtk-ill-sweep; animation-duration: 4.8s; animation-timing-function: linear; }
+.mtk-ill-squeeze { animation-name: mtk-ill-squeeze; animation-duration: 3.6s; }
+.mtk-ill-push-l { animation-name: mtk-ill-push-l; animation-duration: 3.6s; }
+.mtk-ill-push-r { animation-name: mtk-ill-push-r; animation-duration: 3.6s; }
+.mtk-ill-shrink { animation-name: mtk-ill-shrink; animation-duration: 3.6s; transform-origin: left center; }
+.mtk-ill-glide { animation-name: mtk-ill-glide; animation-duration: 5s; }
+.mtk-ill-pulse { animation-name: mtk-ill-pulse; animation-duration: 3s; }
+.mtk-ill-spin { animation-name: mtk-ill-spin; animation-duration: 6s; animation-timing-function: linear; }
+.mtk-ill-wave { animation-name: mtk-ill-wave; animation-duration: 2.8s; animation-timing-function: ease-out; }
+.mtk-ill-wave-2 { animation-delay: 0.9s; }
+.mtk-ill-wave-3 { animation-delay: 1.8s; }
+.mtk-ill-note { animation-name: mtk-ill-note; animation-duration: 4s; }
+
+@keyframes mtk-ill-bob {
+  0%, 100% { transform: translateY(-3px); }
+  50% { transform: translateY(4px); }
+}
+@keyframes mtk-ill-sweep {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes mtk-ill-squeeze {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(0.9); }
+}
+@keyframes mtk-ill-push-l {
+  0%, 100% { transform: translateX(-3px); }
+  50% { transform: translateX(4px); }
+}
+@keyframes mtk-ill-push-r {
+  0%, 100% { transform: translateX(3px); }
+  50% { transform: translateX(-4px); }
+}
+@keyframes mtk-ill-shrink {
+  0%, 100% { transform: scaleX(1); }
+  50% { transform: scaleX(0.6); }
+}
+@keyframes mtk-ill-glide {
+  0%, 100% { transform: translateX(-34px); }
+  50% { transform: translateX(34px); }
+}
+@keyframes mtk-ill-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes mtk-ill-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes mtk-ill-wave {
+  0% { transform: scale(0.6); opacity: 0; }
+  25% { opacity: 0.9; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+@keyframes mtk-ill-note {
+  0% { transform: translate(0, 6px); opacity: 0; }
+  25% { opacity: 1; }
+  100% { transform: translate(8px, -14px); opacity: 0; }
+}

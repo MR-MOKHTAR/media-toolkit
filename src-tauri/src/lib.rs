@@ -3,13 +3,18 @@ mod commands;
 mod direct;
 mod download;
 mod error;
+mod filetype;
+mod formats;
 mod jobs;
 mod library;
 mod media;
 mod muxed;
+mod network;
 mod paths;
 mod process;
+mod ratelimit;
 mod settings;
+mod tray;
 mod updater;
 
 use jobs::Jobs;
@@ -18,6 +23,13 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, as the plugin asks: a second launch has to be turned away
+        // before anything else starts. It brings the running window forward
+        // instead -- restored if it was minimised -- which is what someone
+        // double-clicking the icon again is actually asking for.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -27,6 +39,13 @@ pub fn run() {
             // "your files go to ~/Downloads/MediaToolkit" is true from the
             // moment the app is installed and the folder is there to be found.
             library::ensure_layout(app.handle());
+
+            // The proxy, the speed limit and the download slots, in force
+            // before the first download asks for any of them.
+            network::init(app.handle());
+
+            // The tray icon, and whether closing the window hides it there.
+            tray::init(app.handle());
 
             // Checking the tools means running them, and yt-dlp takes about two
             // seconds to unpack itself. Do it here, in the background, while the
@@ -58,9 +77,21 @@ pub fn run() {
             commands::list_jobs,
             commands::open_path,
             commands::reveal_in_folder,
+            network::get_network_settings,
+            network::set_network_settings,
+            network::test_proxy,
+            network::test_internet_speed,
+            tray::get_tray_settings,
+            tray::set_close_to_tray,
+            tray::set_tray_labels,
             media::commands::probe_media,
+            media::analyze::analyze_audio,
+            media::analyze::cancel_analysis,
+            media::analyze::allow_preview,
+            media::analyze::make_preview,
             media::commands::estimate_compressed_size,
             media::commands::can_copy_streams,
+            media::commands::convert_preview,
             media::commands::audio_copy_format,
             media::commands::start_compress,
             media::commands::start_trim,
@@ -68,13 +99,33 @@ pub fn run() {
             media::commands::start_extract_audio,
         ])
         .on_window_event(|window, event| {
-            // Without this, killing the window leaves yt-dlp and ffmpeg running
-            // as orphans, still writing to half-finished files.
-            if let tauri::WindowEvent::Destroyed = event {
-                let jobs = window.state::<Jobs>();
-                tauri::async_runtime::block_on(jobs.cancel_all());
+            // The close button hides the window into the tray instead, when
+            // there is a tray to bring it back from. Every route to "close" --
+            // the title bar, Alt+F4, the taskbar -- arrives here.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && tray::hide_on_close() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = tauri::Emitter::emit(window, tray::VISIBILITY_EVENT, false);
+                }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Without this, quitting leaves yt-dlp and ffmpeg running as
+            // orphans, still writing to half-finished files. It is the exit
+            // that is watched rather than the window being destroyed: quitting
+            // from the tray ends the app while its window is merely hidden.
+            if let tauri::RunEvent::Exit = event {
+                let jobs = app.state::<Jobs>();
+                tauri::async_runtime::block_on(async {
+                    jobs.cancel_all().await;
+                    // Long enough for a cancelled job to delete its truncated
+                    // output and record its progress, short enough that
+                    // quitting never feels stuck.
+                    jobs.wait_idle(std::time::Duration::from_secs(3)).await;
+                });
+            }
+        });
 }

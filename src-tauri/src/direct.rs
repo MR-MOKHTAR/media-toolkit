@@ -17,13 +17,14 @@
 //! Which of the two runs is decided in `download::choose_engine`.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use reqwest::header::{
     HeaderMap, HeaderValue, ACCEPT, ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH,
-    CONTENT_RANGE, CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE,
+    CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
 };
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -33,8 +34,9 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::error::{AppError, AppResult};
+use crate::filetype::{self, SNIFF_BYTES};
 use crate::jobs::{CancelSignal, Emitters, JobKind, JobProgress, MediaClass, Stage};
-use crate::paths;
+use crate::{network, paths, ratelimit};
 
 /// One range request's worth of file.
 ///
@@ -43,23 +45,48 @@ use crate::paths;
 /// nothing on the resume.
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
-/// Connections opened against one file.
+/// The most connections opened against one file.
 ///
-/// The same number yt-dlp is given for fragments, and for the same reason: this
-/// is network-bound work, so the core count says nothing about the right
-/// figure. Eight is where a single-stream server-side rate cap stops being the
-/// limit and the line itself starts to be, without looking like an attack to
-/// the host on the other end.
-const CONNECTIONS: usize = 8;
+/// The same reasoning yt-dlp is given for fragments: this is network-bound
+/// work, so the core count says nothing about the right figure. Eight is where
+/// a single-stream server-side rate cap stops being the limit and the line
+/// itself starts to be; sixteen is for the case where eight is still not enough
+/// to fill a fast line -- see `connections_for`.
+const CONNECTIONS: usize = 16;
+
+/// The sockets the app is willing to hold open across *all* the files it is
+/// splitting at once. One download gets the most it can use; four share the
+/// same budget instead of opening four times as many, which is where a host
+/// starts answering 429 and a home router starts dropping connections.
+const SOCKET_BUDGET: usize = 32;
+
+/// No file gets fewer than this, however many are running.
+const MIN_CONNECTIONS: usize = 4;
+
+/// A file smaller than this is never given more than eight connections: with
+/// 4 MiB chunks there is not enough of it to keep sixteen sockets busy, and
+/// the extra handshakes would cost more than they return.
+const WIDE_THRESHOLD: u64 = 256 * 1024 * 1024;
+
+/// How long a socket may deliver nothing before the chunk is abandoned and
+/// asked for again on a fresh connection.
+///
+/// The client-wide read timeout is a minute, which is right for a request that
+/// is slow to begin and wrong for one that stalls in the middle: one stuck
+/// socket held the *last* chunk of a file for a minute while the other seven
+/// workers sat finished, and the download looked frozen at 99%. A new
+/// connection usually lands on a healthy path straight away.
+const STALL_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How often the speed is measured and reported -- on a clock, not when bytes
+/// happen to arrive. A reading that is only taken when data lands cannot say
+/// "nothing is landing", so a stalled line kept showing the last good figure
+/// and then jumped.
+const SAMPLE_EVERY: Duration = Duration::from_millis(250);
 
 /// Below this, one connection wins. Eight TLS handshakes to fetch six megabytes
 /// costs more than it saves.
 const SPLIT_THRESHOLD: u64 = 8 * 1024 * 1024;
-
-/// How much a worker accumulates before reporting. Without it, eight workers
-/// each posting every 16 KB read is a few thousand messages a second to feed a
-/// progress bar that redraws ten times a second.
-const REPORT_EVERY: u64 = 256 * 1024;
 
 /// How often the record of finished chunks is written down. A crash loses at
 /// most this much *bookkeeping* -- the affected chunks are simply fetched
@@ -101,11 +128,6 @@ const WRITE_BUFFER: usize = 1024 * 1024;
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
-/// How much of the body a probe reads to work out what the file is. One TCP
-/// segment's worth: every magic number worth knowing sits in the first few
-/// dozen bytes.
-const SNIFF_BYTES: usize = 512;
-
 /// Content types that are a *description* of a stream rather than the stream.
 /// These are yt-dlp's job -- it fetches every segment and muxes them; fetching
 /// the manifest itself would save a few kilobytes of text.
@@ -122,32 +144,81 @@ const MANIFEST_EXTENSIONS: &[&str] = &["m3u8", "m3u", "mpd"];
 
 /// The shared client.
 ///
-/// One per process: connection pooling across the eight workers is most of why
-/// this is fast, and a client built per download throws the pool away with it.
-/// No overall timeout -- a download legitimately takes an hour -- but a short
-/// connect timeout, so an unreachable host fails in seconds rather than
-/// hanging on the network lane.
-fn client() -> &'static Client {
-    static CLIENT: OnceLock<Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        // `Accept: */*` on every request. A handful of servers answer a request
-        // with no Accept at all with a 406, and a download is by definition
-        // willing to take whatever bytes come back.
-        let mut default_headers = HeaderMap::new();
-        default_headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+/// One per proxy setting: connection pooling across the eight workers is most
+/// of why this is fast, and a client built per download throws the pool away
+/// with it. Rebuilt only when the proxy changes, so a new setting applies to
+/// the next request -- the transfers already running keep the client they
+/// started with. No overall timeout -- a download legitimately takes an hour --
+/// but a short connect timeout, so an unreachable host fails in seconds rather
+/// than hanging on the network lane.
+fn client() -> Client {
+    static CLIENT: OnceLock<RwLock<(Option<String>, Client)>> = OnceLock::new();
+    let proxy = network::proxy();
+    let cell = CLIENT.get_or_init(|| RwLock::new((proxy.clone(), build_client(proxy.as_deref()))));
 
-        Client::builder()
-            .user_agent(USER_AGENT)
-            .default_headers(default_headers)
-            .connect_timeout(Duration::from_secs(20))
-            // Applies to the wait for the *next* chunk of body, not to the
-            // download as a whole: a stalled transfer is a failure, a long one
-            // is not.
-            .read_timeout(Duration::from_secs(60))
-            .pool_max_idle_per_host(CONNECTIONS)
-            .build()
-            .expect("a client with no TLS backend configured cannot be built")
-    })
+    if let Ok(guard) = cell.read() {
+        if guard.0 == proxy {
+            return guard.1.clone();
+        }
+    }
+    let mut guard = cell.write().unwrap_or_else(|poison| poison.into_inner());
+    if guard.0 != proxy {
+        *guard = (proxy.clone(), build_client(proxy.as_deref()));
+    }
+    guard.1.clone()
+}
+
+fn build_client(proxy: Option<&str>) -> Client {
+    // `Accept: */*` on every request. A handful of servers answer a request
+    // with no Accept at all with a 406, and a download is by definition
+    // willing to take whatever bytes come back.
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+
+    let builder = Client::builder()
+        .user_agent(USER_AGENT)
+        .default_headers(default_headers)
+        .connect_timeout(Duration::from_secs(20))
+        // Applies to the wait for the *next* chunk of body, not to the
+        // download as a whole: a stalled transfer is a failure, a long one
+        // is not.
+        .read_timeout(Duration::from_secs(60))
+        // A socket that died silently -- a router that dropped the mapping, a
+        // VPN that reconnected -- is found by the OS in half a minute rather
+        // than whenever the next read times out.
+        .tcp_keepalive(Duration::from_secs(30))
+        .tcp_nodelay(true)
+        .pool_max_idle_per_host(CONNECTIONS);
+    network::proxied(builder, proxy)
+        .build()
+        .expect("a client with no TLS backend configured cannot be built")
+}
+
+/// A small file -- a cover picture -- fetched whole into `path`, through the
+/// same client (and so the same proxy) as every other download.
+///
+/// Refuses anything over `limit` bytes, declared or delivered: a "thumbnail"
+/// URL that turns out to be something else is not worth a disk's worth of it.
+pub async fn fetch_small(url: &str, path: &Path, limit: u64) -> AppResult<()> {
+    let response = client()
+        .get(url)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(AppError::network)?;
+    if !response.status().is_success() {
+        return Err(AppError::network(format!("HTTP {}", response.status())));
+    }
+    if response.content_length().is_some_and(|length| length > limit) {
+        return Err(AppError::network("larger than a picture should be"));
+    }
+    let bytes = response.bytes().await.map_err(AppError::network)?;
+    if bytes.len() as u64 > limit {
+        return Err(AppError::network("larger than a picture should be"));
+    }
+    tokio::fs::write(path, &bytes)
+        .await
+        .map_err(|error| AppError::io(path, error))
 }
 
 /// A GET with this module's client, carrying whatever headers the caller was
@@ -180,59 +251,68 @@ pub struct FileInfo {
     /// the bytes already on disk still belong to the file being asked for --
     /// appending to a stale part file produces a corrupt one, silently.
     tag: Option<String>,
+    /// The first bytes of the body, when the probe read any. `None` for a
+    /// stream the muxed path fetches blind, which nothing has looked at.
+    head: Option<Vec<u8>>,
 }
 
-/// Extensions that make a fetched file a video or an audio file -- the same
-/// lists `lib/fileKind.ts` draws the job card from, so the shelf a file lands on
-/// and the icon it is drawn with cannot disagree.
-const VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "flv", "wmv", "mpg", "mpeg", "3gp", "ogv",
-    "mts", "m2ts", "vob", "divx", "asf", "rm", "rmvb",
-];
-const AUDIO_EXTENSIONS: &[&str] = &[
-    "mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma", "weba", "oga", "m4b", "aiff", "aif",
-    "amr", "ape", "ac3",
-];
-
 impl FileInfo {
-    /// Video or audio, when this file is either, from its name first and its
-    /// declared type second -- the order `fileKindOf` uses on the other side.
+    /// Video or audio, when this file is either -- see `filetype::classify`.
     /// `None` is an answer too: an installer or an archive, which belongs on
-    /// the Files shelf.
+    /// the Files shelf whatever the Video/Audio toggle said.
     pub fn media_class(&self) -> Option<MediaClass> {
-        let extension = self
-            .filename
-            .rsplit_once('.')
-            .map(|(_, ext)| ext.to_ascii_lowercase());
-        match extension.as_deref() {
-            Some(ext) if VIDEO_EXTENSIONS.contains(&ext) => return Some(MediaClass::Video),
-            Some(ext) if AUDIO_EXTENSIONS.contains(&ext) => return Some(MediaClass::Audio),
-            _ => {}
-        }
-        let content_type = self.content_type.as_deref()?;
-        if content_type.starts_with("video/") {
-            Some(MediaClass::Video)
-        } else if content_type.starts_with("audio/") {
-            Some(MediaClass::Audio)
-        } else {
-            None
-        }
+        let (_, extension) = filetype::split_name(&self.filename);
+        filetype::classify(
+            extension.as_deref(),
+            self.content_type.as_deref(),
+            self.head.as_deref(),
+        )
     }
 }
 
-/// Asks a URL what it is, in one request and without reading a body.
-///
-/// `Ok(None)` means "this is a web page" -- hand it to yt-dlp. That is a
-/// verdict, not a failure: it is the answer for every YouTube, Instagram or
-/// Aparat link, which is the overwhelming majority of what gets pasted here.
+/// What one request says a link is.
+#[derive(Debug)]
+pub enum Probe {
+    /// The link is the file.
+    File(FileInfo),
+    /// A web page, or the manifest of a stream: yt-dlp's to extract.
+    Page,
+    /// The server answered, and nothing in the answer says which -- no type,
+    /// no extension, nothing recognisable in the first bytes. Not a page (it
+    /// would have looked like one), so the bytes are fetchable if nothing
+    /// better turns up.
+    Unclear(FileInfo),
+    /// The server would not serve a plain GET: an error status with and
+    /// without a range, or a request that failed for a reason other than the
+    /// network. Sites that want a session do this all the time, and yt-dlp
+    /// may still know how to get past it.
+    Refused,
+}
+
+/// Asks a URL what it is, in one request and without reading more than a
+/// few hundred bytes of body.
 ///
 /// A ranged GET rather than a HEAD. Plenty of CDNs answer HEAD with 405 or
-/// with headers that differ from the real response, while `Range: bytes=0-0`
+/// with headers that differ from the real response, while `Range: bytes=0-511`
 /// is served by anything that serves ranges at all -- and a 206 coming back is
 /// itself the proof that ranges work, which no header can promise as reliably.
-pub async fn probe(url: &str) -> AppResult<Option<FileInfo>> {
+pub async fn probe(url: &str) -> AppResult<Probe> {
+    probe_with(url, None, &[]).await
+}
+
+/// `probe`, carrying `headers`, with `names` as fallbacks for the file's name.
+///
+/// The headers are for a URL yt-dlp resolved, which may only be served to the
+/// client it was resolved for. The names are for a redirect: a pasted
+/// `.../7z2409-x64.exe` that lands on a CDN path named after a hash still
+/// deserves its own name when the server does not send one.
+pub async fn probe_with(
+    url: &str,
+    headers: Option<&HeaderMap>,
+    names: &[&str],
+) -> AppResult<Probe> {
     let range = format!("bytes=0-{}", SNIFF_BYTES - 1);
-    let response = match client().get(url).header(RANGE, range).send().await {
+    let response = match get(url, headers).header(RANGE, range).send().await {
         Ok(response) => response,
         // Offline, DNS, TLS. Reported rather than swallowed: the caller's
         // fallback would be to spawn yt-dlp, which is about to fail the same
@@ -240,18 +320,29 @@ pub async fn probe(url: &str) -> AppResult<Option<FileInfo>> {
         Err(error) if error.is_connect() || error.is_timeout() => {
             return Err(AppError::network(error))
         }
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(Probe::Refused),
+    };
+
+    // A refusal of the *range* is not a refusal of the file. Some servers
+    // answer any ranged request with 403 or 416 and serve the same URL
+    // happily without one -- and every one of those used to fall through to
+    // yt-dlp, which fetched the installer as a "video". One plain GET decides.
+    let response = if response.status().is_success() {
+        response
+    } else {
+        drop(response);
+        match get(url, headers).send().await {
+            Ok(retry) if retry.status().is_success() => retry,
+            Ok(_) => return Ok(Probe::Refused),
+            Err(error) if error.is_connect() || error.is_timeout() => {
+                return Err(AppError::network(error))
+            }
+            Err(_) => return Ok(Probe::Refused),
+        }
     };
 
     let status = response.status();
-    // A refusal says nothing about the file. Sites that want a session answer a
-    // bare GET with 403 all the time, and yt-dlp knows how to get past that --
-    // so this is "not a plain file", not an error.
-    if !status.is_success() {
-        return Ok(None);
-    }
-
-    let headers = response.headers().clone();
+    let response_headers = response.headers().clone();
     let final_url = response.url().clone();
     // Half a kilobyte, then the connection is dropped. Capped rather than
     // trusted: a server that ignores the range answers 200 with the whole file,
@@ -259,51 +350,72 @@ pub async fn probe(url: &str) -> AppResult<Option<FileInfo>> {
     // what it is.
     let head = read_head(response).await;
 
-    let content_type = header_string(&headers, CONTENT_TYPE)
+    let content_type = header_string(&response_headers, CONTENT_TYPE)
         .map(|value| value.split(';').next().unwrap_or("").trim().to_lowercase())
         .filter(|value| !value.is_empty());
 
-    let filename = file_name_for(&headers, &final_url, content_type.as_deref(), sniff(&head));
-
-    if is_web_page(content_type.as_deref(), &filename, &head) {
-        return Ok(None);
-    }
+    let mut fallbacks: Vec<String> = Url::parse(url)
+        .ok()
+        .and_then(|original| last_segment(&original))
+        .into_iter()
+        .collect();
+    fallbacks.extend(names.iter().map(|name| name.to_string()));
+    let filename = file_name_for(
+        &response_headers,
+        &final_url,
+        &fallbacks,
+        content_type.as_deref(),
+        &head,
+    );
 
     let (size_bytes, resumable) = if status == StatusCode::PARTIAL_CONTENT {
-        (total_from_content_range(&headers), true)
+        (total_from_content_range(&response_headers), true)
     } else {
         // The server ignored the range, so Content-Length is the whole file and
         // the only claim about ranges is the header's.
         (
-            header_string(&headers, CONTENT_LENGTH).and_then(|v| v.trim().parse().ok()),
-            accepts_ranges(&headers),
+            header_string(&response_headers, CONTENT_LENGTH).and_then(|v| v.trim().parse().ok()),
+            accepts_ranges(&response_headers),
         )
     };
 
-    Ok(Some(FileInfo {
+    let verdict = verdict(content_type.as_deref(), &filename, &head);
+    let info = FileInfo {
         filename,
         size_bytes,
         resumable,
         content_type,
-        tag: header_string(&headers, ETAG)
-            .or_else(|| header_string(&headers, LAST_MODIFIED)),
-    }))
+        tag: header_string(&response_headers, ETAG)
+            .or_else(|| header_string(&response_headers, LAST_MODIFIED)),
+        head: Some(head),
+    };
+
+    Ok(match verdict {
+        Verdict::File => Probe::File(info),
+        Verdict::Page => Probe::Page,
+        Verdict::Unclear => Probe::Unclear(info),
+    })
 }
 
 /// Runs the download and returns where the finished file landed.
 ///
 /// `output_name` renames the file and keeps whatever extension the server said
 /// it had; without one the server's name is used.
+///
+/// `headers` is for a URL yt-dlp resolved on the app's behalf, which may only
+/// be served to the client it was resolved for; a pasted link passes `None`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     id: &str,
     emitters: &mut Emitters,
     cancel: &CancelSignal,
     url: &str,
+    headers: Option<&HeaderMap>,
     dir: &Path,
     output_name: Option<&str>,
     info: &FileInfo,
 ) -> AppResult<PathBuf> {
-    let (server_stem, ext) = split_name(&info.filename);
+    let (server_stem, ext) = filetype::split_name(&info.filename);
     let stem = output_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -322,7 +434,11 @@ pub async fn run(
     // why two jobs can land on the same one -- the same link started twice, or
     // two links whose files share a name. They take turns rather than writing
     // into one file together; see `paths::PathLock`.
-    let _lock = cancel.guard(paths::lock_path(part.clone())).await?;
+    let _lock = cancel
+        .guard(paths::lock_path_reporting(part.clone(), || {
+            emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Queued));
+        }))
+        .await?;
 
     let transfer = {
         // Scoped, because the closure holds `emitters` for as long as it lives
@@ -331,7 +447,7 @@ pub async fn run(
             emit(emitters, id, downloaded, total, speed);
         };
 
-        transfer(cancel, url, None, &part, info, &mut report).await
+        transfer(cancel, url, headers, &part, info, &mut report).await
     };
 
     let downloaded = match transfer {
@@ -394,6 +510,7 @@ pub async fn fetch_to(
         resumable: true,
         content_type: None,
         tag: tag.map(str::to_string),
+        head: None,
     };
 
     let outcome = transfer(cancel, url, Some(headers), part, &info, report).await;
@@ -423,13 +540,41 @@ async fn transfer(
     }
 }
 
-/// What a worker reports back. Bytes for the bar, chunks for the resume.
-enum Tick {
-    Bytes(u64),
-    /// Bytes reported by an attempt that then failed. Its chunk is fetched
-    /// again from the start, so they are about to arrive a second time.
-    Rewind(u64),
-    Chunk(u32),
+/// How many connections one file gets, given how big it is and how many other
+/// files are being split at the same moment.
+///
+/// More connections is the oldest trick for filling a fast line, and it stops
+/// working the moment it becomes rude: a host that sees thirty-two sockets from
+/// one address answers 429 or starts resetting them. So the number is a share
+/// of `SOCKET_BUDGET` -- all of it for a lone download, a fraction when several
+/// run -- and the widest setting is kept for files big enough to use it.
+fn connections_for(total: u64, active: usize) -> usize {
+    let ceiling = if total >= WIDE_THRESHOLD { CONNECTIONS } else { 8 };
+    (SOCKET_BUDGET / active.max(1)).clamp(MIN_CONNECTIONS, ceiling)
+}
+
+/// Counts the files currently being split, for `connections_for`. Held for the
+/// length of a `segmented` call and released however it ends.
+fn splitting() -> &'static AtomicUsize {
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    &ACTIVE
+}
+
+struct SplitGuard;
+
+impl SplitGuard {
+    /// Registers one more file and returns how many are now being split,
+    /// itself included.
+    fn enter() -> (Self, usize) {
+        let now = splitting().fetch_add(1, Ordering::AcqRel) + 1;
+        (Self, now)
+    }
+}
+
+impl Drop for SplitGuard {
+    fn drop(&mut self) {
+        splitting().fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// What is known to be on disk already, so a retry does not refetch it.
@@ -542,14 +687,21 @@ async fn segmented(
         return Ok(total);
     }
 
-    let (tx, mut rx) = mpsc::channel::<Tick>(256);
+    // Bytes received by this attempt, bumped by every worker on every read.
+    // Counted where the bytes land rather than relayed through a channel in
+    // 256 KB lumps: a line doing 60 KB/s across eight workers took most of a
+    // minute to fill one lump each, so the bar sat still and then lurched.
+    let received = Arc::new(AtomicU64::new(0));
+    let (tx, mut rx) = mpsc::channel::<u32>(256);
     let next = Arc::new(AtomicUsize::new(0));
     let mut workers = JoinSet::new();
 
-    for _ in 0..CONNECTIONS.min(pending.len()) {
+    let (_split, active) = SplitGuard::enter();
+    for _ in 0..connections_for(total, active).min(pending.len()) {
         let queue = Arc::clone(&pending);
         let cursor = Arc::clone(&next);
         let sender = tx.clone();
+        let counter = Arc::clone(&received);
         let url = url.to_string();
         let headers = headers.cloned();
         let part = part.to_path_buf();
@@ -562,10 +714,10 @@ async fn segmented(
                 };
                 let start = u64::from(index) * CHUNK_SIZE;
                 let end = (start + CHUNK_SIZE).min(total) - 1;
-                fetch_chunk(&url, headers.as_ref(), &part, start, end, &sender).await?;
+                fetch_chunk(&url, headers.as_ref(), &part, start, end, &counter).await?;
                 // A full chunk is on disk. Losing this message would only cost
                 // a refetch after a crash, so the send is not worth failing on.
-                let _ = sender.send(Tick::Chunk(index)).await;
+                let _ = sender.send(index).await;
             }
         });
     }
@@ -575,8 +727,11 @@ async fn segmented(
 
     // Seeded with what the previous attempt already put on disk, so the first
     // sample measures this attempt rather than the resume.
-    let mut meter = Meter::new(downloaded);
+    let baseline = downloaded;
+    let mut meter = Meter::new(baseline);
     let mut last_saved = Instant::now();
+    let mut clock = tokio::time::interval(SAMPLE_EVERY);
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -586,23 +741,21 @@ async fn segmented(
                 save_state(part, &state).await;
                 return Err(AppError::Cancelled);
             }
-            tick = rx.recv() => match tick {
+            // The measurement, on its own clock. Reported even when nothing
+            // arrived in between -- that is exactly when the number has to fall.
+            _ = clock.tick() => {
+                // Capped at the total as a last line of defence: whatever the
+                // arithmetic, "120 MB of 100 MB" is never true.
+                downloaded = (baseline + received.load(Ordering::Relaxed)).min(total);
+                // The last report is the finished one, made once below; a tick
+                // that lands as the final bytes do would be a second.
+                if downloaded < total {
+                    report(downloaded, Some(total), meter.sample(downloaded));
+                }
+            }
+            index = rx.recv() => match index {
                 None => break,
-                Some(Tick::Bytes(count)) => {
-                    // Capped at the total as a last line of defence: whatever
-                    // the arithmetic, "120 MB of 100 MB" is never true.
-                    downloaded = (downloaded + count).min(total);
-                    report(downloaded, Some(total), meter.sample(downloaded));
-                }
-                Some(Tick::Rewind(count)) => {
-                    downloaded = downloaded.saturating_sub(count);
-                    // The meter keeps its own baseline; a count that goes
-                    // backwards would read as zero speed for one sample, which
-                    // is closer to the truth than a spike.
-                    meter.rebase(downloaded);
-                    report(downloaded, Some(total), meter.sample(downloaded));
-                }
-                Some(Tick::Chunk(index)) => {
+                Some(index) => {
                     state.done.push(index);
                     if last_saved.elapsed() >= STATE_INTERVAL {
                         save_state(part, &state).await;
@@ -631,58 +784,63 @@ async fn segmented(
         return Err(error);
     }
 
+    // Said once, from the counter itself, so the last report is the true end of
+    // the file whichever way the clock and the workers happened to interleave.
+    downloaded = (baseline + received.load(Ordering::Relaxed)).min(total);
+    report(downloaded, Some(total), meter.sample(downloaded));
+
     Ok(total)
 }
 
 /// Fetches one range into its place in the file.
 ///
 /// Every attempt starts the range over, so the bytes a failed attempt already
-/// reported are taken back before the next one begins. They were not, which
-/// is how a download came to show more received than the file holds: each
-/// retried chunk was counted once per attempt. On one download on a quiet line
-/// retries were rare enough to hide it; two or three downloads sharing a
-/// connection retry constantly, and the figure climbed well past the size.
+/// counted are taken back before the next one begins. They were not, which is
+/// how a download came to show more received than the file holds: each retried
+/// chunk was counted once per attempt. On one download on a quiet line retries
+/// were rare enough to hide it; two or three downloads sharing a connection
+/// retry constantly, and the figure climbed well past the size.
 async fn fetch_chunk(
     url: &str,
     headers: Option<&HeaderMap>,
     part: &Path,
     start: u64,
     end: u64,
-    sender: &mpsc::Sender<Tick>,
+    received: &AtomicU64,
 ) -> AppResult<()> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let mut reported = 0u64;
-        let outcome = copy_range(url, headers, part, start, end, sender, &mut reported).await;
+        let mut counted = 0u64;
+        let outcome = copy_range(url, headers, part, start, end, received, &mut counted).await;
         if outcome.is_ok() {
             return Ok(());
         }
-        if reported > 0 {
-            let _ = sender.send(Tick::Rewind(reported)).await;
-        }
+        received.fetch_sub(counted, Ordering::Relaxed);
         match outcome {
             Err(_) if attempt < CHUNK_ATTEMPTS => {
                 // A dropped connection mid-file is ordinary on a home line.
                 // Backing off before retrying is the difference between riding
                 // out a two-second outage and failing an hour-long download.
-                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                // Short for the first retry -- a stall abandoned by the
+                // watchdog wants a fresh socket now, not in half a second.
+                tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
             }
             other => return other,
         }
     }
 }
 
-/// `reported` counts what this attempt has told the progress bar, so the caller
-/// can take it back if the attempt fails.
+/// `counted` is what this attempt has added to `received`, so the caller can
+/// take it back if the attempt fails.
 async fn copy_range(
     url: &str,
     headers: Option<&HeaderMap>,
     part: &Path,
     start: u64,
     end: u64,
-    sender: &mpsc::Sender<Tick>,
-    reported: &mut u64,
+    received: &AtomicU64,
+    counted: &mut u64,
 ) -> AppResult<()> {
     let mut response = get(url, headers)
         .header(RANGE, format!("bytes={start}-{end}"))
@@ -711,32 +869,42 @@ async fn copy_range(
     // Buffered, and seeked *before* it is wrapped so the buffer never has to be
     // flushed to move the cursor. reqwest hands back whatever a read returned,
     // which on a fast line is 16-64 KB at a time -- so an unbuffered writer
-    // makes a syscall per read, times eight workers, for the whole file. The
+    // makes a syscall per read, times the workers, for the whole file. The
     // buffer turns that into one write per 1 MiB.
     let mut file = tokio::io::BufWriter::with_capacity(WRITE_BUFFER, file);
 
     let mut written = 0u64;
-    let mut unreported = 0u64;
     let limit = end - start + 1;
 
-    while let Some(bytes) = response.chunk().await.map_err(AppError::network)? {
+    loop {
+        // A socket that goes quiet is abandoned, not waited for -- see
+        // `STALL_TIMEOUT`.
+        let next = tokio::time::timeout(STALL_TIMEOUT, response.chunk())
+            .await
+            .map_err(|_| AppError::network("the connection stalled"))?
+            .map_err(AppError::network)?;
+        let Some(bytes) = next else { break };
+
         // A server that ignores the end of the range would otherwise overwrite
         // the chunk after this one.
         let take = bytes.len().min((limit - written) as usize);
         if take == 0 {
             break;
         }
+        // Counted the moment it arrives, before the limit and the disk have had
+        // their say: the speed shown is the line's, and a write that takes a
+        // moment must not make the line look slow.
+        received.fetch_add(take as u64, Ordering::Relaxed);
+        *counted += take as u64;
+
+        // The speed limit, shared by every connection of every download. A
+        // cancel does not wait for this: the worker is aborted where it stands.
+        ratelimit::take(take).await;
         file.write_all(&bytes[..take])
             .await
             .map_err(|error| AppError::io(part, error))?;
 
         written += take as u64;
-        unreported += take as u64;
-        if unreported >= REPORT_EVERY {
-            let _ = sender.send(Tick::Bytes(unreported)).await;
-            *reported += unreported;
-            unreported = 0;
-        }
         if written == limit {
             break;
         }
@@ -748,14 +916,10 @@ async fn copy_range(
 
     if written < limit {
         // Short read: the attempt is retried rather than the chunk being marked
-        // done with a hole in it. What it did report is rewound by the caller.
+        // done with a hole in it. What it counted is taken back by the caller.
         return Err(AppError::network("connection closed before the range ended"));
     }
 
-    if unreported > 0 {
-        let _ = sender.send(Tick::Bytes(unreported)).await;
-        *reported += unreported;
-    }
     Ok(())
 }
 
@@ -769,23 +933,30 @@ async fn single(
     info: &FileInfo,
     report: &mut (dyn FnMut(u64, Option<u64>, Option<f64>) + Send),
 ) -> AppResult<u64> {
-    // Only when the server will serve a range *and* still reports the same
-    // file. Resuming against a server that ignores Range appends the whole file
-    // to what is already there.
-    let existing = match tokio::fs::metadata(part).await {
-        Ok(meta) if info.resumable => meta.len(),
-        _ => 0,
-    };
-    let resume_from = match info.size_bytes {
-        // A part file at or past the full length is finished or wrong; either
-        // way there is nothing useful to continue from.
-        Some(total) if existing >= total => 0,
-        _ => existing,
-    };
+    let resume_from = resumable_bytes(part, info).await;
+
+    // Written before a byte arrives, so the next attempt can tell these bytes
+    // from those of a different file that happens to share the name.
+    save_state(
+        part,
+        &PartState {
+            total: info.size_bytes.unwrap_or(0),
+            chunk: 0,
+            done: Vec::new(),
+            tag: info.tag.clone(),
+        },
+    )
+    .await;
 
     let mut request = get(url, headers);
     if resume_from > 0 {
         request = request.header(RANGE, format!("bytes={resume_from}-"));
+        // The server's own check that the file is still the one those bytes
+        // came from: a changed file answers with all of itself, 200 rather
+        // than 206, and the transfer starts over below instead of appending.
+        if let Some(tag) = info.tag.as_deref() {
+            request = request.header(IF_RANGE, tag);
+        }
     }
     // Cancellable from the first byte. A host that accepts the connection and
     // then sits on the headers would otherwise hold a cancelled job until the
@@ -826,6 +997,13 @@ async fn single(
 
     let mut meter = Meter::new(downloaded);
     report(downloaded, total, None);
+    let mut clock = tokio::time::interval(SAMPLE_EVERY);
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // The same stall rule as a split transfer, applied to the one socket there
+    // is. Here the answer is not a fresh connection for one chunk: the error
+    // ends the attempt, and the retry button resumes from the `.part`.
+    let mut idle_since = Instant::now();
 
     loop {
         let next = tokio::select! {
@@ -834,20 +1012,39 @@ async fn single(
                 let _ = file.flush().await;
                 return Err(AppError::Cancelled);
             }
+            // Reported on a clock as well as on arrival, so a connection that
+            // goes quiet shows its speed falling rather than freezing on the
+            // last good figure.
+            _ = clock.tick() => {
+                if idle_since.elapsed() >= STALL_TIMEOUT * 2 {
+                    let _ = file.flush().await;
+                    return Err(AppError::network("the connection stalled"));
+                }
+                let shown_total = total.map(|total| total.max(downloaded));
+                report(downloaded, shown_total, meter.sample(downloaded));
+                continue;
+            }
             chunk = response.chunk() => chunk.map_err(AppError::network)?,
         };
 
         let Some(bytes) = next else { break };
+        idle_since = Instant::now();
+        // Counted on arrival, ahead of the limit's sleep and the disk write --
+        // see `copy_range`.
+        downloaded += bytes.len() as u64;
         file.write_all(&bytes)
             .await
             .map_err(|error| AppError::io(part, error))?;
-        downloaded += bytes.len() as u64;
-        // A server that sends more than it announced is still sending the
-        // file; what it announced was wrong, and the bar should not say
-        // "105 MB of 100 MB" about it.
-        let shown_total = total.map(|total| total.max(downloaded));
-        report(downloaded, shown_total, meter.sample(downloaded));
+        // The speed limit, given up the moment cancel is pressed.
+        if cancel.guard(ratelimit::take(bytes.len())).await.is_err() {
+            let _ = file.flush().await;
+            return Err(AppError::Cancelled);
+        }
     }
+
+    // The end of the stream, said from the counter: the loop above reports on
+    // its clock, so the last bytes may not have been.
+    report(downloaded, total.map(|total| total.max(downloaded)), meter.sample(downloaded));
 
     file.flush()
         .await
@@ -859,6 +1056,42 @@ async fn single(
         }
     }
     Ok(downloaded)
+}
+
+/// How much of `part` a single-connection transfer may continue from.
+///
+/// Only when the server will serve a range *and* the bytes on disk are known to
+/// be this file's. The name alone used to be enough: `siteA/download.zip` cut
+/// off at 3 MB left a `.part` that `siteB/download.zip` then appended its own
+/// bytes to, and a corrupt zip was reported as finished. The sidecar
+/// `single` writes records the size and version the bytes belong to, and both
+/// have to match -- a file with neither has nothing to match on, and starts
+/// over.
+async fn resumable_bytes(part: &Path, info: &FileInfo) -> u64 {
+    if !info.resumable || (info.tag.is_none() && info.size_bytes.is_none()) {
+        return 0;
+    }
+    let Ok(meta) = tokio::fs::metadata(part).await else {
+        return 0;
+    };
+    let Ok(raw) = tokio::fs::read(state_path(part)).await else {
+        return 0;
+    };
+    let Ok(state) = serde_json::from_slice::<PartState>(&raw) else {
+        return 0;
+    };
+    // `chunk: 0` is this transfer's own record; a segmented one's describes a
+    // file with holes in it, which cannot be appended to.
+    let same_file = state.chunk == 0
+        && state.total == info.size_bytes.unwrap_or(0)
+        && state.tag == info.tag;
+    match (same_file, info.size_bytes) {
+        (false, _) => 0,
+        // A part file at or past the full length is finished or wrong; either
+        // way there is nothing useful to continue from.
+        (true, Some(total)) if meta.len() >= total => 0,
+        (true, _) => meta.len(),
+    }
 }
 
 // -------------------------------------------------------------- progress
@@ -892,63 +1125,79 @@ fn emit(
     });
 }
 
-/// Turns a stream of arrival times into a rate worth showing.
+/// Turns a running byte count into a rate worth showing.
 ///
-/// Smoothed, because the raw figure between two 250 ms samples swings by a
-/// factor of three on a healthy connection and a number that jumps like that
-/// reads as broken. The ETA is computed from this, so the smoothing is what
-/// stops "4 minutes left" from becoming "40 seconds left" and back twice a
-/// second.
-struct Meter {
-    last: Instant,
-    last_bytes: u64,
+/// The rate is bytes gained over the last few seconds divided by those seconds
+/// -- a sliding window, not a smoothed instant. The two things it replaces each
+/// failed in its own way: the raw gap between two 250 ms samples swings by a
+/// factor of three on a healthy line, and an exponential average updated only
+/// when data happened to arrive weighted a one-second silence the same as a
+/// tenth of a second, so the figure lurched whenever the line hiccupped.
+///
+/// A window is also honest about a stall. When nothing arrives the oldest
+/// samples age out and the rate falls to zero over a few ticks, instead of
+/// freezing on the last good number and then jumping. The ETA is computed from
+/// this, so the same property is what keeps "4 minutes left" from becoming
+/// "40 seconds left" and back twice a second.
+pub(crate) struct Meter {
+    /// `(when, bytes so far)`, oldest first. Never empty.
+    window: VecDeque<(Instant, u64)>,
     rate: Option<f64>,
 }
 
 impl Meter {
-    const INTERVAL: Duration = Duration::from_millis(400);
+    /// How far back the rate looks. Long enough to ride out a burst, short
+    /// enough that a change of pace shows up within a couple of seconds.
+    const WINDOW: Duration = Duration::from_secs(3);
+    /// Less than this and the division is mostly noise.
+    const MIN_SPAN: Duration = Duration::from_millis(400);
 
     /// `start` is what the transfer has *already* got -- the resume offset, or
     /// zero for a fresh download.
     ///
     /// It used to be hard-coded to zero, which was right exactly once. A resumed
     /// download begins with `downloaded` already at, say, 50 MiB, so the first
-    /// sample divided all 50 MiB by the 400 ms window and reported 125 MB/s --
-    /// with an ETA to match -- and then took several seconds of the EMA below to
-    /// decay back to the truth. The number the user watches was wrong for the
+    /// sample divided all 50 MiB by the first window and reported 125 MB/s --
+    /// with an ETA to match. The number the user watches was wrong for the
     /// first few seconds of every retry, which is precisely when they are
     /// looking at it.
-    fn new(start: u64) -> Self {
+    pub(crate) fn new(start: u64) -> Self {
         Self {
-            last: Instant::now(),
-            last_bytes: start,
+            window: VecDeque::from([(Instant::now(), start)]),
             rate: None,
         }
     }
 
-    /// Moves the baseline without taking a sample, for a count that went
-    /// backwards -- a retried chunk giving back what it had reported.
-    fn rebase(&mut self, downloaded: u64) {
-        self.last_bytes = self.last_bytes.min(downloaded);
-    }
-
     /// Bytes per second, or `None` until there is enough of a window to divide
-    /// by. Returns the last figure between samples so the number on screen does
-    /// not blink out.
-    fn sample(&mut self, downloaded: u64) -> Option<f64> {
-        let elapsed = self.last.elapsed();
-        if elapsed < Self::INTERVAL {
+    /// by.
+    pub(crate) fn sample(&mut self, downloaded: u64) -> Option<f64> {
+        let now = Instant::now();
+
+        // A count that went backwards -- a retried chunk giving back what it
+        // had counted -- lowers the whole window with it, so the gap is not
+        // read as negative speed and the bytes about to be fetched again are
+        // not read as a burst.
+        if let Some(&(_, oldest)) = self.window.front() {
+            if downloaded < oldest {
+                for entry in &mut self.window {
+                    entry.1 = entry.1.min(downloaded);
+                }
+            }
+        }
+        self.window.push_back((now, downloaded));
+
+        // Keep one sample at or beyond the edge of the window, so the span
+        // always reaches back as far as the window does.
+        while self.window.len() > 2 && now.duration_since(self.window[1].0) >= Self::WINDOW {
+            self.window.pop_front();
+        }
+
+        let &(then, bytes) = self.window.front()?;
+        let span = now.duration_since(then);
+        if span < Self::MIN_SPAN {
             return self.rate;
         }
-        let gained = downloaded.saturating_sub(self.last_bytes) as f64;
-        let sample = gained / elapsed.as_secs_f64();
-
-        self.rate = Some(match self.rate {
-            Some(current) => current * 0.7 + sample * 0.3,
-            None => sample,
-        });
-        self.last = Instant::now();
-        self.last_bytes = downloaded;
+        self.rate = Some(downloaded.saturating_sub(bytes) as f64 / span.as_secs_f64());
         self.rate
     }
 }
@@ -1029,152 +1278,111 @@ async fn read_head(mut response: reqwest::Response) -> Vec<u8> {
     head
 }
 
-/// What the bytes themselves say this is.
-///
-/// The last word on a file's type, and the only honest one for the very common
-/// case of a CDN serving everything as `application/octet-stream` from a URL
-/// with no extension in it. Before this, those arrived as `9f8a7b.bin` and were
-/// filed and drawn as an anonymous blob -- which is exactly the "the app should
-/// work out what the file is" problem, seen from the inside.
-///
-/// Deliberately short. Every entry here is a fixed byte sequence at a fixed
-/// offset that cannot be anything else; a guess that is only usually right
-/// would rename files wrongly, which is worse than `.bin`.
-fn sniff(head: &[u8]) -> Option<&'static str> {
-    let starts = |magic: &[u8]| head.starts_with(magic);
-    // The `ftyp` box that opens every ISO base media file names the brand.
-    let brand = |want: &[u8]| head.len() >= 12 && &head[4..8] == b"ftyp" && head[8..].starts_with(want);
-
-    Some(match () {
-        _ if starts(b"%PDF-") => "pdf",
-        _ if starts(b"\x89PNG\r\n\x1a\n") => "png",
-        _ if starts(b"\xff\xd8\xff") => "jpg",
-        _ if starts(b"GIF87a") || starts(b"GIF89a") => "gif",
-        _ if starts(b"RIFF") && head.len() >= 12 => match &head[8..12] {
-            b"WEBP" => "webp",
-            b"WAVE" => "wav",
-            b"AVI " => "avi",
-            _ => return None,
-        },
-        _ if brand(b"M4A") => "m4a",
-        _ if brand(b"qt") => "mov",
-        _ if brand(b"3g") => "3gp",
-        // isom, mp42, avc1, dash, iso5 ... all of them are mp4.
-        _ if head.len() >= 8 && &head[4..8] == b"ftyp" => "mp4",
-        // Matroska and WebM share a container; the DocType a few bytes in is
-        // what separates them.
-        _ if starts(b"\x1a\x45\xdf\xa3") => {
-            if head.windows(4).take(64).any(|w| w == b"webm") {
-                "webm"
-            } else {
-                "mkv"
-            }
-        }
-        _ if starts(b"OggS") => "ogg",
-        _ if starts(b"fLaC") => "flac",
-        _ if starts(b"ID3") || starts(b"\xff\xfb") || starts(b"\xff\xf3") => "mp3",
-        _ if starts(b"PK\x03\x04") => "zip",
-        _ if starts(b"Rar!\x1a\x07") => "rar",
-        _ if starts(b"7z\xbc\xaf\x27\x1c") => "7z",
-        _ if starts(b"\xfd7zXZ\x00") => "xz",
-        _ if starts(b"\x1f\x8b") => "gz",
-        _ if starts(b"BZh") => "bz2",
-        _ if starts(b"\x28\xb5\x2f\xfd") => "zst",
-        _ if starts(b"MSCF") => "cab",
-        _ if starts(b"\xed\xab\xee\xdb") => "rpm",
-        // `!<arch>` is any ar archive; the first member of a .deb names it.
-        _ if starts(b"!<arch>\n") && head.windows(13).any(|w| w == b"debian-binary") => "deb",
-        // The tar magic sits in the header block rather than at the start.
-        _ if head.len() > 262 && &head[257..262] == b"ustar" => "tar",
-        _ if starts(b"MZ") => "exe",
-        // An AppImage is an ELF with its own magic at offset 8. Plain ELF is
-        // left alone: it is a binary, and `.bin` is what we already call one.
-        _ if starts(b"\x7fELF") && head.len() >= 11 && &head[8..11] == b"AI\x02" => "AppImage",
-        _ => return None,
-    })
+/// Which of the three answers a response is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    File,
+    Page,
+    Unclear,
 }
 
-/// Whether this is a page to be extracted rather than a file to be fetched.
-fn is_web_page(content_type: Option<&str>, filename: &str, head: &[u8]) -> bool {
-    let extension = filename
-        .rsplit_once('.')
-        .map(|(_, ext)| ext.to_ascii_lowercase());
+/// Whether this is a page to be extracted or a file to be fetched -- the
+/// bytes first, then the name, then what the server called it.
+///
+/// The bytes come first because they are the one thing a server cannot
+/// mislabel. A page is a page whatever the server calls it: sites that hand
+/// out `application/octet-stream` for their own HTML are not rare. And a binary
+/// is a file whatever the server calls it: an installer served as `text/html`
+/// used to be declared a page and handed to yt-dlp, which fetched it as a
+/// "video" named `<uuid>.unknown_video`.
+fn verdict(content_type: Option<&str>, filename: &str, head: &[u8]) -> Verdict {
+    let (_, extension) = filetype::split_name(filename);
     if extension
         .as_deref()
         .is_some_and(|ext| MANIFEST_EXTENSIONS.contains(&ext))
     {
-        return true;
+        return Verdict::Page;
     }
 
-    // A page is a page whatever the server calls it. Sites that hand out
-    // `application/octet-stream` for their own HTML are not rare, and treating
-    // one as a file saves the markup under the name of its own URL rather than
-    // letting the extractor at it.
-    if looks_like_html(head) {
-        return true;
+    if filetype::looks_like_html(head) {
+        return Verdict::Page;
+    }
+    if filetype::sniff(head).is_some() || filetype::looks_binary(head) {
+        return Verdict::File;
     }
 
     match content_type {
-        Some(value) => {
-            value.starts_with("text/html")
+        Some(value)
+            if value.starts_with("text/html")
                 || value.starts_with("application/xhtml")
-                || MANIFEST_TYPES.contains(&value)
+                || MANIFEST_TYPES.contains(&value) =>
+        {
+            Verdict::Page
         }
-        // No type at all. Only treat it as a file when the link itself carries
-        // an extension -- otherwise `https://site.com/watch/abc` would be
-        // "downloaded" as a few kilobytes of HTML named after its last path
-        // segment, instead of being handed to the extractor.
-        None => extension.is_none(),
+        Some(_) => Verdict::File,
+        // No type at all, and a body that is neither markup nor data. A link
+        // that names a file is one; `https://site.com/watch/abc` answering
+        // with an empty body is not something to save under its own URL
+        // without asking the extractor first.
+        None if extension.is_some() => Verdict::File,
+        None => Verdict::Unclear,
     }
 }
 
-/// Whether the first bytes of the body are markup.
+/// The name to save under, and an extension that says what the file is.
 ///
-/// Only the openings a document actually starts with, so a `<` inside a subtitle
-/// file or an XML feed is not read as a web page.
-fn looks_like_html(head: &[u8]) -> bool {
-    let start = head
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace() && *byte != 0xef && *byte != 0xbb && *byte != 0xbf)
-        .unwrap_or(head.len());
-    let text = String::from_utf8_lossy(&head[start..]).to_ascii_lowercase();
-    text.starts_with("<!doctype html") || text.starts_with("<html") || text.starts_with("<head")
-}
-
-/// The name to save under: what the server says, then what the URL says, then
-/// a fallback -- and an extension inferred from the content type, or from the
-/// file's own first bytes, when the name has none.
+/// What the server says (Content-Disposition) wins outright: it is the name
+/// the server chose deliberately. Failing that, a name from a URL -- the one
+/// the bytes came from, then `fallbacks`, the link as it was pasted before any
+/// redirect -- and the first of those with a real extension, so a pasted
+/// `.../7z2409-x64.exe` is not saved under the hash of the CDN path it
+/// redirected to, nor as the `download.php` that served it.
 ///
-/// Three sources in falling order of how often they are right *and* present.
-/// The name is first because it is what the user will see on disk and the one
-/// the server chose deliberately. Sniffing is last but it is the one that
-/// cannot be fooled, so it is what answers the case the other two leave open: a
-/// CDN serving `application/octet-stream` from `/asset/9f8a7b`.
+/// The extension is then settled by `filetype::best_extension`: kept when it is
+/// a real one, replaced when it is a placeholder or the name of the script that
+/// served the file, and inferred from the content type or the bytes when there
+/// is none.
 fn file_name_for(
     headers: &HeaderMap,
     url: &Url,
+    fallbacks: &[String],
     content_type: Option<&str>,
-    sniffed: Option<&str>,
+    head: &[u8],
 ) -> String {
-    let raw = disposition_name(headers)
-        .or_else(|| {
-            // The last segment that is not empty: a trailing slash would
-            // otherwise name the file "".
-            url.path_segments()?
-                .rfind(|segment| !segment.is_empty())
-                .map(percent_decode)
-        })
-        .unwrap_or_default();
+    let raw = match disposition_name(headers) {
+        Some(name) => name,
+        None => {
+            let names: Vec<String> = last_segment(url)
+                .into_iter()
+                .chain(fallbacks.iter().cloned())
+                .filter(|name| !name.trim().is_empty())
+                .collect();
+            names
+                .iter()
+                .find(|name| {
+                    filetype::split_name(name)
+                        .1
+                        .is_some_and(|ext| filetype::is_real_extension(&ext))
+                })
+                .or_else(|| names.first())
+                .cloned()
+                .unwrap_or_default()
+        }
+    };
 
-    let (stem, ext) = split_name(&raw);
-    let ext = ext
-        .or_else(|| content_type.and_then(extension_for_type).map(str::to_string))
-        .or_else(|| sniffed.map(str::to_string));
-
-    match ext {
+    let (stem, ext) = filetype::split_name(&raw);
+    match filetype::best_extension(ext.as_deref(), content_type, Some(head)) {
         Some(ext) => format!("{stem}.{ext}"),
         None => stem,
     }
+}
+
+/// The last path segment that is not empty, percent-decoded. A trailing slash
+/// would otherwise name the file "".
+fn last_segment(url: &Url) -> Option<String> {
+    url.path_segments()?
+        .rfind(|segment| !segment.is_empty())
+        .map(percent_decode)
 }
 
 /// `filename*=UTF-8''name.zip` first, then `filename="name.zip"`. The starred
@@ -1210,118 +1418,12 @@ fn disposition_name(headers: &HeaderMap) -> Option<String> {
     (!raw.trim().is_empty()).then_some(raw)
 }
 
-/// Splits a file name into a sanitized stem and a lowercase extension.
-///
-/// An "extension" here has to look like one: up to eight characters, letters
-/// and digits only. Without that, `archive.2024.backup` is saved with an
-/// extension of "backup" -- harmless -- but `report.v1 final` gets one of
-/// "v1 final", and a version number in a video title turns into a file the OS
-/// will not open.
-fn split_name(raw: &str) -> (String, Option<String>) {
-    let trimmed = raw.trim().trim_end_matches('/');
-    match trimmed.rsplit_once('.') {
-        Some((stem, ext))
-            if !stem.is_empty()
-                && (1..=8).contains(&ext.len())
-                && ext.chars().all(|c| c.is_ascii_alphanumeric()) =>
-        {
-            (paths::sanitize_stem(stem), Some(ext.to_ascii_lowercase()))
-        }
-        _ => (paths::sanitize_stem(trimmed), None),
-    }
-}
-
-/// Only the types worth naming. Everything else keeps whatever the URL had, or
-/// ends up as `.bin` -- which is honest about not knowing.
-///
-/// The list grew past media once the app started accepting any link: the
-/// extension this returns is what the UI reads the file's kind back out of, so
-/// a package or a document arriving without one in its URL used to be filed and
-/// drawn as an anonymous blob.
-fn extension_for_type(content_type: &str) -> Option<&'static str> {
-    Some(match content_type {
-        "video/mp4" => "mp4",
-        "video/webm" => "webm",
-        "video/x-matroska" => "mkv",
-        "video/quicktime" => "mov",
-        "video/x-msvideo" => "avi",
-        "video/x-flv" | "video/flv" => "flv",
-        "video/mp2t" => "ts",
-        "video/3gpp" => "3gp",
-        "video/ogg" => "ogv",
-        "video/x-ms-wmv" => "wmv",
-        "video/mpeg" => "mpg",
-        "audio/mpeg" | "audio/mp3" => "mp3",
-        "audio/mp4" | "audio/x-m4a" | "audio/m4a" => "m4a",
-        "audio/aac" | "audio/aacp" => "aac",
-        "audio/opus" => "opus",
-        "audio/webm" => "weba",
-        "audio/ogg" => "ogg",
-        "audio/wav" | "audio/x-wav" | "audio/wave" => "wav",
-        "audio/flac" | "audio/x-flac" => "flac",
-        "audio/x-ms-wma" => "wma",
-        "audio/midi" | "audio/x-midi" => "mid",
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => "svg",
-        "image/bmp" | "image/x-ms-bmp" => "bmp",
-        "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
-        "image/tiff" => "tif",
-        "image/avif" => "avif",
-        "image/heic" | "image/heif" => "heic",
-        "application/pdf" => "pdf",
-        "application/rtf" | "text/rtf" => "rtf",
-        "application/zip" | "application/x-zip-compressed" => "zip",
-        "application/x-7z-compressed" => "7z",
-        "application/x-rar-compressed" | "application/vnd.rar" => "rar",
-        "application/gzip" | "application/x-gzip" => "gz",
-        "application/x-tar" => "tar",
-        "application/x-bzip2" => "bz2",
-        "application/x-xz" => "xz",
-        "application/zstd" => "zst",
-        "application/x-iso9660-image" => "iso",
-        "application/x-msdownload"
-        | "application/vnd.microsoft.portable-executable"
-        | "application/x-msdos-program"
-        | "application/exe" => "exe",
-        "application/x-msi" | "application/x-ms-installer" => "msi",
-        "application/x-apple-diskimage" => "dmg",
-        "application/vnd.debian.binary-package" | "application/x-debian-package" => "deb",
-        "application/x-rpm" | "application/x-redhat-package-manager" => "rpm",
-        "application/vnd.android.package-archive" => "apk",
-        "application/java-archive" => "jar",
-        "application/x-bittorrent" => "torrent",
-        "application/vnd.microsoft.portable-executable-appx" | "application/appx" => "appx",
-        "application/json" => "json",
-        "application/xml" | "text/xml" => "xml",
-        "application/x-sh" | "application/x-shellscript" => "sh",
-        "application/epub+zip" => "epub",
-        "application/msword" => "doc",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
-        "application/vnd.ms-excel" => "xls",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
-        "application/vnd.ms-powerpoint" => "ppt",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
-        "application/vnd.oasis.opendocument.text" => "odt",
-        "application/vnd.oasis.opendocument.spreadsheet" => "ods",
-        "application/vnd.oasis.opendocument.presentation" => "odp",
-        "text/csv" => "csv",
-        "text/markdown" => "md",
-        "text/plain" => "txt",
-        "text/vtt" => "vtt",
-        "application/x-subrip" => "srt",
-        _ => return None,
-    })
-}
-
 /// `%D8%A2` back to the bytes it stands for.
 ///
 /// Hand-rolled rather than a dependency: this is the only place the app needs
 /// it, and a malformed sequence has to be passed through rather than rejected,
 /// which is not what a strict decoder does.
-fn percent_decode(raw: &str) -> String {
+pub(crate) fn percent_decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -1512,6 +1614,7 @@ mod tests {
             resumable,
             content_type: Some("application/octet-stream".into()),
             tag: Some("\"v1\"".into()),
+            head: None,
         }
     }
 
@@ -1713,19 +1816,184 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The bug: a `.part` left by one file was continued by any other file
+    /// that happened to share its name, and the result was reported finished.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_part_file_of_another_file_is_not_continued() {
+        let expected = body(300_000);
+        let server = serve(expected.clone(), true);
+
+        let dir = scratch("stranger");
+        let part = dir.join("file.bin.part");
+        // Leftovers with no record of whose they are.
+        std::fs::write(&part, vec![0xAB; 100_000]).unwrap();
+
+        single(
+            &CancelSignal::default(),
+            &server.url,
+            None,
+            &part,
+            &info(expected.len() as u64, true),
+            &mut |_, _, _| {},
+        )
+        .await
+        .expect("the transfer should finish");
+
+        assert_eq!(std::fs::read(&part).unwrap(), expected, "appended to a stranger's bytes");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// And a `.part` this file left behind is continued, not refetched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_single_connection_transfer_resumes_its_own_part() {
+        let expected = body(300_000);
+        let server = serve(expected.clone(), true);
+
+        let dir = scratch("own");
+        let part = dir.join("file.bin.part");
+        let whole = info(expected.len() as u64, true);
+        std::fs::write(&part, &expected[..100_000]).unwrap();
+        save_state(
+            &part,
+            &PartState {
+                total: expected.len() as u64,
+                chunk: 0,
+                done: Vec::new(),
+                tag: whole.tag.clone(),
+            },
+        )
+        .await;
+
+        let mut first = None;
+        single(
+            &CancelSignal::default(),
+            &server.url,
+            None,
+            &part,
+            &whole,
+            &mut |done, _, _| {
+                first.get_or_insert(done);
+            },
+        )
+        .await
+        .expect("the resume should finish");
+
+        assert_eq!(std::fs::read(&part).unwrap(), expected);
+        assert_eq!(first, Some(100_000), "it started where the last attempt stopped");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A probe against something that is unmistakably a file.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn probing_a_file_reports_its_size_and_that_it_can_resume() {
         let server = serve(body(4096), true);
-        let found = probe(&server.url)
+        let Probe::File(found) = probe(&server.url)
             .await
             .expect("the probe should reach the server")
-            .expect("a file, not a page");
+        else {
+            panic!("a file, not a page");
+        };
 
         assert_eq!(found.filename, "file.bin");
         assert_eq!(found.size_bytes, Some(4096));
         assert!(found.resumable);
         assert_eq!(found.tag.as_deref(), Some("\"v1\""));
+    }
+
+    /// Serves whatever `respond` writes, told whether the request carried a
+    /// Range header. For the servers `serve` is too well-behaved to imitate.
+    fn serve_raw(respond: impl Fn(bool) -> Vec<u8> + Send + 'static) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = listener.local_addr().expect("a bound address");
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let Ok(peer) = stream.try_clone() else { continue };
+                let mut reader = BufReader::new(peer);
+                let mut ranged = false;
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                    ranged |= line.to_ascii_lowercase().starts_with("range:");
+                }
+                let _ = stream.write_all(&respond(ranged));
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{addr}/download")
+    }
+
+    fn response(status: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
+        let mut out = format!(
+            "HTTP/1.1 {status}\r\n\
+             Content-Type: {content_type}\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn installer() -> Vec<u8> {
+        let mut exe = b"MZ\x90\0\x03\0\0\0\x04\0\0\0".to_vec();
+        exe.resize(2048, 0);
+        exe
+    }
+
+    /// A server that refuses any ranged request and serves the same URL
+    /// without one. It used to be handed to yt-dlp, which fetched the installer
+    /// as a "video" and filed it under Video.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_range_is_asked_again_without_one() {
+        let exe = installer();
+        let url = serve_raw(move |ranged| {
+            if ranged {
+                response("403 Forbidden", "text/html", b"<html>no ranges</html>")
+            } else {
+                response("200 OK", "application/octet-stream", &exe)
+            }
+        });
+
+        let Probe::File(found) = probe(&url).await.expect("the server is reachable") else {
+            panic!("a file the server serves without a range is still a file");
+        };
+        assert_eq!(found.filename, "download.exe");
+        assert!(!found.resumable, "the server refused ranges");
+        assert_eq!(found.media_class(), None, "an installer is not media");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_installer_served_as_html_is_a_file() {
+        let exe = installer();
+        let url = serve_raw(move |_| response("200 OK", "text/html; charset=utf-8", &exe));
+
+        let Probe::File(found) = probe(&url).await.expect("the server is reachable") else {
+            panic!("the bytes are an executable, whatever the header says");
+        };
+        assert_eq!(found.filename, "download.exe");
+        assert_eq!(found.media_class(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_page_is_still_a_page() {
+        let url = serve_raw(|_| {
+            response("200 OK", "text/html", b"<!DOCTYPE html><html><body>watch</body></html>")
+        });
+        assert!(matches!(probe(&url).await, Ok(Probe::Page)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_server_that_refuses_everything_is_refused() {
+        let url = serve_raw(|_| response("403 Forbidden", "text/plain", b"denied"));
+        assert!(matches!(probe(&url).await, Ok(Probe::Refused)));
     }
 
     /// Cancel has to be felt while bytes are moving, not at the end of the
@@ -1773,10 +2041,20 @@ mod tests {
 
     #[test]
     fn a_page_is_left_to_ytdlp() {
-        assert!(is_web_page(Some("text/html"), "watch", b""));
-        assert!(is_web_page(Some("application/xhtml+xml"), "watch", b""));
-        // No content type and no extension: a route, not a file.
-        assert!(is_web_page(None, "abc123", b""));
+        assert_eq!(verdict(Some("text/html"), "watch", b""), Verdict::Page);
+        assert_eq!(verdict(Some("application/xhtml+xml"), "watch", b""), Verdict::Page);
+        assert_eq!(
+            verdict(Some("text/html; charset=utf-8"), "watch", b"\n\n  <!doctype html>"),
+            Verdict::Page
+        );
+    }
+
+    /// No type, no extension and nothing in the body to go on: not a page and
+    /// not a file yet -- the caller asks yt-dlp before deciding.
+    #[test]
+    fn nothing_to_go_on_is_unclear() {
+        assert_eq!(verdict(None, "abc123", b""), Verdict::Unclear);
+        assert_eq!(verdict(None, "abc123", b"{\"ok\":true}"), Verdict::Unclear);
     }
 
     /// A site that serves its own watch page as a binary blob. Before the body
@@ -1785,79 +2063,86 @@ mod tests {
     #[test]
     fn a_page_mislabelled_as_a_file_is_still_a_page() {
         let html = b"<!DOCTYPE html>\n<html lang=\"en\"><head><title>Watch</title>";
-        assert!(is_web_page(Some("application/octet-stream"), "video", html));
-        assert!(is_web_page(None, "clip.mp4", html));
+        assert_eq!(verdict(Some("application/octet-stream"), "video", html), Verdict::Page);
+        assert_eq!(verdict(None, "clip.mp4", html), Verdict::Page);
         // Leading whitespace and a BOM are not content.
-        assert!(is_web_page(Some("application/octet-stream"), "x", b"\xef\xbb\xbf  <html>"));
+        assert_eq!(
+            verdict(Some("application/octet-stream"), "x", b"\xef\xbb\xbf  <html>"),
+            Verdict::Page
+        );
+    }
+
+    /// The other half of the bug the user reported: an installer served as a
+    /// web page was handed to yt-dlp, which saved it as a "video".
+    #[test]
+    fn a_file_mislabelled_as_a_page_is_still_a_file() {
+        assert_eq!(verdict(Some("text/html"), "download", b"MZ\x90\0\x03\0"), Verdict::File);
+        assert_eq!(verdict(Some("text/html"), "get", b"\x7fELF\x02\x01\x01\0"), Verdict::File);
+        // And a binary that names nothing and declares nothing is still a file.
+        assert_eq!(verdict(None, "abc123", b"\x7fELF\x02\x01\x01\0"), Verdict::File);
     }
 
     #[test]
     fn a_stream_manifest_is_left_to_ytdlp() {
         // Fetching this would save the playlist, not the video.
-        assert!(is_web_page(Some("application/x-mpegurl"), "master.m3u8", b""));
-        assert!(is_web_page(Some("application/dash+xml"), "manifest.mpd", b""));
+        assert_eq!(verdict(Some("application/x-mpegurl"), "master.m3u8", b""), Verdict::Page);
+        assert_eq!(verdict(Some("application/dash+xml"), "manifest.mpd", b""), Verdict::Page);
         // Even when the server sends the wrong type for it.
-        assert!(is_web_page(Some("application/octet-stream"), "master.m3u8", b""));
+        assert_eq!(verdict(Some("application/octet-stream"), "master.m3u8", b""), Verdict::Page);
     }
 
     #[test]
     fn a_file_is_ours() {
-        assert!(!is_web_page(Some("video/mp4"), "clip.mp4", b"\0\0\0\x18ftypisom"));
-        assert!(!is_web_page(Some("application/zip"), "pack.zip", b"PK\x03\x04"));
-        assert!(!is_web_page(Some("application/octet-stream"), "setup.exe", b"MZ"));
+        assert_eq!(verdict(Some("video/mp4"), "clip.mp4", b"\0\0\0\x18ftypisom"), Verdict::File);
+        assert_eq!(verdict(Some("application/zip"), "pack.zip", b"PK\x03\x04"), Verdict::File);
+        assert_eq!(verdict(Some("application/octet-stream"), "setup.exe", b"MZ"), Verdict::File);
         // Server said nothing, but the link names a file.
-        assert!(!is_web_page(None, "notes.pdf", b"%PDF-1.7"));
+        assert_eq!(verdict(None, "notes.pdf", b"%PDF-1.7"), Verdict::File);
         // A subtitle file opens with a tag-shaped line and is not a page.
-        assert!(!is_web_page(Some("text/plain"), "subs.srt", b"1\n00:00:01,000 --> "));
-    }
-
-    /// The answer for the very common CDN that names nothing and declares
-    /// nothing: `/asset/9f8a7b`, `application/octet-stream`, and the bytes.
-    #[test]
-    fn reads_the_type_out_of_the_bytes_themselves() {
-        for (head, want) in [
-            (b"%PDF-1.7\n".as_slice(), "pdf"),
-            (b"PK\x03\x04\x14\0", "zip"),
-            (b"\x89PNG\r\n\x1a\n", "png"),
-            (b"\xff\xd8\xff\xe0", "jpg"),
-            (b"ID3\x04\0\0", "mp3"),
-            (b"fLaC\0\0\0\"", "flac"),
-            (b"OggS\0\x02\0\0", "ogg"),
-            (b"\x1f\x8b\x08\0", "gz"),
-            (b"Rar!\x1a\x07\x01\0", "rar"),
-            (b"MZ\x90\0\x03", "exe"),
-            (b"\0\0\0\x20ftypisom\0\0\x02\0", "mp4"),
-            (b"\0\0\0\x20ftypM4A \0\0\0\0", "m4a"),
-            (b"RIFF\x24\x08\0\0WAVEfmt ", "wav"),
-            (b"RIFF\x24\x08\0\0WEBPVP8 ", "webp"),
-        ] {
-            assert_eq!(sniff(head), Some(want), "{want}");
-        }
-
-        // Matroska and WebM are the same container; only the DocType separates
-        // them, and guessing wrong names a video file after the wrong format.
-        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x01\0\0\0\x1fB\x82\x84webm"), Some("webm"));
-        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x01\0\0\0\x1fB\x82\x88matroska"), Some("mkv"));
-
-        // And it declines rather than guessing, which is what keeps `.bin`
-        // honest for the things it really is.
-        assert_eq!(sniff(b"\0\0\0\0\0\0\0\0"), None);
-        assert_eq!(sniff(b""), None);
+        assert_eq!(verdict(Some("text/plain"), "subs.srt", b"1\n00:00:01,000 --> "), Verdict::File);
     }
 
     #[test]
     fn names_a_file_after_its_own_bytes_when_nothing_else_will() {
         let url = Url::parse("https://cdn.example.com/asset/9f8a7b").unwrap();
         assert_eq!(
-            file_name_for(&headers(&[]), &url, Some("application/octet-stream"), Some("pdf")),
+            file_name_for(&headers(&[]), &url, &[], Some("application/octet-stream"), b"%PDF-1.7"),
             "9f8a7b.pdf"
         );
         // The server's own extension still wins: it is the name the user is
         // about to see on disk, and it was chosen deliberately.
         let url = Url::parse("https://cdn.example.com/setup.msi").unwrap();
+        assert_eq!(file_name_for(&headers(&[]), &url, &[], None, b"MZ\x90\0"), "setup.msi");
+    }
+
+    /// `download.php?id=5` is the program that served the file, not its name.
+    #[test]
+    fn a_script_is_not_the_name_of_what_it_served() {
+        let url = Url::parse("https://files.example.com/download.php?id=5").unwrap();
         assert_eq!(
-            file_name_for(&headers(&[]), &url, None, Some("exe")),
-            "setup.msi"
+            file_name_for(&headers(&[]), &url, &[], Some("application/zip"), b"PK\x03\x04"),
+            "download.zip"
+        );
+        assert_eq!(
+            file_name_for(&headers(&[]), &url, &[], Some("application/octet-stream"), b"MZ\x90\0"),
+            "download.exe"
+        );
+    }
+
+    /// A pasted link that redirects to a CDN path named after a hash keeps the
+    /// name it was pasted with -- unless the server names the file itself.
+    #[test]
+    fn a_redirect_keeps_the_pasted_name() {
+        let url = Url::parse("https://cdn.example.com/1645817e-3677-4207").unwrap();
+        let pasted = vec!["7z2409-x64.exe".to_string()];
+        assert_eq!(
+            file_name_for(&headers(&[]), &url, &pasted, Some("application/octet-stream"), b"MZ\x90\0"),
+            "7z2409-x64.exe"
+        );
+        let named = headers(&[("content-disposition", "attachment; filename=\"7-Zip Setup.exe\"")]);
+        assert_eq!(
+            file_name_for(&named, &url, &pasted, Some("application/octet-stream"), b"MZ\x90\0"),
+            "7-Zip Setup.exe"
         );
     }
 
@@ -1898,54 +2183,19 @@ mod tests {
     #[test]
     fn names_a_file_after_the_url_when_the_server_does_not() {
         let url = Url::parse("https://example.com/files/my%20setup.exe?token=1").unwrap();
-        assert_eq!(file_name_for(&headers(&[]), &url, None, None), "my setup.exe");
+        assert_eq!(file_name_for(&headers(&[]), &url, &[], None, b""), "my setup.exe");
     }
 
     #[test]
     fn infers_a_missing_extension_from_the_content_type() {
         let url = Url::parse("https://cdn.example.com/asset/9f8a7b").unwrap();
         assert_eq!(
-            file_name_for(&headers(&[]), &url, Some("video/mp4"), None),
+            file_name_for(&headers(&[]), &url, &[], Some("video/mp4"), b""),
             "9f8a7b.mp4"
         );
     }
 
-    #[test]
-    fn names_the_types_a_download_is_now_allowed_to_be() {
-        // The extension is not just what the file is saved as any more -- it is
-        // what the download card reads the kind back out of, so a package that
-        // arrives without one in its URL must still be recognisable.
-        for (content_type, want) in [
-            ("application/vnd.android.package-archive", "apk"),
-            ("application/x-msi", "msi"),
-            ("application/x-iso9660-image", "iso"),
-            ("application/x-tar", "tar"),
-            ("application/x-rpm", "rpm"),
-            ("text/csv", "csv"),
-            (
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "xlsx",
-            ),
-        ] {
-            assert_eq!(extension_for_type(content_type), Some(want), "{content_type}");
-        }
 
-        // Still declines to guess, so these keep falling through to `.bin`.
-        assert_eq!(extension_for_type("application/octet-stream"), None);
-    }
-
-    #[test]
-    fn a_version_number_is_not_an_extension() {
-        // "report.v1 final" would otherwise be saved with an extension of
-        // "v1 final", which nothing will open.
-        let (stem, ext) = split_name("report.v1 final");
-        assert_eq!(stem, "report.v1 final");
-        assert_eq!(ext, None);
-
-        let (stem, ext) = split_name("archive.TAR");
-        assert_eq!(stem, "archive");
-        assert_eq!(ext.as_deref(), Some("tar"));
-    }
 
     #[test]
     fn counts_a_short_last_chunk_as_short() {
@@ -1976,6 +2226,63 @@ mod tests {
         // 2 MB/s; the bound is loose because the sleep is only approximate.
         assert!(rate < 10.0 * 1024.0 * 1024.0, "reported {rate} B/s");
         assert!(rate > 0.0, "reported {rate} B/s");
+    }
+
+    /// The bug: the figure was only recomputed when data arrived, so a line
+    /// that went quiet kept showing its last good speed, then jumped. On a clock
+    /// and over a window, silence has to read as silence.
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_line_shows_its_speed_falling_to_nothing() {
+        let mut meter = Meter::new(0);
+        let mut bytes = 0u64;
+        // Two seconds at 1 MiB/s.
+        for _ in 0..8 {
+            tokio::time::advance(Duration::from_millis(250)).await;
+            bytes += 256 * 1024;
+            meter.sample(bytes);
+        }
+        let steady = meter.sample(bytes).expect("a window has passed");
+        assert!((steady - 1_048_576.0).abs() < 150_000.0, "steady at {steady}");
+
+        // Then nothing for four seconds -- longer than the window.
+        let mut last = steady;
+        for _ in 0..16 {
+            tokio::time::advance(Duration::from_millis(250)).await;
+            let rate = meter.sample(bytes).expect("still measuring");
+            assert!(rate <= last + 1.0, "the rate rose during a stall: {rate} after {last}");
+            last = rate;
+        }
+        assert!(last < 1.0, "still showing {last} B/s after four silent seconds");
+    }
+
+    /// Bytes given back by a retried chunk must not read as negative speed, or
+    /// as a burst when they are fetched again.
+    #[tokio::test(start_paused = true)]
+    async fn a_rewind_does_not_read_as_a_burst() {
+        let mut meter = Meter::new(0);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        meter.sample(1_000_000);
+        // A failed attempt gives back 800 KB...
+        tokio::time::advance(Duration::from_millis(250)).await;
+        let after_rewind = meter.sample(200_000).expect("measuring");
+        assert!((0.0..1_500_000.0).contains(&after_rewind), "{after_rewind}");
+        // ...which are then fetched again over the next second.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let refetched = meter.sample(1_000_000).expect("measuring");
+        assert!(refetched < 1_500_000.0, "re-fetching read as {refetched} B/s");
+    }
+
+    #[test]
+    fn a_lone_big_download_gets_the_most_connections_and_a_crowd_shares() {
+        let big = WIDE_THRESHOLD;
+        assert_eq!(connections_for(big, 1), CONNECTIONS);
+        assert_eq!(connections_for(big, 2), CONNECTIONS);
+        assert_eq!(connections_for(big, 4), 8);
+        assert_eq!(connections_for(big, 8), MIN_CONNECTIONS);
+        // Never fewer than the floor, however many are running.
+        assert_eq!(connections_for(big, 100), MIN_CONNECTIONS);
+        // A smaller file is not given more than eight, even alone.
+        assert_eq!(connections_for(64 * 1024 * 1024, 1), 8);
     }
 
     #[test]

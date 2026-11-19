@@ -120,6 +120,80 @@ pub fn claim_output(dir: &Path, stem: &str, ext: &str) -> OutputClaim {
     OutputClaim { path }
 }
 
+/// A stem that belongs to one job, with every extension it may be saved under.
+///
+/// For the engine that picks its own extension: yt-dlp writes `name.mp4` or
+/// `name.webm` or `name.m4a` depending on what the site serves, so a claim on
+/// one path is not enough. Claimed together, a name no other running job holds
+/// under any of those extensions and no finished file already uses -- which is
+/// what stops yt-dlp answering a second video that shares a title with
+/// "has already been downloaded" and reporting the first one's file as its own.
+#[derive(Debug)]
+pub struct StemClaim {
+    stem: String,
+    paths: Vec<PathBuf>,
+}
+
+impl StemClaim {
+    pub fn stem(&self) -> &str {
+        &self.stem
+    }
+}
+
+impl Drop for StemClaim {
+    fn drop(&mut self) {
+        if let Ok(mut claimed) = claimed().lock() {
+            for path in &self.paths {
+                claimed.remove(path);
+            }
+        }
+    }
+}
+
+/// Claims `stem`, or `stem (2)`, `stem (3)` ... -- the first that is free under
+/// every one of `exts` in `dir`. See `StemClaim`.
+pub fn claim_stem(dir: &Path, stem: &str, exts: &[&str]) -> StemClaim {
+    let stem = sanitize_stem(stem);
+    let mut claimed = claimed().lock().unwrap_or_else(|poison| poison.into_inner());
+    let paths_for = |candidate: &str| -> Vec<PathBuf> {
+        exts.iter()
+            .map(|ext| dir.join(format!("{candidate}.{ext}")))
+            .collect()
+    };
+
+    let chosen = std::iter::once(stem.clone())
+        .chain((2..1000).map(|n| format!("{stem} ({n})")))
+        .find(|candidate| {
+            paths_for(candidate)
+                .iter()
+                .all(|path| !path.exists() && !claimed.contains(path))
+        })
+        .unwrap_or_else(|| format!("{stem} ({})", fallback_suffix()));
+
+    let paths = paths_for(&chosen);
+    for path in &paths {
+        claimed.insert(path.clone());
+    }
+    StemClaim {
+        stem: chosen,
+        paths,
+    }
+}
+
+/// A short name for a link that is the same every time the app sees it --
+/// across restarts and upgrades, which `DefaultHasher` does not promise. It
+/// goes into the names of partial files, and a retry a week later has to find
+/// them again. FNV-1a: a dozen lines, no dependency, and collisions between the
+/// links one user downloads into one folder are not a practical concern.
+pub fn short_key(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:08x}", (hash ^ (hash >> 32)) as u32)
+}
+
 /// A suffix no other call in this process has returned.
 fn fallback_suffix() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -145,24 +219,34 @@ pub struct PathLock {
     _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
-/// Waits until no other job holds `key`, then holds it.
-pub async fn lock_path(key: PathBuf) -> PathLock {
-    let mutex = {
-        let mut locks = locks().lock().unwrap_or_else(|poison| poison.into_inner());
-        // Entries whose last holder is gone are dropped as a side effect, so
-        // the map is only ever as large as the set of files being written.
-        locks.retain(|_, weak| weak.strong_count() > 0);
-        match locks.get(&key).and_then(Weak::upgrade) {
-            Some(mutex) => mutex,
-            None => {
-                let mutex = Arc::new(tokio::sync::Mutex::new(()));
-                locks.insert(key, Arc::downgrade(&mutex));
-                mutex
-            }
+/// Waits until no other job holds `key`, then holds it -- calling `on_wait`
+/// first if it has to wait, so a job held up by another one's file can say
+/// so, instead of sitting on "Preparing" for the length of someone else's
+/// download.
+pub async fn lock_path_reporting(key: PathBuf, on_wait: impl FnOnce()) -> PathLock {
+    let mutex = lock_for(key);
+    let guard = match Arc::clone(&mutex).try_lock_owned() {
+        Ok(guard) => guard,
+        Err(_) => {
+            on_wait();
+            mutex.lock_owned().await
         }
     };
-    PathLock {
-        _guard: mutex.lock_owned().await,
+    PathLock { _guard: guard }
+}
+
+fn lock_for(key: PathBuf) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = locks().lock().unwrap_or_else(|poison| poison.into_inner());
+    // Entries whose last holder is gone are dropped as a side effect, so the
+    // map is only ever as large as the set of files being written.
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    match locks.get(&key).and_then(Weak::upgrade) {
+        Some(mutex) => mutex,
+        None => {
+            let mutex = Arc::new(tokio::sync::Mutex::new(()));
+            locks.insert(key, Arc::downgrade(&mutex));
+            mutex
+        }
     }
 }
 
@@ -294,21 +378,73 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The stem is free under every extension yt-dlp might choose, or it is
+    /// not free at all.
+    #[test]
+    fn a_stem_is_claimed_under_every_extension() {
+        let dir = std::env::temp_dir().join(format!("dl-stem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A finished video with this title is already on the shelf.
+        std::fs::write(dir.join("Intro.webm"), b"x").unwrap();
+        let first = claim_stem(&dir, "Intro", &["mp4", "webm", "m4a"]);
+        assert_eq!(first.stem(), "Intro (2)");
+
+        // And a running job holds the next one under all three.
+        let second = claim_stem(&dir, "Intro", &["mp4", "webm", "m4a"]);
+        assert_eq!(second.stem(), "Intro (3)");
+        // ...including for the engines that claim one exact path.
+        let exact = claim_output(&dir, "Intro (2)", "m4a");
+        assert_eq!(exact.path().file_name().unwrap(), "Intro (2) (2).m4a");
+
+        drop((first, second, exact));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_short_key_is_stable_and_distinct() {
+        // Stable across runs: partial files are found again by it.
+        assert_eq!(short_key("https://youtu.be/abc"), short_key("https://youtu.be/abc"));
+        assert_eq!(short_key("https://youtu.be/abc").len(), 8);
+        assert_ne!(short_key("https://youtu.be/abc"), short_key("https://youtu.be/abd"));
+        assert_eq!(short_key(""), "4fd0bfc1");
+    }
+
+    #[tokio::test]
+    async fn a_contended_lock_says_it_is_waiting() {
+        let key = std::env::temp_dir().join("dl-lock-report.part");
+        let mut waited = false;
+        let held = lock_path_reporting(key.clone(), || waited = true).await;
+        assert!(!waited, "a free lock is taken without waiting");
+
+        let waiting = tokio::spawn({
+            let key = key.clone();
+            async move {
+                let mut reported = false;
+                let _lock = lock_path_reporting(key, || reported = true).await;
+                reported
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(held);
+        assert!(waiting.await.unwrap(), "the second job was told it had to wait");
+    }
+
     /// Two jobs on one partial file take turns rather than writing into it
     /// together -- and a different file is never held up by either.
     #[tokio::test]
     async fn a_path_lock_serializes_jobs_on_the_same_file() {
         let key = std::env::temp_dir().join("dl-lock-test.part");
-        let held = lock_path(key.clone()).await;
+        let held = lock_path_reporting(key.clone(), || {}).await;
 
-        let waiting = tokio::spawn(lock_path(key.clone()));
+        let waiting = tokio::spawn(lock_path_reporting(key.clone(), || {}));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(!waiting.is_finished(), "the second job must wait its turn");
 
         // Unrelated files are not serialized behind it.
         let other = tokio::time::timeout(
             std::time::Duration::from_millis(200),
-            lock_path(key.with_extension("other")),
+            lock_path_reporting(key.with_extension("other"), || {}),
         )
         .await;
         assert!(other.is_ok());

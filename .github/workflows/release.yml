@@ -3,10 +3,30 @@ on:
   push:
     tags:
       - "v*"
+    # Every push to these branches builds the installers too, so a fresh build
+    # is always waiting in the run's artifacts. tagName is empty on these runs,
+    # which makes tauri-action build without creating or touching a release --
+    # only a `v*` tag publishes one.
+    branches:
+      - main
+      - "feat/**"
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   workflow_dispatch:
+
+# A newer push to the same branch makes the older build pointless; cancel it.
+# Tag runs never cancel each other -- each one is a release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   release:
+    # A "chore: release vX.Y.Z" commit is pushed together with its tag, and the
+    # tag run already builds exactly that commit. Skip the branch run for it
+    # instead of building the same installers twice.
+    if: "github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'chore: release')"
     permissions:
       contents: write
     strategy:
@@ -19,9 +39,24 @@ jobs:
           # older ones. Building on the oldest supported image is the only lever
           # for that, and 24.04 is now the oldest.
           - platform: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
             args: "--target x86_64-unknown-linux-gnu --bundles deb"
+          # Windows 64-bit Intel/AMD. The installers fetch the WebView2 runtime
+          # when the machine does not have it.
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
             args: "--target x86_64-pc-windows-msvc --bundles nsis,msi"
+          # Windows on ARM (Snapdragon laptops, Surface Pro X and later).
+          # Cross-compiled from the x64 runner, which ships the ARM64 MSVC
+          # tools; the matching yt-dlp and ffmpeg builds come from
+          # tools.lock.json under the `windows-aarch64` key.
+          - platform: windows-latest
+            target: aarch64-pc-windows-msvc
+            args: "--target aarch64-pc-windows-msvc --bundles nsis,msi"
+          # 32-bit Windows is not built: ffmpeg has no maintained win32 build
+          # from a source this project pins (BtbN publishes win64 and
+          # winarm64 only). Add an `i686-pc-windows-msvc` entry here and
+          # `windows-x86` targets in tools.lock.json if that changes.
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -69,7 +104,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+          targets: ${{ matrix.target }}
 
       # Cold Tauri builds are 8-15 min per platform; this is the actual cost
       # centre, not the binary downloads.
@@ -77,7 +112,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: ${{ matrix.platform }}
+          key: ${{ matrix.target }}
 
       # src-tauri/binaries is deliberately NOT cached. build.rs only re-fetches
       # when the pinned URL changes, so a warm cache would freeze yt-dlp at
@@ -125,7 +160,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: installers-${{ matrix.platform }}
+          name: installers-${{ matrix.target }}
           if-no-files-found: warn
           path: |
             src-tauri/target/*/release/bundle/deb/*.deb

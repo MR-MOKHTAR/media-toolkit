@@ -21,9 +21,18 @@ import * as ipc from "../../lib/ipc";
 import { normalizeUrl } from "../../lib/url";
 import type { ToastType } from "../../types/feedback";
 import { describeAppError } from "../jobs/errorText";
+import { describeWhen } from "../jobs/when";
 import { useJobs } from "../jobs/useJobs";
-import type { JobFileKind, LibrarySlot, UrlInfo } from "../jobs/types";
-import type { AudioFormat } from "./useDownloadSettings";
+import type {
+  AudioPrefs,
+  DownloadRequest,
+  JobFileKind,
+  LibrarySlot,
+  PlaylistEntry,
+  UrlInfo,
+  VideoPrefs,
+} from "../jobs/types";
+import { audioDetail } from "./downloadChoices";
 
 interface Options {
   isOnline: boolean;
@@ -39,10 +48,26 @@ interface Options {
 export interface DownloadFormValues {
   url: string;
   mediaType: "video" | "audio";
-  quality: string;
+  /** Resolution (already applied to this video), codec preference, container. */
+  video: VideoPrefs;
   /** What an audio download should end up as. Ignored for video, and for a
    *  direct file link, which is fetched as whatever it already is. */
-  audioFormat: AudioFormat;
+  audio: AudioPrefs;
+  subtitles?: { langs: string[]; embed: boolean };
+  embedMetadata: boolean;
+  /** Cover art -- asked of audio downloads only. */
+  embedCover: boolean;
+  sponsorBlock: boolean;
+  /** Only this stretch of the video, in seconds. */
+  section?: { startSecs: number; endSecs: number } | null;
+  /** The videos picked from a playlist, each with its position in the
+   *  playlist. When present, "all" queues exactly these and asks nothing more
+   *  of the backend. */
+  playlistPicks?: { entry: PlaylistEntry; position: number }[];
+  /** The playlist's name, for its folder. */
+  playlistTitle?: string | null;
+  playlistFolder?: boolean;
+  playlistNumbers?: boolean;
   /** Whether a link that names a playlist takes the one video or the whole
    *  list. `one` for every link that names no playlist at all. */
   playlist: PlaylistChoice;
@@ -54,18 +79,30 @@ export interface DownloadFormValues {
   /** The probe for *this* URL, or null if it has not landed. Null is not a
    *  failure state: `start` fetches one itself rather than guessing. */
   link: UrlInfo | null;
+  /** Every link, when more than one was pasted. Each becomes its own
+   *  download, identified by the backend on its own -- no probe here, which
+   *  for a list would be a yt-dlp spawn per line before anything started. */
+  urls?: string[];
+  /** When to start, as epoch ms; null or absent is now. */
+  startAt?: number | null;
 }
 
 /**
- * Which shelf a link's result belongs on.
+ * Which shelf a link's result belongs on, or null while nothing knows.
  *
  * A direct link is filed by what it actually is, not by the fact that it was
  * direct: `Slot::Files` is documented as "anything fetched verbatim that is not
  * video or audio", and sending every direct link there put a `.mp4` URL
  * somewhere its own tool would never look for it.
+ *
+ * A link the probe has not identified has no shelf yet. It used to borrow the
+ * toggle's -- the form showed the Video folder for an installer the probe had
+ * merely timed out on -- when the backend decides once its engine has looked,
+ * and checks again against the file that arrives.
  */
-function slotFor(link: UrlInfo | null, mediaType: "video" | "audio"): LibrarySlot {
-  if (link?.kind === "file") {
+function slotFor(link: UrlInfo | null, mediaType: "video" | "audio"): LibrarySlot | null {
+  if (!link) return null;
+  if (link.kind === "file") {
     switch (fileKindOf(link.title, link.uploader)) {
       case "video":
         return "video";
@@ -108,7 +145,7 @@ export type PlaylistChoice = "one" | "all";
 
 export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) {
   const { t, i18n } = useTranslation();
-  const { beginJob, discardJob, startDownload } = useJobs();
+  const { beginJob, discardJob, startDownload, scheduleDownload } = useJobs();
   const [savePath, setSavePath] = useState("");
   const [toolsReady, setToolsReady] = useState(true);
   /** True across the await in `start`, so a second Enter cannot queue the same
@@ -128,8 +165,10 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       try {
         const tools = await ipc.getToolStatus();
         if (cancelled) return;
+        // Said once, inline, under the field it concerns. It was also a toast,
+        // raised on every opening of the form -- and drawn under the form's own
+        // scrim, where it could not be read.
         setToolsReady(tools.ytdlp);
-        if (!tools.ytdlp) notify("warning", t("ytdlp_not_found"));
       } catch (error) {
         if (!cancelled) notify("error", describeAppError(ipc.toAppError(error), t));
       }
@@ -147,8 +186,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
   useEffect(() => {
     if (chosen.current) return;
     let cancelled = false;
-    void ipc
-      .getLibraryFolder(slot)
+    void folderFor(slot)
       .then((folder) => {
         if (!cancelled && !chosen.current) setSavePath(folder);
       })
@@ -180,6 +218,99 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       if (!isOnline) {
         notify("error", t("no_internet"));
         return false;
+      }
+      // What can be known before the form closes is checked before it closes:
+      // a link already probed as a page with no yt-dlp to fetch it, or a folder
+      // the user picked that is somehow empty. Closing first and reporting
+      // after cost the user the link they had pasted.
+      if (!toolsReady && values.link && values.link.kind !== "file") {
+        notify("warning", t("ytdlp_not_found"));
+        return false;
+      }
+      if (chosen.current && !savePath.trim()) {
+        notify("error", t("select_location"));
+        return false;
+      }
+
+      const startAt = values.startAt ?? null;
+
+      /** What every download off this form carries, whether it is the one
+       *  link that was pasted, one of several, or the fortieth video of a
+       *  playlist. Only the URL and the name differ between them. */
+      const audio = values.mediaType === "audio";
+      const requestFor = (
+        target: string,
+        dir: string,
+        outputName: string | undefined,
+        subfolder?: string,
+      ): DownloadRequest => ({
+        url: target,
+        outputDir: dir,
+        outputName,
+        mediaType: values.mediaType,
+        // The older pair is still sent, for an older build reading this
+        // request back off a retry button; the backend prefers `video` and
+        // `audio` when they are there.
+        quality: audio ? undefined : values.video.quality,
+        audioFormat: audio && values.audio.format === "original" ? "original" : audio ? "mp3" : undefined,
+        video: audio ? undefined : values.video,
+        audio: audio ? values.audio : undefined,
+        subtitles: !audio && values.subtitles && values.subtitles.langs.length > 0 ? values.subtitles : undefined,
+        embedMetadata: values.embedMetadata,
+        embedThumbnail: audio ? values.embedCover : false,
+        sponsorBlock: values.sponsorBlock || undefined,
+        section: !audio && values.section ? values.section : undefined,
+        subfolder,
+        // Always auto. The probe is a preview, not a decision: it can be stale
+        // by the time the bytes are requested, and the backend is the one that
+        // has to be right.
+        mode: "auto" as const,
+        parallel: values.parallel,
+        // Empty means none. Sent as undefined rather than "" so a request
+        // stored on a retry button reads the same as one from a build that had
+        // no such setting.
+        cookiesFrom: values.cookiesFrom || undefined,
+        // The shelf is the backend's to choose unless the user chose a folder:
+        // it decides once it knows what the link is, which is the only point at
+        // which anyone does for certain. `outputDir` stays on the request as
+        // the fallback, and as the folder the form showed.
+        autoFolder: !chosen.current,
+      });
+
+      /** What was just done, said once for the whole press. */
+      const announce = (count: number) =>
+        notify(
+          "info",
+          startAt !== null
+            ? t("scheduled_toast", { when: describeWhen(startAt, t) })
+            : count > 1
+              ? t("batch_queued", { queued: formatCount(count, i18n.language) })
+              : t("job_started"),
+        );
+
+      // Several links: one download each, identified by the backend, which
+      // since the file-type rework is where that has to happen anyway.
+      if (values.urls && values.urls.length > 1) {
+        onAccepted();
+        const dir = chosen.current
+          ? savePath
+          : await folderFor(null).catch(() => savePath);
+        if (!dir.trim()) {
+          notify("error", t("select_location"));
+          return false;
+        }
+        for (const target of values.urls) {
+          const meta = { title: target, source: target, fileKind: "unknown" as const };
+          if (startAt !== null) {
+            scheduleDownload(requestFor(target, dir, undefined), meta, startAt);
+          } else {
+            void startDownload(requestFor(target, dir, undefined), meta).catch((error) =>
+              notify("error", describeAppError(ipc.toAppError(error), t)),
+            );
+          }
+        }
+        announce(values.urls.length);
+        return true;
       }
 
       // The form is done with. Everything below is a round trip to the backend
@@ -227,9 +358,9 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       // have, nothing here may move it.
       let dir = savePath;
       if (!chosen.current) {
-        dir = await ipc
-          .getLibraryFolder(slotFor(resolved, values.mediaType))
-          .catch(() => savePath);
+        dir = await folderFor(slotFor(resolved, values.mediaType)).catch(
+          () => savePath,
+        );
         if (dir !== savePath) setSavePath(dir);
       }
 
@@ -269,10 +400,10 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
               // written before a byte has been fetched. The word for the choice
               // is the honest thing to show, and it is the same word the setting
               // is labelled with.
-              values.audioFormat === "original"
-              ? t("audio_format_original")
-              : "MP3"
-            : values.quality;
+              // A token, put into words when the row is drawn -- see
+              // `renderDetail` -- so it follows the app's language.
+              audioDetail(values.audio.format, values.audio.bitrateKbps ?? 0)
+            : values.video.quality;
       // A playlist's entries are all media -- yt-dlp listed them -- whatever
       // the probe of the playlist page itself managed to say.
       const entryKind: JobFileKind = values.mediaType;
@@ -285,87 +416,90 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
         return id;
       };
 
-      const queue = (
+      const queue = async (
         target: string,
         title: string,
         outputName: string | undefined,
         kind: JobFileKind,
-      ) =>
-        startDownload(
-          {
-            url: target,
-            outputDir: dir,
-            outputName,
-            mediaType: values.mediaType,
-            quality: values.mediaType === "audio" ? undefined : values.quality,
-            audioFormat:
-              values.mediaType === "audio" ? values.audioFormat : undefined,
-            // Always auto. The probe above is a preview, not a decision: it can
-            // be stale by the time the bytes are requested, and the backend is
-            // the one that has to be right.
-            mode: "auto",
-            parallel: values.parallel,
-            // Empty means none. Sent as undefined rather than "" so a request
-            // stored on a retry button reads the same as one from a build
-            // that had no such setting.
-            cookiesFrom: values.cookiesFrom || undefined,
-            // The shelf is the backend's to choose unless the user chose a
-            // folder: it decides once it knows what the link is, which is the
-            // only point at which anyone does for certain. `outputDir` stays
-            // on the request as the fallback, and as the folder the form showed.
-            autoFolder: !chosen.current,
-          },
-          // The URL is the last resort, not the default. It used to be what
-          // every direct download was called, because the name was deliberately
-          // left out of the request and the card read the same field.
-          {
-            title: title || target,
-            source: target,
-            detail: kind === "unknown" ? undefined : detail,
-            fileKind: kind,
-          },
-          take(),
-        ).catch((error) =>
+        subfolder?: string,
+      ) => {
+        const request = requestFor(target, dir, outputName, subfolder);
+        // The URL is the last resort, not the default. It used to be what
+        // every direct download was called, because the name was deliberately
+        // left out of the request and the card read the same field.
+        const meta = {
+          title: title || target,
+          source: target,
+          detail: kind === "unknown" ? undefined : detail,
+          fileKind: kind,
+        };
+        if (startAt !== null) {
+          scheduleDownload(request, meta, startAt, take());
+          return;
+        }
+        await startDownload(request, meta, take()).catch((error) =>
           notify("error", describeAppError(ipc.toAppError(error), t)),
         );
+      };
 
       if (values.playlist === "all") {
         // The expensive call, made once and only here. Every entry becomes its
         // own job, so each gets its own row, its own progress and its own retry
         // button -- and the network semaphore already runs four at a time
         // rather than forty.
-        const listing = await ipc
-          .listPlaylist(url, values.cookiesFrom || undefined)
-          .catch((error) => {
-          notify("error", describeAppError(ipc.toAppError(error), t));
-          return null;
-        });
-        if (!listing || listing.entries.length === 0) return abandon();
+        // Picked on the form when the form had the listing; fetched here
+        // otherwise (a schedule set before the list arrived, an old path).
+        const listing = values.playlistPicks
+          ? null
+          : await ipc.listPlaylist(url, values.cookiesFrom || undefined).catch((error) => {
+              notify("error", describeAppError(ipc.toAppError(error), t));
+              return null;
+            });
+        const picks =
+          values.playlistPicks ??
+          listing?.entries.map((entry, index) => ({ entry, position: index + 1 })) ??
+          [];
+        if (picks.length === 0) return abandon();
 
-        // `outputName` is left undefined for every entry: the pasted link's
-        // title belongs to the playlist, not to any video in it, and yt-dlp
-        // names each file from its own page.
-        for (const entry of listing.entries) {
-          void queue(entry.url, entry.title, undefined, entryKind);
+        // Numbered by position in the playlist, padded to the longest number,
+        // so the files sort in the order the playlist plays them.
+        const width = String(Math.max(...picks.map((pick) => pick.position))).length;
+        const folderName =
+          values.playlistFolder !== false
+            ? (values.playlistTitle ?? listing?.title ?? undefined) || undefined
+            : undefined;
+        for (const { entry, position } of picks) {
+          const numbered =
+            values.playlistNumbers !== false
+              ? `${String(position).padStart(width, "0")} - ${entry.title}`
+              : undefined;
+          void queue(entry.url, entry.title, numbered, entryKind, folderName);
         }
 
-        notify(
-          listing.truncated ? "warning" : "info",
-          listing.truncated
-            ? t("playlist_queued_capped", {
-                queued: formatCount(listing.entries.length, i18n.language),
-                total: formatCount(listing.total, i18n.language),
-              })
-            : t("playlist_queued", {
-                queued: formatCount(listing.entries.length, i18n.language),
-              }),
-        );
+        if (listing?.truncated) {
+          notify(
+            "warning",
+            t("playlist_queued_capped", {
+              queued: formatCount(picks.length, i18n.language),
+              total: formatCount(listing.total, i18n.language),
+            }),
+          );
+        } else if (startAt !== null) {
+          announce(picks.length);
+        } else {
+          notify(
+            "info",
+            t("playlist_queued", {
+              queued: formatCount(picks.length, i18n.language),
+            }),
+          );
+        }
         return true;
       }
 
       void queue(url, name || url, isFile ? undefined : name || undefined, fileKind);
 
-      notify("info", t("job_started"));
+      announce(1);
       return true;
     },
     [
@@ -375,6 +509,7 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
       isOnline,
       notify,
       savePath,
+      scheduleDownload,
       startDownload,
       t,
       toolsReady,
@@ -398,5 +533,22 @@ export function useDownloadForm({ isOnline, notify, mediaType, link }: Options) 
     [start],
   );
 
-  return { savePath, toolsReady, starting, selectFolder, start: submit };
+  return {
+    savePath,
+    // Nothing chosen, and nothing known about the link: the shelf is the
+    // backend's to pick once it has looked, so the form says that instead of
+    // naming a folder it cannot promise.
+    autoFolder: !chosen.current && slot === null,
+    toolsReady,
+    starting,
+    selectFolder,
+    start: submit,
+  };
+}
+
+/** The shelf's folder, or the library root while the shelf is not known. */
+function folderFor(slot: LibrarySlot | null): Promise<string> {
+  return slot
+    ? ipc.getLibraryFolder(slot)
+    : ipc.getLibraryInfo().then((info) => info.root);
 }

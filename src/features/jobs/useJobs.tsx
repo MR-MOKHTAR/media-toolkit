@@ -88,6 +88,16 @@ interface JobsContextValue {
      *  nothing to do before the request does not have to think about it. */
     placeholderId?: string,
   ) => Promise<string>;
+  /** Puts a download on the list to start at `at` (epoch ms), in place of
+   *  `placeholderId` when given. Nothing reaches the backend until then. */
+  scheduleDownload: (
+    request: DownloadRequest,
+    meta: JobMeta,
+    at: number,
+    placeholderId?: string,
+  ) => void;
+  /** Starts a scheduled row now, whatever its time says. */
+  startScheduled: (id: string) => Promise<void>;
   /** For jobs whose command was invoked elsewhere -- the media tools each
    *  call their own command and hand the resulting id back here.
    *
@@ -107,9 +117,14 @@ interface JobsContextValue {
       ),
   ) => void;
   cancel: (id: string) => Promise<void>;
+  /** Stops every job that is running or waiting. What downloads fetched stays
+   *  on disk, so "Download again" continues each of them later. */
+  cancelAll: () => Promise<void>;
   /** Starts a finished-badly download over, continuing from whatever it
    *  already fetched. No-op for a job with no stored request. */
   retry: (id: string) => Promise<void>;
+  /** `retry` for every download that failed, was cancelled or was cut off. */
+  retryFailed: () => Promise<void>;
   remove: (id: string) => void;
   select: (id: string | null) => void;
   clearFinished: () => void;
@@ -223,91 +238,111 @@ export function JobsProvider({
     let disposed = false;
     const unlisteners: (() => void)[] = [];
 
-    const attach = (promise: Promise<() => void>) => {
-      promise.then((off) => (disposed ? off() : unlisteners.push(off)));
-    };
+    const attach = (promise: Promise<() => void>) =>
+      promise.then((off) => {
+        if (disposed) off();
+        else unlisteners.push(off);
+      });
 
     // Each listener dispatches either way -- the reducer ignores an id it has
     // never seen -- and holds a copy for a job not known yet.
-    attach(
-      ipc.onJobProgress((payload) => {
-        if (!isKnown(payload.id)) holdEarly(payload.id, { progress: payload });
-        dispatch({ type: "progress", payload });
-      }),
-    );
-    attach(
-      ipc.onJobMeta((payload) => {
-        if (!isKnown(payload.id)) holdEarly(payload.id, { metas: [payload] });
-        dispatch({ type: "meta", payload });
-      }),
-    );
-    attach(
-      ipc.onJobStatus((payload) => {
-        if (!isKnown(payload.id)) holdEarly(payload.id, { status: payload });
-        dispatch({ type: "status", payload });
-        // Every job kind ends through this one event, so the whole app gets
-        // completion feedback from here -- including for work whose screen the
-        // user has long since left.
-        announceRef.current(payload);
-      }),
-    );
+    const attached = Promise.all([
+      attach(
+        ipc.onJobProgress((payload) => {
+          if (!isKnown(payload.id)) holdEarly(payload.id, { progress: payload });
+          dispatch({ type: "progress", payload });
+        }),
+      ),
+      attach(
+        ipc.onJobMeta((payload) => {
+          if (!isKnown(payload.id)) holdEarly(payload.id, { metas: [payload] });
+          dispatch({ type: "meta", payload });
+        }),
+      ),
+      attach(
+        ipc.onJobStatus((payload) => {
+          if (!isKnown(payload.id)) holdEarly(payload.id, { status: payload });
+          dispatch({ type: "status", payload });
+          // Every job kind ends through this one event, so the whole app gets
+          // completion feedback from here -- including for work whose screen
+          // the user has long since left.
+          announceRef.current(payload);
+        }),
+      ),
+    ]);
+
+    // What the backend is still running -- asked only once the listeners
+    // above are attached, so nothing that finishes in between is missed. It
+    // used to be asked in parallel with attaching them, which is exactly the
+    // gap that promise was meant to close.
+    //
+    // `loadJobs` has just marked everything that was in flight as interrupted,
+    // on the reasoning that nothing is running when the app has just started.
+    // That is true of a cold start and false of a webview reload -- which
+    // happens on every save in dev, and whenever anyone hits refresh. Without
+    // this the rows read "failed" while yt-dlp was still writing the file, and
+    // their retry button would have started a second download of the same
+    // thing into the same folder.
+    void attached
+      .then(() => (disposed ? null : ipc.listJobs()))
+      .then((live) => {
+        if (disposed || !live) return;
+        dispatch({ type: "reconcile", live });
+        // A job started in the last moment before a reload is in no saved
+        // history, so everything it said since was held for an id nobody had
+        // claimed. It is claimed now.
+        for (const job of live) replayEarly(job.id);
+      })
+      // Not in Tauri, or the command failed. The revived history is a
+      // reasonable answer either way; it is only ever an improvement on it.
+      .catch(() => undefined);
 
     return () => {
       disposed = true;
       for (const off of unlisteners) off();
     };
-  }, []);
-
-  // What the backend is still running, asked once the listeners above are
-  // attached so nothing that finishes in between is missed.
-  //
-  // `loadJobs` has just marked everything that was in flight as failed, on the
-  // reasoning that nothing is running when the app has just started. That is
-  // true of a cold start and false of a webview reload -- which happens on
-  // every save in dev, and whenever anyone hits refresh. Without this the rows
-  // read "failed" while yt-dlp was still writing the file, and their retry
-  // button would have started a second download of the same thing into the same
-  // folder.
-  useEffect(() => {
-    let cancelled = false;
-    void ipc
-      .listJobs()
-      .then((live) => !cancelled && dispatch({ type: "reconcile", live }))
-      // Not in Tauri, or the command failed. The revived history is a
-      // reasonable answer either way; it is only ever an improvement on it.
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    // `replayEarly` reads only refs and `dispatch`, so the one it closes over
+    // at mount is the one there will ever be.
   }, []);
 
   /**
-   * Hands a real job to the reducer, then replays whatever arrived for it
-   * before its id did -- see `earlyRef`. The announcement is replayed too: a
-   * job that finished in that gap reached the listener while it had no row,
-   * so nothing was said about it.
+   * Replays whatever arrived for a job before its id was known -- see
+   * `earlyRef` -- once the reducer has a row for it. `row` is that row when
+   * the reducer has not rendered it yet, for the announcement's title.
    */
-  const claim = useCallback((placeholderId: string, job: Job) => {
-    claimedRef.current.add(job.id);
-    dispatch({ type: "started", placeholderId, job });
-
-    const early = earlyRef.current.get(job.id);
+  function replayEarly(id: string, row?: Job) {
+    claimedRef.current.add(id);
+    const early = earlyRef.current.get(id);
     if (!early) return;
-    earlyRef.current.delete(job.id);
+    earlyRef.current.delete(id);
     // Progress before status, so a replayed "completed" is not undone by the
     // progress tick that came before it.
     if (early.progress) dispatch({ type: "progress", payload: early.progress });
     for (const meta of early.metas ?? []) dispatch({ type: "meta", payload: meta });
     if (early.status) {
       dispatch({ type: "status", payload: early.status });
-      // The reducer has not re-rendered yet, so `stateRef` does not have this
+      // The reducer has not re-rendered yet, so `stateRef` may not have this
       // row -- which the announcement needs for the title.
-      stateRef.current = {
-        ...stateRef.current,
-        byId: { ...stateRef.current.byId, [job.id]: job },
-      };
+      if (row) {
+        stateRef.current = {
+          ...stateRef.current,
+          byId: { ...stateRef.current.byId, [id]: row },
+        };
+      }
       announceRef.current(early.status);
     }
+  }
+
+  /**
+   * Hands a real job to the reducer, then replays whatever arrived for it
+   * before its id did. The announcement is replayed too: a job that finished
+   * in that gap reached the listener while it had no row, so nothing was said
+   * about it.
+   */
+  const claim = useCallback((placeholderId: string, job: Job) => {
+    claimedRef.current.add(job.id);
+    dispatch({ type: "started", placeholderId, job });
+    replayEarly(job.id, job);
   }, []);
 
   const beginJob = useCallback((job: JobMeta & { kind: JobKind }) => {
@@ -340,7 +375,14 @@ export function JobsProvider({
   }, []);
 
   const startDownload = useCallback(
-    async (request: DownloadRequest, meta: JobMeta, placeholderId?: string) => {
+    async (
+      request: DownloadRequest,
+      meta: JobMeta,
+      placeholderId?: string,
+      /** What the row becomes if the backend refuses: gone (a pending row was
+       *  only ever a promise) or kept (a scheduled row is the user's own). */
+      onRefusal: "discard" | "keep" = "discard",
+    ) => {
       const pendingId =
         placeholderId ?? beginJob({ kind: "download" as JobKind, ...meta });
       let id: string;
@@ -349,7 +391,7 @@ export function JobsProvider({
       } catch (error) {
         // The row was a promise that this download was starting. It is not, so
         // it goes -- the caller reports why.
-        dispatch({ type: "discard", id: pendingId });
+        if (onRefusal === "discard") dispatch({ type: "discard", id: pendingId });
         throw error;
       }
       claim(pendingId, {
@@ -374,6 +416,93 @@ export function JobsProvider({
     [beginJob, claim],
   );
 
+  const scheduleDownload = useCallback(
+    (request: DownloadRequest, meta: JobMeta, at: number, placeholderId?: string) => {
+      // `started` is the reducer's "this row is now that job": it replaces the
+      // pending row in place, or adds one when there is none.
+      dispatch({
+        type: "started",
+        placeholderId: placeholderId ?? "",
+        job: {
+          id: `scheduled:${crypto.randomUUID()}`,
+          kind: "download",
+          title: meta.title,
+          source: meta.source,
+          detail: meta.detail,
+          fileKind: meta.fileKind,
+          state: "scheduled",
+          stage: "queued",
+          percent: null,
+          scheduledAt: at,
+          createdAt: Date.now(),
+          request,
+        },
+      });
+    },
+    [],
+  );
+
+  /** Ids a scheduled start is in flight for, so the timer and a "Start now"
+   *  click landing together start it once. */
+  const startingRef = useRef(new Set<string>());
+
+  const startScheduled = useCallback(
+    async (id: string) => {
+      const row = stateRef.current.byId[id];
+      if (row?.state !== "scheduled" || !row.request || startingRef.current.has(id)) return;
+      startingRef.current.add(id);
+      try {
+        // In place: the scheduled row becomes the running job.
+        await startDownload(
+          row.request,
+          { title: row.title, source: row.source, detail: row.detail, fileKind: row.fileKind },
+          id,
+          "keep",
+        );
+      } catch (error) {
+        // Kept, as a failure with a retry button: it is the user's download,
+        // and a schedule that silently vanished would be worse than one that
+        // says it could not start.
+        dispatch({
+          type: "added",
+          job: {
+            ...row,
+            state: "failed",
+            error: ipc.toAppError(error),
+            scheduledAt: undefined,
+            missed: undefined,
+            endedAt: Date.now(),
+          },
+        });
+        notify("error", describeAppError(ipc.toAppError(error), t));
+      } finally {
+        startingRef.current.delete(id);
+      }
+    },
+    [notify, startDownload, t],
+  );
+
+  // The clock. Every fifteen seconds, and whenever the window comes back into
+  // focus -- a laptop that slept through 02:00 wakes up to a timer that has
+  // not fired yet, and the focus is what catches it at once.
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      for (const job of selectJobs(stateRef.current)) {
+        if (job.state === "scheduled" && !job.missed && (job.scheduledAt ?? 0) <= now) {
+          void startScheduled(job.id);
+        }
+      }
+    };
+    const timer = window.setInterval(tick, 15_000);
+    window.addEventListener("focus", tick);
+    tick();
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", tick);
+    };
+  }, [startScheduled]);
+
   /**
    * Runs a failed, cancelled or interrupted download again.
    *
@@ -385,10 +514,16 @@ export function JobsProvider({
    * Nothing is re-downloaded that does not have to be: both engines continue
    * from the `.part` file the previous attempt left.
    */
+  /** Ids whose retry is in flight, readable synchronously: two clicks can land
+   *  inside one render, before `state.retrying` has caught up. */
+  const retryingRef = useRef(new Set<string>());
+
   const retry = useCallback(
     async (id: string) => {
       const job = stateRef.current.byId[id];
-      if (!job?.request) return;
+      if (!job?.request || retryingRef.current.has(id)) return;
+      retryingRef.current.add(id);
+      dispatch({ type: "retryRequested", id });
       try {
         await startDownload(job.request, {
           title: job.title,
@@ -401,10 +536,37 @@ export function JobsProvider({
         dispatch({ type: "remove", id });
       } catch (error) {
         notify("error", describeAppError(ipc.toAppError(error), t));
+      } finally {
+        retryingRef.current.delete(id);
+        dispatch({ type: "retrySettled", id });
       }
     },
     [notify, startDownload, t],
   );
+
+  const retryFailed = useCallback(async () => {
+    const failed = selectJobs(stateRef.current).filter(
+      (job) =>
+        job.kind === "download" &&
+        job.request &&
+        (job.state === "failed" || job.state === "cancelled"),
+    );
+    // One after another rather than all at once: each is a round trip that
+    // registers a job, and the backend queues them in this order.
+    for (const job of failed.reverse()) await retry(job.id);
+  }, [retry]);
+
+  const cancelAll = useCallback(async () => {
+    const active = selectJobs(stateRef.current).filter(
+      (job) => !job.pending && (job.state === "running" || job.state === "queued"),
+    );
+    for (const job of active) dispatch({ type: "cancelRequested", id: job.id });
+    try {
+      await ipc.cancelAllJobs();
+    } catch (error) {
+      notify("error", describeAppError(ipc.toAppError(error), t));
+    }
+  }, [notify, t]);
 
   const addExternalJob = useCallback(
     (
@@ -546,9 +708,13 @@ export function JobsProvider({
       beginJob,
       discardJob,
       startDownload,
+      scheduleDownload,
+      startScheduled,
       addExternalJob,
       cancel,
+      cancelAll,
       retry,
+      retryFailed,
       remove: (id) => dispatch({ type: "remove", id }),
       select: (id) => dispatch({ type: "select", id }),
       clearFinished: () => dispatch({ type: "clearFinished" }),
@@ -560,9 +726,13 @@ export function JobsProvider({
       beginJob,
       discardJob,
       startDownload,
+      scheduleDownload,
+      startScheduled,
       addExternalJob,
       cancel,
+      cancelAll,
       retry,
+      retryFailed,
       reveal,
       open,
     ],

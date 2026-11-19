@@ -65,8 +65,9 @@ export function ConfirmDialog({
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(26rem,calc(100vw-2rem))]",
             "-translate-x-1/2 -translate-y-1/2",
-            "rounded-xl border border-line-soft p-5 shadow-(--shadow-panel)",
-            "bg-surface-glass backdrop-blur-glass",
+            "rounded-xl border border-line-soft p-5",
+            "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-panel)]",
+            "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // scale-in animates `scale`, not `transform`: the two centring
             // utilities above compile to the `translate` property, and a
             // transform in the keyframe would be added to them rather than

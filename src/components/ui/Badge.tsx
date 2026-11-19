@@ -20,15 +20,15 @@ interface BadgeProps {
 const SOLID: Record<Tone, string> = {
   neutral: "bg-surface-soft text-fg-muted",
   accent: "bg-accent-soft text-accent",
-  success: "bg-success/10 text-success",
-  danger: "bg-danger/10 text-danger",
+  success: "bg-success/10 text-success-text",
+  danger: "bg-danger/10 text-danger-text",
 };
 
 const OUTLINE: Record<Tone, string> = {
   neutral: "border border-line text-fg-muted",
   accent: "border border-accent-line text-accent",
-  success: "border border-success text-success",
-  danger: "border border-danger text-danger",
+  success: "border border-success text-success-text",
+  danger: "border border-danger text-danger-text",
 };
 
 /**

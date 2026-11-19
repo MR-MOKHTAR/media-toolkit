@@ -1,3 +1,4 @@
+pub mod analyze;
 pub mod commands;
 pub mod ops;
 pub mod probe;

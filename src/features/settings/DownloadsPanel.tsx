@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileAudio, Music2 } from "lucide-react";
+import { FileAudio, Music2, Waves } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Field, SectionLabel } from "../../components/ui/Card";
@@ -8,6 +8,9 @@ import { Segmented } from "../../components/ui/Segmented";
 import { Select } from "../../components/ui/Select";
 import * as ipc from "../../lib/ipc";
 import {
+  AUDIO_FORMATS,
+  CODEC_PREFS,
+  MP3_BITRATES,
   NO_COOKIES,
   QUALITIES,
   qualityLabel,
@@ -65,26 +68,31 @@ export function DownloadsPanel() {
           label={t("audio_format")}
           value={settings.audioFormat}
           onChange={(audioFormat) => update("audioFormat", audioFormat)}
-          options={[
-            {
-              value: "original" as const,
-              label: t("audio_format_original"),
-              icon: <FileAudio size={16} />,
-            },
-            {
-              value: "mp3" as const,
-              label: "MP3",
-              icon: <Music2 size={16} />,
-            },
-          ]}
+          options={AUDIO_FORMATS.map((format) => ({
+            value: format,
+            label: t(`audio_choice_${format}`),
+            icon:
+              format === "original" ? (
+                <FileAudio size={16} />
+              ) : format === "opus" ? (
+                <Waves size={16} />
+              ) : (
+                <Music2 size={16} />
+              ),
+          }))}
         />
-        <p className="text-xs text-fg-muted">
-          {t(
-            settings.audioFormat === "original"
-              ? "audio_format_original_note"
-              : "audio_format_mp3_note",
-          )}
-        </p>
+        <p className="text-xs text-fg-muted">{t(`audio_format_${settings.audioFormat}_note`)}</p>
+        {settings.audioFormat === "mp3" && (
+          <Segmented
+            label={t("mp3_bitrate")}
+            value={String(settings.mp3Bitrate)}
+            onChange={(value) => update("mp3Bitrate", Number(value))}
+            options={MP3_BITRATES.map((kbps) => ({
+              value: String(kbps),
+              label: kbps ? `${kbps}k` : t("mp3_best"),
+            }))}
+          />
+        )}
       </section>
 
       <section className="flex flex-col gap-2">
@@ -93,15 +101,26 @@ export function DownloadsPanel() {
           label={t("video_quality")}
           value={settings.quality}
           onChange={(quality) => update("quality", quality)}
-          // Two rows of three. Six across is 48px a cell in the settings panel
+          // Two rows of four. Seven across is 48px a cell in the settings panel
           // of a 600px window, and "2160p" does not fit in 48px.
-          columns={3}
+          columns={4}
           options={QUALITIES.map((value) => ({
             value,
             label: qualityLabel(value, t("quality_best")),
           }))}
         />
         <p className="text-xs text-fg-muted">{t("download_quality_note")}</p>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionLabel>{t("codec_pref")}</SectionLabel>
+        <Segmented
+          label={t("codec_pref")}
+          value={settings.codec}
+          onChange={(codec) => update("codec", codec)}
+          options={CODEC_PREFS.map((codec) => ({ value: codec, label: t(`codec_${codec}`) }))}
+        />
+        <p className="text-xs text-fg-muted">{t(`codec_${settings.codec}_hint`)}</p>
       </section>
 
       {/* A `switch`, not a `check`: it changes what the next download does the

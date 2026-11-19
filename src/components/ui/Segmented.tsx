@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useRovingRadio } from "../../hooks/useRovingRadio";
 import { cn } from "../../lib/cn";
 
 export interface SegmentedOption<T extends string> {
@@ -38,8 +39,10 @@ interface SegmentedProps<T extends string> {
  * visible without a click, which matters more than saving the horizontal
  * space a select would.
  *
- * Built on radios so keyboard arrows, screen reader grouping and form
- * semantics come for free rather than being reimplemented badly.
+ * Radio semantics, and -- since these are buttons wearing the role, not
+ * native inputs -- the radio keyboard to go with them: one Tab stop, arrows
+ * to move. The comment here used to say the arrows came for free. They did
+ * not; every option was its own Tab stop and the arrows did nothing.
  */
 export function Segmented<T extends string>({
   value,
@@ -49,10 +52,19 @@ export function Segmented<T extends string>({
   className,
   columns,
 }: SegmentedProps<T>) {
+  const radio = useRovingRadio({
+    values: options.map((option) => option.value),
+    value,
+    onChange,
+    isDisabled: (candidate) =>
+      Boolean(options.find((option) => option.value === candidate)?.disabled),
+  });
+
   return (
     <div
       role="radiogroup"
       aria-label={label}
+      onKeyDown={radio.onKeyDown}
       className={cn("grid gap-2", className)}
       style={{
         gridTemplateColumns: `repeat(${columns ?? options.length}, minmax(0, 1fr))`,
@@ -66,6 +78,7 @@ export function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={selected}
+            {...radio.itemProps(option.value)}
             disabled={option.disabled}
             title={option.disabled ? option.disabledReason : undefined}
             onClick={() => onChange(option.value)}
@@ -74,8 +87,8 @@ export function Segmented<T extends string>({
               "text-center transition-all duration-(--duration-fast)",
               "disabled:cursor-not-allowed disabled:opacity-disabled",
               selected
-                ? "border-accent-line bg-accent-soft text-accent shadow-(--shadow-glow)"
-                : "border-line bg-surface text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
+                ? "relative holo-rim border-transparent bg-accent-soft text-accent shadow-(--shadow-glow)"
+                : "border-line bg-surface/65 text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
             )}
           >
             {option.icon}

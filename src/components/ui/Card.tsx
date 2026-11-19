@@ -9,6 +9,11 @@ interface CardProps extends HTMLAttributes<HTMLElement> {
    *  container that rises under the pointer is promising something it does
    *  not do. */
   interactive?: boolean;
+  /** `glass` for a card that sits straight on the page, over the living
+   *  background -- it blurs what is behind it. `inset` (the default) for a card
+   *  inside a dialog or a form card, which is already glass: a second blur
+   *  there would blur the pane, not the background, and cost a frame for it. */
+  surface?: "glass" | "inset";
   as?: "div" | "li" | "section";
 }
 
@@ -31,6 +36,7 @@ const CARD_PADDING = {
 export function Card({
   padding = "md",
   interactive = false,
+  surface = "inset",
   as: Tag = "div",
   className,
   children,
@@ -39,10 +45,14 @@ export function Card({
   return (
     <Tag
       className={cn(
-        "rounded-lg border border-line bg-surface",
+        // A faint holographic rim over the card's own hairline: the cards
+        // catch the same light as the window's frame.
+        "relative rounded-lg border holo-rim [--rim-over:1px] [--rim-opacity:0.3]",
+        surface === "glass" ? "glass-card" : "glass-inset",
         CARD_PADDING[padding],
         interactive &&
-          "transition-[box-shadow,transform] duration-(--duration-fast) hover:-translate-y-px hover:shadow-(--shadow-raise)",
+          "glass-spotlight transition-[box-shadow,transform,background-color] duration-(--duration-fast) hover:-translate-y-px hover:shadow-(--shadow-raise)",
+        interactive && surface === "glass" && "hover:bg-card-glass-hover",
         className,
       )}
       {...props}
@@ -81,12 +91,13 @@ export function FormCard({
     <div
       className={cn(
         "flex flex-col gap-5 rounded-xl border border-line-soft p-6",
-        "bg-surface-glass shadow-(--shadow-card) backdrop-blur-glass",
-        /* Thin gradient accent along the top edge — visible enough to mark
+        "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
+        "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-card)]",
+        /* A holographic hairline along the top edge -- visible enough to mark
            the card as the primary surface without competing with anything
            inside it. */
         "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",
-        "before:bg-(image:--gradient-accent) before:opacity-40 before:rounded-t-xl",
+        "before:bg-(image:--gradient-holo) before:opacity-70 before:rounded-t-xl",
         "relative overflow-hidden",
         className,
       )}
@@ -174,31 +185,42 @@ export function SectionLabel({
 
 export function EmptyState({
   icon,
+  illustration,
   title,
   description,
   action,
 }: {
   icon: ReactNode;
+  // A larger scene (e.g. an animated SVG) that stands in for the icon tile
+  // when a screen has one; `icon` stays the fallback for those that do not.
+  illustration?: ReactNode;
   title: string;
   description?: string;
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center gap-5 px-6 py-12 text-center">
       {/* Neutral, not the accent tile the screen header carries. A filled,
           glowing mark in the middle of an empty page read as the thing to
           press, next to a button that actually was -- this says "nothing
           here", and leaves the asking to the button. */}
-      <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface-soft text-fg-muted">
-        {icon}
-      </div>
-      <div className="flex flex-col gap-1">
-        <p className="text-lg font-medium text-fg">{title}</p>
+      {illustration ?? (
+        <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface-soft text-fg-muted">
+          {icon}
+        </div>
+      )}
+      <div className="flex flex-col items-center gap-2">
+        <p className="text-xl font-semibold text-fg">{title}</p>
         {/* `fg-soft`, not `fg-muted`: this is the sentence that says what to
             do next, and muted sits at 3.4:1 on the light canvas -- under AA
             for text this size. */}
+        {/* Balanced, so a two-line hint breaks into two even lines instead
+            of a full line and a stray word -- the ragged break read as untidy
+            in the middle of an otherwise empty page. */}
         {description && (
-          <p className="max-w-xs text-sm text-fg-soft">{description}</p>
+          <p className="max-w-md text-base leading-relaxed text-balance text-fg-soft">
+            {description}
+          </p>
         )}
       </div>
       {action}

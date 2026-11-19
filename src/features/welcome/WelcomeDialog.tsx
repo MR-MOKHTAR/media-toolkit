@@ -4,6 +4,7 @@ import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../../components/ui/Button";
+import { useRovingRadio } from "../../hooks/useRovingRadio";
 import { cn } from "../../lib/cn";
 import { LANGUAGES, type AppLanguage } from "../../hooks/useAppPreferences";
 // The window icon Tauri already ships, the same one `AppIdentity` draws --
@@ -43,6 +44,11 @@ interface Props {
 export function WelcomeDialog({ language, onLanguageChange, onDone }: Props) {
   const { t } = useTranslation();
   const selectedRef = useRef<HTMLButtonElement>(null);
+  const radio = useRovingRadio({
+    values: LANGUAGES.map((option) => option.value),
+    value: language,
+    onChange: onLanguageChange,
+  });
 
   return (
     <Dialog.Root
@@ -84,7 +90,7 @@ export function WelcomeDialog({ language, onLanguageChange, onDone }: Props) {
             // already a containing block for the hairline below.
             "overflow-hidden rounded-xl border border-line-soft",
             "px-6 py-7 text-center shadow-(--shadow-panel)",
-            "bg-surface-glass backdrop-blur-glass",
+            "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
             // scale-in animates `scale`, not `transform`: the centring
             // utilities above compile to `translate`, and a transform in the
             // keyframe would add to them rather than replace them.
@@ -128,6 +134,7 @@ export function WelcomeDialog({ language, onLanguageChange, onDone }: Props) {
             <div
               role="radiogroup"
               aria-label={t("language")}
+              onKeyDown={radio.onKeyDown}
               className="grid w-full grid-cols-3 gap-2"
             >
               {LANGUAGES.map((option) => {
@@ -135,7 +142,11 @@ export function WelcomeDialog({ language, onLanguageChange, onDone }: Props) {
                 return (
                   <button
                     key={option.value}
-                    ref={selected ? selectedRef : undefined}
+                    {...radio.itemProps(option.value)}
+                    ref={(node) => {
+                      radio.itemProps(option.value).ref(node);
+                      if (selected) selectedRef.current = node;
+                    }}
                     type="button"
                     role="radio"
                     aria-checked={selected}
@@ -167,7 +178,7 @@ export function WelcomeDialog({ language, onLanguageChange, onDone }: Props) {
                     <span dir="auto" className="text-base font-medium">
                       {option.label}
                     </span>
-                    <span dir="ltr" className="text-[11px] tracking-wide text-fg-muted">
+                    <span dir="ltr" className="text-xs tracking-wide text-fg-muted">
                       {option.code}
                     </span>
                   </button>

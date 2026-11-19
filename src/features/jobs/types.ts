@@ -10,6 +10,9 @@ export type JobKind =
   | "extractAudio";
 
 export type JobState =
+  /** Waiting for a time the user chose. No backend job exists yet: the row
+   *  holds the request, and the store starts it when the time comes. */
+  | "scheduled"
   | "queued"
   | "running"
   | "completed"
@@ -91,6 +94,8 @@ export interface JobMetaEvent {
   contentType: string | null;
   /** What the source calls itself, for a job that started under its URL. */
   title: string | null;
+  /** The short side of the picture actually fetched (1080 for 1080p). */
+  resolution?: number | null;
 }
 
 /** What kind of file a job is producing, as far as anything knows yet.
@@ -135,6 +140,18 @@ export interface Job {
    *  Absent on rows written by builds that did not record it, which fall back
    *  to reading the title and the detail line. */
   fileKind?: JobFileKind;
+  /** When a scheduled row starts, as epoch milliseconds. */
+  scheduledAt?: number;
+  /** A scheduled row whose time passed while the app was closed. It is not
+   *  started on its own at launch -- a download meant for a night-time
+   *  internet package must not fire at nine in the morning -- and waits for
+   *  "Start now" instead. */
+  missed?: boolean;
+  /** Set on a row that was still running when the app last closed, so it
+   *  says "Interrupted" rather than a reasonless "Failed" -- and so a webview
+   *  reload can tell it apart from a job that genuinely ended this session.
+   *  Cleared by the next status the row receives. */
+  interrupted?: boolean;
   /** A row that exists before the backend has handed back an id.
    *
    *  Pressing the button closes the form, and everything between that and a
@@ -189,6 +206,69 @@ export interface DownloadRequest {
    *  preferences and carried on the request so a retry runs the way the
    *  original did. */
   parallel?: boolean;
+  /** The form's video choice. Supersedes `quality`, which older stored
+   *  requests still carry and the backend still reads. */
+  video?: VideoPrefs;
+  /** The form's audio choice. Supersedes `audioFormat`. */
+  audio?: AudioPrefs;
+  subtitles?: { langs: string[]; embed: boolean };
+  /** Title and artist tags (and chapters, on yt-dlp's path). Absent = yes. */
+  embedMetadata?: boolean;
+  /** The page's thumbnail as cover art. Absent = yes for audio, no for video. */
+  embedThumbnail?: boolean;
+  /** Cut SponsorBlock's sponsor segments out. YouTube only. */
+  sponsorBlock?: boolean;
+  /** Download only this stretch, in seconds. */
+  section?: { startSecs: number; endSecs: number };
+  /** A folder inside the destination, e.g. the playlist's name. */
+  subfolder?: string;
+}
+
+/** How the codec is weighed against resolution. Mirrors `formats::CodecPref`. */
+export type CodecPref = "auto" | "compatible" | "small";
+
+export interface VideoPrefs {
+  /** "best", or the short side: "2160", "1080", ... */
+  quality: string;
+  codec: CodecPref;
+  container: "mp4" | "mkv";
+}
+
+/** What an audio download ends up as. Mirrors `formats::AudioFormat`. */
+export type AudioFormatChoice = "original" | "m4a" | "opus" | "mp3";
+
+export interface AudioPrefs {
+  format: AudioFormatChoice;
+  /** MP3 only; absent is LAME's best VBR. */
+  bitrateKbps?: number;
+}
+
+/** What a media page offers. Mirrors `formats::MediaSummary`. */
+export interface MediaSummary {
+  heights: HeightOption[];
+  audio: AudioOption[];
+  subtitles: { lang: string; name: string | null }[];
+  autoCaptions: string[];
+  chapters: number;
+  isLive: boolean;
+  hasVideo: boolean;
+  suggestsAudio: boolean;
+}
+
+export interface HeightOption {
+  height: number;
+  fps: number;
+  hdr: boolean;
+  sizeBytes: number | null;
+  compatibleSizeBytes: number | null;
+}
+
+export interface AudioOption {
+  codec: string;
+  bitrate: number | null;
+  sizeBytes: number | null;
+  language: string | null;
+  original: boolean;
 }
 
 /** One shelf in the app's library folder. Mirrors `library::Slot` in Rust; a
@@ -253,21 +333,59 @@ export interface UrlInfo {
   /** Whether an interrupted download of this link continues rather than
    *  restarts. */
   resumable: boolean;
+  /** What a media page offers: resolutions with sizes, audio tracks,
+   *  subtitles. Null for a file and for pages that list no formats. */
+  media: MediaSummary | null;
 }
 
 /** One video in a playlist, ready to be queued as its own download. */
 export interface PlaylistEntry {
   url: string;
   title: string;
+  durationSecs: number | null;
+  thumbnail: string | null;
 }
 
 export interface PlaylistListing {
+  /** The playlist's own name, for the folder it can be saved into. */
+  title: string | null;
   entries: PlaylistEntry[];
   /** How many the playlist holds, before the cap. */
   total: number;
   /** Whether `entries` is short of `total`, so the form can say so rather than
    *  quietly starting the first hundred of a thousand. */
   truncated: boolean;
+}
+
+/** Mirrors `tray::TraySettings`. */
+export interface TraySettings {
+  /** The close button hides the window into the tray instead of quitting. */
+  closeToTray: boolean;
+  /** False when the tray icon could not be created, so the switch does nothing. */
+  available: boolean;
+}
+
+/** Mirrors `network::NetworkSettings`: what every connection agrees on. */
+export interface NetworkSettings {
+  /** `socks5h://127.0.0.1:10808`, `http://127.0.0.1:10809`, or null for the
+   *  system's own proxy settings. */
+  proxy: string | null;
+  /** How many downloads run at once. */
+  maxDownloads: number;
+  /** Bytes per second for all downloads together, or null for no limit. */
+  speedLimit: number | null;
+}
+
+export interface ProxyTest {
+  latencyMs: number;
+}
+
+/** What measuring the connection found. Speeds are bytes per second. */
+export interface SpeedTest {
+  bytesPerSecond: number;
+  /** The best second of the test. */
+  peakBytesPerSecond: number;
+  latencyMs: number;
 }
 
 export interface ToolStatus {
@@ -288,3 +406,6 @@ export interface UpdateResult {
 
 export const isActiveJob = (job: Job) =>
   job.state === "queued" || job.state === "running";
+
+/** Work that is not over: running, waiting its turn, or waiting for its time. */
+export const isOpenJob = (job: Job) => isActiveJob(job) || job.state === "scheduled";

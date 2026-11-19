@@ -161,7 +161,11 @@ fn js_runtime_args(runtime: Option<&JsRuntime>) -> Vec<String> {
 /// caller went through this function afterwards so the order is decided in one
 /// place rather than re-established correctly at four call sites.
 pub fn with_url(app: &AppHandle, cmd: &mut Command, url: &str) {
-    cmd.args(closing_args(js_runtime(app).as_ref(), url));
+    cmd.args(closing_args(
+        js_runtime(app).as_ref(),
+        crate::network::proxy().as_deref(),
+        url,
+    ));
 }
 
 /// The tail of every yt-dlp command line, as plain strings.
@@ -170,8 +174,17 @@ pub fn with_url(app: &AppHandle, cmd: &mut Command, url: &str) {
 /// The bug it guards produced a perfectly valid-looking command that downloaded
 /// the file and then failed the job, which is the kind of thing a person reads
 /// past and an assertion does not.
-fn closing_args(runtime: Option<&JsRuntime>, url: &str) -> Vec<String> {
+///
+/// The proxy is here for the same reason: every yt-dlp call goes through this
+/// function, so none of them can leave by a different route than the app's own
+/// HTTP client -- YouTube signs its stream URLs for the address that asked,
+/// and a resolve and a fetch from two addresses end in a 403.
+fn closing_args(runtime: Option<&JsRuntime>, proxy: Option<&str>, url: &str) -> Vec<String> {
     let mut args = js_runtime_args(runtime);
+    if let Some(proxy) = proxy {
+        args.push("--proxy".to_string());
+        args.push(proxy.to_string());
+    }
     args.push("--".to_string());
     args.push(url.to_string());
     args
@@ -428,8 +441,12 @@ mod tests {
         };
         let url = "https://youtu.be/RXP9dCr3t-c";
 
-        for runtime in [Some(&runtime), None] {
-            let args = closing_args(runtime, url);
+        for (runtime, proxy) in [
+            (Some(&runtime), None),
+            (None, None),
+            (Some(&runtime), Some("socks5h://127.0.0.1:10808")),
+        ] {
+            let args = closing_args(runtime, proxy, url);
             let separator = args
                 .iter()
                 .position(|arg| arg == "--")
@@ -445,10 +462,18 @@ mod tests {
 
         // And the runtime, when there is one, is passed as an option -- before
         // the separator, where yt-dlp still reads it as one.
-        let args = closing_args(Some(&runtime), url);
+        let args = closing_args(Some(&runtime), None, url);
         assert_eq!(
             &args[..2],
             &["--js-runtimes".to_string(), "node:/usr/bin/node".to_string()],
+        );
+
+        // So is the proxy: the same exit as the app's own client, for every
+        // yt-dlp call there is.
+        let args = closing_args(None, Some("socks5h://127.0.0.1:10808"), url);
+        assert_eq!(
+            &args[..2],
+            &["--proxy".to_string(), "socks5h://127.0.0.1:10808".to_string()],
         );
     }
 

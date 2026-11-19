@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useDirection } from "@radix-ui/react-direction";
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 
 import { cn } from "../../lib/cn";
@@ -6,7 +7,11 @@ import { cn } from "../../lib/cn";
 /** Distance between the trigger and the bubble, in px. */
 const GAP = 8;
 
-export type TooltipSide = "top" | "right" | "bottom" | "left";
+/** `start` and `end` follow the reading direction; Radix itself only knows
+ *  physical sides, so a "right" bubble beside the rail used to work in
+ *  Persian and Arabic only because it collided with the window edge and
+ *  flipped -- and over the expanded sidebar it landed on the app's own name. */
+export type TooltipSide = "top" | "bottom" | "start" | "end";
 
 /**
  * A styled tooltip, for controls that are an icon and nothing else.
@@ -46,7 +51,7 @@ export type TooltipSide = "top" | "right" | "bottom" | "left";
  */
 export function Tooltip({
   label,
-  side = "right",
+  side = "end",
   children,
 }: {
   label: string;
@@ -54,6 +59,10 @@ export function Tooltip({
   side?: TooltipSide;
   children: ReactNode;
 }) {
+  const rtl = useDirection() === "rtl";
+  const physical =
+    side === "start" ? (rtl ? "right" : "left") : side === "end" ? (rtl ? "left" : "right") : side;
+
   return (
     <RadixTooltip.Root>
       {/* asChild: the trigger is the caller's own button, and wrapping it in
@@ -63,7 +72,7 @@ export function Tooltip({
 
       <RadixTooltip.Portal>
         <RadixTooltip.Content
-          side={side}
+          side={physical}
           sideOffset={GAP}
           // The rail is against the window edge, so a bubble that has run out
           // of room should slide along the icon rather than flip to the far

@@ -5,7 +5,7 @@
  * the backend's shape reviewable in one screen, and it is the only place that
  * has to change when a command signature moves.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -21,8 +21,12 @@ import type {
   JobSummary,
   LibraryInfo,
   LibrarySlot,
+  NetworkSettings,
+  ProxyTest,
   PlaylistListing,
+  SpeedTest,
   ToolStatus,
+  TraySettings,
   UpdateResult,
   UrlInfo,
 } from "../features/jobs/types";
@@ -72,6 +76,40 @@ export const setLibraryOrganize = (enabled: boolean) =>
 export const setSaveNextToInput = (enabled: boolean) =>
   invoke<LibraryInfo>("set_save_next_to_input", { enabled });
 
+// ------------------------------------------------------------------- tray
+
+export const getTraySettings = () => invoke<TraySettings>("get_tray_settings");
+
+export const setCloseToTray = (enabled: boolean) =>
+  invoke<TraySettings>("set_close_to_tray", { enabled });
+
+/** The tray menu's words, in the interface language. Never throws: no tray in
+ *  `vite dev`, and the English defaults are a fine fallback. */
+export const setTrayLabels = async (show: string, quit: string) => {
+  try {
+    await invoke("set_tray_labels", { show, quit });
+  } catch {
+    // Nothing to label.
+  }
+};
+
+// ---------------------------------------------------------------- network
+
+export const getNetworkSettings = () => invoke<NetworkSettings>("get_network_settings");
+
+/** Validates, saves and applies; answers with what is now in force. */
+export const setNetworkSettings = (settings: NetworkSettings) =>
+  invoke<NetworkSettings>("set_network_settings", { settings });
+
+/** Whether YouTube answers through `proxy` (null: without one). */
+export const testProxy = (proxy: string | null) =>
+  invoke<ProxyTest>("test_proxy", { proxy });
+
+/** Measures the connection for several seconds, through the proxy downloads
+ *  use. Only ever called from a button: it fetches from a public speed-test
+ *  endpoint. */
+export const testInternetSpeed = () => invoke<SpeedTest>("test_internet_speed");
+
 export const probeUrl = (url: string, cookiesFrom?: string) =>
   invoke<UrlInfo>("probe_url", { url, cookiesFrom });
 
@@ -111,15 +149,23 @@ export async function chooseFolder(defaultPath?: string) {
   return typeof selected === "string" ? selected : null;
 }
 
-export async function chooseMediaFile(defaultPath?: string) {
+/** The names the file picker shows for its three filters, in the reader's
+ *  language. They were hard-coded English inside a Persian dialog. */
+export interface MediaFilterNames {
+  media: string;
+  video: string;
+  audio: string;
+}
+
+export async function chooseMediaFile(defaultPath: string | undefined, names: MediaFilterNames) {
   const selected = await open({
     multiple: false,
     directory: false,
     defaultPath,
     filters: [
-      { name: "Media", extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS] },
-      { name: "Video", extensions: VIDEO_EXTENSIONS },
-      { name: "Audio", extensions: AUDIO_EXTENSIONS },
+      { name: names.media, extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS] },
+      { name: names.video, extensions: VIDEO_EXTENSIONS },
+      { name: names.audio, extensions: AUDIO_EXTENSIONS },
     ],
   });
   return typeof selected === "string" ? selected : null;
@@ -169,6 +215,15 @@ export const readClipboardText = async (): Promise<string | null> => {
  * Failure is ignored: this is cosmetic, and it is unavailable in a plain
  * browser (`vite dev` without Tauri) and on mobile.
  */
+/** Never throws: no native window in `vite dev`, and a title is cosmetic. */
+export const setWindowTitle = async (title: string) => {
+  try {
+    await getCurrentWindow().setTitle(title);
+  } catch {
+    // No native window to name.
+  }
+};
+
 export const setWindowBackground = async (color: string) => {
   try {
     await getCurrentWindow().setBackgroundColor(color);
@@ -186,6 +241,82 @@ export const onJobStatus = (
   handler: (payload: JobStatusEvent) => void,
 ): Promise<UnlistenFn> =>
   listen<JobStatusEvent>(STATUS_EVENT, ({ payload }) => handler(payload));
+
+/** The rate while a speed test runs, about four times a second. */
+export const onSpeedTestProgress = (
+  handler: (bytesPerSecond: number) => void,
+): Promise<UnlistenFn> =>
+  listen<{ bytesPerSecond: number }>("speed-test-progress", ({ payload }) =>
+    handler(payload.bytesPerSecond),
+  );
+
+/** The window going into the tray (false) or coming back out of it (true).
+ *  Emitted by Rust, because a hidden webview is not told by the page itself. */
+export const onAppVisibility = (
+  handler: (visible: boolean) => void,
+): Promise<UnlistenFn> =>
+  listen<boolean>("app-visibility", ({ payload }) => handler(payload));
+
+/** Focus of the native window. Rejects outside Tauri (`vite dev`), which the
+ *  caller treats as "always focused". */
+export const onWindowFocusChange = (
+  handler: (focused: boolean) => void,
+): Promise<UnlistenFn> =>
+  getCurrentWindow().onFocusChanged(({ payload }) => handler(payload));
+
+/** Minimised windows report no visibility change, only a resize. */
+export const onWindowResized = (handler: () => void): Promise<UnlistenFn> =>
+  getCurrentWindow().onResized(() => handler());
+
+export const isWindowMinimized = async () => {
+  try {
+    return await getCurrentWindow().isMinimized();
+  } catch {
+    return false;
+  }
+};
+
+// ------------------------------------------------------- audio analysis
+//
+// The trim studio's waveform, silences and preview. See media/analyze.rs.
+
+/** Mirrors `analyze::AudioAnalysis`. */
+export interface AudioAnalysis {
+  durationSecs: number;
+  windowSecs: number;
+  /** min/max pairs, interleaved: [min0, max0, min1, max1, ...], -1..1. */
+  peaks: number[];
+  /** RMS per window, dBFS, floored at -90. */
+  rmsDb: number[];
+  peakDb: number;
+  meanRmsDb: number;
+  silences: { startSecs: number; endSecs: number }[];
+  silenceTotalSecs: number;
+}
+
+export const analyzeAudio = (path: string, token: string) =>
+  invoke<AudioAnalysis>("analyze_audio", { path, token });
+
+export const cancelAnalysis = (token: string) =>
+  invoke<void>("cancel_analysis", { token }).catch(() => undefined);
+
+export const onAnalysisProgress = (
+  handler: (payload: { token: string; percent: number }) => void,
+): Promise<UnlistenFn> =>
+  listen<{ token: string; percent: number }>("audio-analysis-progress", ({ payload }) =>
+    handler(payload),
+  );
+
+/** A URL the webview can play this file from, once it has been allowed. */
+export const previewUrl = async (path: string): Promise<string> => {
+  await invoke<void>("allow_preview", { path });
+  return convertFileSrc(path);
+};
+
+/** The same, through a small MP3 transcode -- for a codec WebKitGTK cannot
+ *  play. */
+export const transcodedPreviewUrl = async (path: string): Promise<string> =>
+  convertFileSrc(await invoke<string>("make_preview", { path }));
 
 export const onJobMeta = (
   handler: (payload: JobMetaEvent) => void,

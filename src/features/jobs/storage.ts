@@ -1,5 +1,5 @@
 import { emptyJobsState, type JobsState } from "./jobsReducer";
-import { SLOT_FOR_KIND, type Job, type JobKind } from "./types";
+import { isOpenJob, SLOT_FOR_KIND, type Job, type JobKind } from "./types";
 
 /**
  * The kinds this version knows how to draw.
@@ -39,15 +39,29 @@ export function saveJobs(state: JobsState) {
     // its way to the backend, so one written here would come back after a
     // restart as a failed download that never existed -- with a retry button
     // and no request behind it.
-    const order = state.order
-      .filter((id) => !state.byId[id]?.pending)
-      .slice(0, MAX_ITEMS);
+    //
+    // The cap is on finished rows only. It used to cut the newest hundred of
+    // everything, so queueing a 100-video playlist pushed still-running
+    // downloads out of the saved list -- and after a crash they had no row, no
+    // retry button, and a partial file nobody would ever continue.
+    const kept = state.order.filter((id) => !state.byId[id]?.pending);
+    let finished = 0;
+    const order = kept.filter((id) => {
+      if (isUnfinished(state.byId[id])) return true;
+      finished += 1;
+      return finished <= MAX_ITEMS;
+    });
     const byId: Record<string, Job> = {};
     for (const id of order) byId[id] = trimForStorage(state.byId[id]);
     localStorage.setItem(KEY, JSON.stringify({ byId, order }));
   } catch {
     // Quota exceeded or storage disabled. History is a convenience.
   }
+}
+
+/** Work that is not over: running, waiting, or not started yet. */
+function isUnfinished(job: Job | undefined): boolean {
+  return Boolean(job && isOpenJob(job));
 }
 
 function trimForStorage(job: Job): Job {
@@ -77,14 +91,25 @@ function reviveState(raw: unknown): JobsState {
 
   const byId: Record<string, Job> = {};
   const order: string[] = [];
-  for (const id of parsed.order.slice(0, MAX_ITEMS)) {
+  const now = Date.now();
+  for (const id of parsed.order) {
     const job = parsed.byId[id];
     if (!job || !KNOWN_KINDS.has(job.kind)) continue;
+    // A schedule survives a restart. One whose time came while the app was
+    // closed is kept, and marked, rather than started the moment the app opens.
+    if (job.state === "scheduled") {
+      byId[id] = { ...job, missed: job.missed || (job.scheduledAt ?? 0) <= now };
+      order.push(id);
+      continue;
+    }
     byId[id] =
       job.state === "running" || job.state === "queued"
         ? {
             ...job,
             state: job.kind === "download" ? "failed" : "cancelled",
+            // Said as what it is. Nothing failed and nobody cancelled
+            // anything: the app closed while this was running.
+            interrupted: true,
             percent: null,
             speed: undefined,
             etaSecs: undefined,

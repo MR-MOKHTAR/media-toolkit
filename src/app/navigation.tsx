@@ -33,6 +33,7 @@ export type SettingsSection =
   | "general"
   | "storage"
   | "downloads"
+  | "network"
   | "tools";
 
 /**
@@ -124,6 +125,10 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   // a half-filled form.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Something already answered this key -- an open dropdown closing on
+      // Escape. Radix marks the event handled and lets it travel on, so this
+      // listener used to close the menu *and* leave the screen behind it.
+      if (event.defaultPrevented) return;
       const target = event.target as HTMLElement | null;
       const typing =
         target?.tagName === "INPUT" ||

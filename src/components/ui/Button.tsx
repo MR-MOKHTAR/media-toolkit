@@ -20,16 +20,23 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANTS: Record<Variant, string> = {
+  /* The screen's own gradient (theme.css, "tool identity") behind a
+     holographic rim that starts turning under the pointer, with one pass of
+     light across it. */
   primary:
-    "bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow) hover:bg-(image:--gradient-accent-hover) hover:shadow-(--shadow-glow-accent) disabled:hover:bg-(image:--gradient-accent) disabled:hover:shadow-(--shadow-glow)",
+    "relative holo-rim holo-sheen hover:enabled:holo-rim-live [--rim-opacity:0.7] bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow) hover:bg-(image:--gradient-accent-hover) hover:shadow-(--shadow-glow-accent) disabled:hover:bg-(image:--gradient-accent) disabled:hover:shadow-(--shadow-glow)",
   // No resting shadow. It was Tailwind's `shadow-sm` -- pure black at 10%,
   // which is invisible on the #111824 surface dark mode paints buttons on, so
   // the button had an elevation in one theme and none in the other. The border
   // carries the resting edge in both; the lift is reserved for hover.
+  //
+  // The edge is the holographic rim rather than a grey border: faint at rest,
+  // brighter on hover. Same box, no border -- a border under the rim drew the
+  // edge twice.
   secondary:
-    "bg-surface text-fg border border-line hover:bg-surface-hover hover:border-line-strong hover:shadow-(--shadow-raise)",
+    "relative holo-rim [--rim-opacity:0.5] hover:enabled:[--rim-opacity:0.95] glass-inset text-fg hover:bg-surface-hover hover:shadow-(--shadow-raise)",
   ghost: "text-fg-soft hover:bg-surface-hover hover:text-fg",
-  danger: "text-danger hover:bg-danger/10",
+  danger: "text-danger-text hover:bg-danger/10",
   /* A quiet action that is still the good one -- reveal, retry, view. It sits
      beside the button that throws the file away, and the one that opens your
      file must not look like the one that deletes it. */
@@ -37,7 +44,7 @@ const VARIANTS: Record<Variant, string> = {
   /* Destructive, but resting muted rather than red: on the job card this is
      the cancel X next to an accent-tinted reveal button, and two coloured
      icons side by side make neither of them mean anything. */
-  dangerGhost: "text-fg-muted hover:bg-danger/10 hover:text-danger",
+  dangerGhost: "text-fg-muted hover:bg-danger/10 hover:text-danger-text",
 };
 
 /** Three heights and one type size across the two smaller ones.

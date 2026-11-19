@@ -1,6 +1,7 @@
 # Building with this design system
 
-A desktop app's UI kit: one accent, a fixed token scale, and full RTL support
+A desktop app's UI kit: one accent concept (worn in each tool's own gradient),
+a holographic finish, a fixed token scale, and full RTL support
 (the app ships English, Persian and Arabic).
 
 ## Wrap the tree in `DesignSystemProvider`
@@ -28,7 +29,11 @@ it costs nothing.
 
 Tailwind utilities generated from the `@theme` scale. **The stylesheet ships
 exactly the vocabulary below.** Off-palette classes (`bg-blue-500`,
-`text-gray-400`) resolve to nothing, by design — this system has one accent.
+`text-gray-400`) resolve to nothing, by design — this system has one accent
+concept. Which colour it is depends on where you are: each tool sets its own
+identity (`data-tint` on the shell and `<html>`, `data-tool` on a single
+element such as a sidebar row), and every `accent` token below follows it.
+Never name a tool colour in a component.
 
 | Family | Names |
 |---|---|
@@ -40,7 +45,11 @@ exactly the vocabulary below.** Off-palette classes (`bg-blue-500`,
 | Type | `text-xs` 13 · `text-sm` 14 · `text-base` 15 (body **and every control**) · `text-lg` 17 (card/panel titles) · `text-xl` 22 (screen titles) · `text-2xl` 26 |
 | Radius | `rounded-sm` 6 (chips, inputs) · `rounded-md` 10 (buttons, rows) · `rounded-lg` 16 (cards) · `rounded-xl` 24 |
 | Elevation | `shadow-(--shadow-panel)` (floats over the app) · `shadow-(--shadow-card)` (the form card) · `shadow-(--shadow-raise)` (hover lift) · `shadow-(--shadow-glow)` / `shadow-(--shadow-glow-accent)` (accent emphasis) — there are no others, and **never** Tailwind's `shadow-sm`/`shadow-md`, which are pure black and vanish in dark mode |
-| Glass | `bg-surface-glass` + `backdrop-blur-glass` + `border-line-soft` — the three always travel together |
+| Glass | `bg-surface-glass` + `backdrop-blur-glass` + `border-line-soft` — the three always travel together (dialogs, menus, toasts) |
+| Glass shell | `glass-chrome` (title bar, sidebar, rails, status bar, toolbars) · `glass-card` (a card straight on the page — `Card surface="glass"`) · `glass-inset` (a card inside glass: no second blur) · `glass-spotlight` (pointer-following light on an interactive card). Each is fill + blur + edge in one class, and all of them turn opaque under `html[data-effects="off"]` |
+| Tool identity | `--tool-a` / `--tool-b` — the current tool's two gradient stops. `bg-(image:--gradient-accent)` is built from them; `tool-tile` (a tool's mark: gradient fill + on-accent glyph) and `holo-text` (gradient display text, `text-xl`/`text-2xl` only) use them directly |
+| Holographic | `--gradient-holo` (the shared four-hue spectrum, for hairlines) · `holo-rim` (1px spectrum rim; needs a positioned element; `[--rim-over:1px]` lays it over an existing border, `[--rim-opacity:…]` dims it, `[--rim:…]` recolours it) · `holo-rim-live` (the rim turning — only on "where you are": the current nav row, the screen mark, a hovered primary) · `holo-sheen` (one pass of light on hover). All stand still under `html[data-effects="off"]`, while the window is hidden and with reduced motion |
+| Background | `--color-aurora-base`, `--color-aurora-1/2/3`, `--color-aurora-icon` — the living background's palette, set per tool by `data-tint` on the shell |
 | Motion | `duration-(--duration-fast)` 120ms · `duration-(--duration-base)` 200ms · `ease-out-quart`. Always the **parens** form — the square-bracket variant compiles to an invalid value and silently runs at 0s |
 | States | `disabled:opacity-disabled` — one value, everywhere |
 | Helper | `tnum` — tabular numerals; use on **every** number that counts or measures |
