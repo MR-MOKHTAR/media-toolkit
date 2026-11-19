@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import {
+  DEFAULT_BACKDROP,
+  isBackdropId,
+  type BackdropId,
+} from "../components/background/backdrops";
 import i18n from "../i18n";
 import * as ipc from "../lib/ipc";
 
@@ -13,6 +18,7 @@ const WELCOME_STORAGE_KEY = "downloader-welcomed";
 /** Also read by index.html's bootstrap, so the first paint already has the
  *  right amount of glass. */
 const EFFECTS_STORAGE_KEY = "downloader-effects";
+const BACKDROP_STORAGE_KEY = "downloader-backdrop";
 
 /** `--color-aurora-base` in both themes, as literals -- the colour the
  *  background is painted on, and so the one a resize should flash, if any.
@@ -35,6 +41,16 @@ export type AppLanguage = "en" | "fa" | "ar";
 export type EffectsLevel = "full" | "lite" | "off";
 
 export const EFFECTS_LEVELS: EffectsLevel[] = ["full", "lite", "off"];
+
+function getInitialBackdrop(): BackdropId {
+  try {
+    const stored = localStorage.getItem(BACKDROP_STORAGE_KEY);
+    if (isBackdropId(stored)) return stored;
+  } catch {
+    // The default below.
+  }
+  return DEFAULT_BACKDROP;
+}
 
 function isEffectsLevel(value: unknown): value is EffectsLevel {
   return value === "full" || value === "lite" || value === "off";
@@ -126,6 +142,15 @@ export function useAppPreferences() {
   const [language, setLanguage] = useState<AppLanguage>(getInitialLanguage);
   const [needsWelcome, setNeedsWelcome] = useState(getInitialWelcome);
   const [effects, setEffects] = useState<EffectsLevel>(getInitialEffects);
+  const [backdrop, setBackdrop] = useState<BackdropId>(getInitialBackdrop);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(BACKDROP_STORAGE_KEY, backdrop);
+    } catch {
+      // Applies for this session only.
+    }
+  }, [backdrop]);
 
   useEffect(() => {
     document.documentElement.dataset.effects = effects;
@@ -203,5 +228,7 @@ export function useAppPreferences() {
     completeWelcome,
     effects,
     setEffects,
+    backdrop,
+    setBackdrop,
   };
 }

@@ -37,6 +37,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
     completeWelcome,
     effects,
     setEffects,
+    backdrop,
+    setBackdrop,
   } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
@@ -86,7 +88,7 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
           className="aurora-host relative isolate flex h-full overflow-hidden"
           data-tint={route.name}
         >
-          <AppBackground effects={effects} />
+          <AppBackground effects={effects} backdrop={backdrop} />
 
           <AppSidebar isRtl={isRtl} collapsed={collapsed} onToggle={toggleSidebar} />
 
@@ -166,6 +168,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                       onLanguageChange={setLanguage}
                       effects={effects}
                       onEffectsChange={setEffects}
+                      backdrop={backdrop}
+                      onBackdropChange={setBackdrop}
                       notify={notify}
                       // Set when a tool form sent the user here to change one
                       // of its own defaults, so they land on that panel.

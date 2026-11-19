@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { AuroraScene, SceneColors } from "./scene/auroraScene";
+import type { SceneTheme } from "./scene/shaders";
 import type { BackgroundActivity } from "./useBackgroundActivity";
 
 interface Props {
+  /** The picture to paint. A change remounts this component (see
+   *  AppBackground), so the scene is built once per theme. */
+  theme: SceneTheme;
   activity: BackgroundActivity;
   /** The first frame is on screen: the CSS layer under it can go. */
   onReady: () => void;
@@ -41,7 +45,7 @@ function readColors(element: Element): SceneColors {
  * paint never waits for it -- the CSS layer is on screen until the first frame
  * here is drawn, and stays if anything goes wrong.
  */
-export function AuroraCanvas({ activity, onReady, onFail }: Props) {
+export function AuroraCanvas({ theme, activity, onReady, onFail }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const scene = useRef<AuroraScene | null>(null);
   const [ready, setReady] = useState(false);
@@ -60,6 +64,7 @@ export function AuroraCanvas({ activity, onReady, onFail }: Props) {
       .then(({ createAuroraScene }) => {
         if (disposed) return;
         const created = createAuroraScene(element, {
+          theme,
           onFirstFrame: () => {
             setReady(true);
             callbacks.current.onReady();
@@ -80,6 +85,8 @@ export function AuroraCanvas({ activity, onReady, onFail }: Props) {
       scene.current?.dispose();
       scene.current = null;
     };
+    // `theme` is fixed for this instance: the host keys it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Running, slowed, stopped, or one still frame.

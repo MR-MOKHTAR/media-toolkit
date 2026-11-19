@@ -23,6 +23,7 @@ import {
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 import { MEDIA_SHAPES } from "./mediaShapes";
+import { SCENE_SHADERS, type SceneTheme } from "./shaders";
 
 /** The colours the scene is drawn in, as CSS colour strings -- read straight
  *  off the theme's `--color-aurora-*` tokens by the host. */
@@ -48,6 +49,8 @@ export interface AuroraScene {
 }
 
 interface Options {
+  /** Which picture to paint -- see `shaders.ts`. */
+  theme: SceneTheme;
   /** After the first frame is on the canvas, so the host can fade it in. */
   onFirstFrame: () => void;
   /** The GPU is not keeping up, or the context was lost: give up. */
@@ -68,75 +71,6 @@ void main() {
 }
 `;
 
-const AURORA_FRAGMENT = /* glsl */ `
-precision highp float;
-varying vec2 vUv;
-uniform float uTime;
-uniform float uAspect;
-uniform float uStrength;
-uniform vec2 uPointer;
-uniform vec3 uBase;
-uniform vec3 uA;
-uniform vec3 uB;
-uniform vec3 uC;
-
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(
-    mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-    u.y
-  );
-}
-
-float fbm(vec2 p) {
-  float value = 0.0;
-  float amplitude = 0.5;
-  for (int i = 0; i < 5; i++) {
-    value += amplitude * noise(p);
-    p = p * 2.03 + vec2(1.7, 9.2);
-    amplitude *= 0.5;
-  }
-  return value;
-}
-
-void main() {
-  vec2 p = vec2(vUv.x * uAspect, vUv.y);
-  float t = uTime * 0.03;
-
-  vec2 q = vec2(fbm(p * 1.3 + vec2(0.0, t)), fbm(p * 1.3 + vec2(5.2, -t)));
-  vec2 r = vec2(
-    fbm(p * 1.5 + 2.0 * q + vec2(1.7, 9.2) + t * 0.6),
-    fbm(p * 1.5 + 2.0 * q + vec2(8.3, 2.8) - t * 0.4)
-  );
-  float f = fbm(p * 1.1 + 2.2 * r);
-
-  vec3 color = uBase;
-  color = mix(color, uA, clamp(f * f * 1.8, 0.0, 1.0) * uStrength);
-  color = mix(color, uB, clamp(length(q) * 0.6 - 0.15, 0.0, 1.0) * uStrength * 0.85);
-  color = mix(color, uC, clamp(r.y * r.y * 1.4, 0.0, 1.0) * uStrength * 0.7);
-
-  // The curtains: soft vertical bands, brightest towards the top of the window.
-  float band = sin(p.x * 2.4 + r.x * 3.0 + t * 4.0) * 0.5 + 0.5;
-  float curtain = smoothstep(0.35, 1.0, band) * smoothstep(1.15, 0.2, vUv.y + (f - 0.5) * 0.5);
-  color += curtain * mix(uA, uB, vUv.x) * uStrength * 0.35;
-
-  // A faint warmth where the pointer is.
-  float d = distance(vUv, uPointer * vec2(0.5, -0.5) + 0.5);
-  color += uA * uStrength * 0.12 * smoothstep(0.45, 0.0, d);
-
-  // A grain of dither against banding in the smooth gradients.
-  color += (hash(gl_FragCoord.xy + fract(uTime)) - 0.5) / 255.0;
-
-  gl_FragColor = vec4(color, 1.0);
-}
-`;
 
 /* ------------------------------------------------------------------ icons --
  * Where each glyph floats, in screen terms: x and y from 0 to 1 across the
@@ -194,6 +128,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
     uTime: { value: 0 },
     uAspect: { value: 1 },
     uStrength: { value: 0.6 },
+    uDark: { value: 1 },
     uPointer: { value: [0, 0] as [number, number] },
     uBase: { value: new Color() },
     uA: { value: new Color() },
@@ -202,7 +137,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
   };
   const auroraMaterial = new ShaderMaterial({
     vertexShader: AURORA_VERTEX,
-    fragmentShader: AURORA_FRAGMENT,
+    fragmentShader: SCENE_SHADERS[options.theme].fragment,
     uniforms,
     depthTest: false,
     depthWrite: false,
@@ -216,10 +151,16 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
   const scene = new Scene();
   scene.background = auroraTarget.texture;
 
-  const pmrem = new PMREMGenerator(renderer);
-  const environment: Texture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environment = environment;
-  pmrem.dispose();
+  // The glyphs are drawn only by the themes that float them; the others skip
+  // the environment map as well, which is the expensive part of setting up.
+  const withIcons = SCENE_SHADERS[options.theme].icons;
+  let environment: Texture | null = null;
+  if (withIcons) {
+    const pmrem = new PMREMGenerator(renderer);
+    environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environment;
+    pmrem.dispose();
+  }
 
   const hemisphere = new HemisphereLight(0xffffff, 0x223344, 0.6);
   scene.add(hemisphere);
@@ -230,7 +171,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
   const camera = new PerspectiveCamera(FOV, 1, 0.1, 100);
   camera.position.set(0, 0, CAMERA_Z);
 
-  const geometries = MEDIA_SHAPES.map((build) => {
+  const geometries = (withIcons ? MEDIA_SHAPES : []).map((build) => {
     const geometry = new ExtrudeGeometry(build(), {
       depth: 0.32,
       bevelEnabled: true,
@@ -246,7 +187,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
   const group = new Group();
   scene.add(group);
 
-  const floaters: Floater[] = SPOTS.map((spot, index) => {
+  const floaters: Floater[] = (withIcons ? SPOTS : []).map((spot, index) => {
     const material = new MeshPhysicalMaterial({
       metalness: 0.15,
       roughness: 0.2,
@@ -294,6 +235,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
       uniforms.uB.value.copy(target.b);
       uniforms.uC.value.copy(target.c);
       iconColor.copy(target.icon);
+      uniforms.uDark.value = target.dark ? 1 : 0;
     }
   };
 
@@ -357,6 +299,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
     uniforms.uC.value.lerp(target.c, k);
     iconColor.lerp(target.icon, k);
     uniforms.uStrength.value += ((target.dark ? 0.62 : 0.55) - uniforms.uStrength.value) * k;
+    uniforms.uDark.value += ((target.dark ? 1 : 0) - uniforms.uDark.value) * k;
     uniforms.uTime.value = time;
 
     pointer.x += (pointer.tx - pointer.x) * 0.05;
@@ -480,7 +423,7 @@ export function createAuroraScene(canvas: HTMLCanvasElement, options: Options): 
       auroraQuad.geometry.dispose();
       auroraMaterial.dispose();
       auroraTarget.dispose();
-      environment.dispose();
+      environment?.dispose();
       renderer.dispose();
       // `dispose` frees what three.js made, not the context itself. Each
       // switch of Effects mounts a new canvas, and the browser's cap on live

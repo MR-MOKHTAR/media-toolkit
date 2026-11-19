@@ -121,11 +121,11 @@
   "drop_file": "Drop a file here",
   "effects": "Background effects",
   "effects_full": "Full",
-  "effects_full_hint": "A moving aurora with floating 3D icons. Turns itself down on a slow graphics card.",
+  "effects_full_hint": "The picture drawn on the graphics card, at its richest. Turns itself down on a slow graphics card.",
   "effects_lite": "Light",
-  "effects_lite_hint": "The same aurora drawn more simply — gentle on battery and older computers.",
+  "effects_lite_hint": "The same picture drawn more simply — gentle on battery and older computers.",
   "effects_off": "Off",
-  "effects_off_hint": "A still background and solid panels. Nothing moves.",
+  "effects_off_hint": "The same picture, held still. Nothing moves.",
   "embed_cover": "Cover art",
   "embed_cover_hint": "The video's thumbnail, shown by players as the album picture (MP3 and M4A).",
   "embed_metadata": "Write title and artist into the file",
@@ -428,5 +428,11 @@
   "compress_vlevel_balanced_hint": "Good picture, sensible size",
   "compress_vlevel_high": "High quality",
   "compress_vlevel_high_hint": "Close to the original",
-  "compress_audio_note_converted": "Channels and sample rate are picked for you; the result is {{format}}, which plays everywhere. The file is {{size}} now."
+  "compress_audio_note_converted": "Channels and sample rate are picked for you; the result is {{format}}, which plays everywhere. The file is {{size}} now.",
+  "backdrop": "Background",
+  "backdrop_aurora": "Aurora",
+  "backdrop_silk": "Silk",
+  "backdrop_cosmos": "Cosmos",
+  "backdrop_girih": "Girih",
+  "backdrop_mesh": "Mesh"
 }
