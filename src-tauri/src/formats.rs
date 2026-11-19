@@ -306,7 +306,7 @@ impl Format {
             .get("filesize")
             .and_then(Value::as_u64)
             .or_else(|| raw.get("filesize_approx").and_then(Value::as_u64))
-            .or_else(|| match duration {
+            .or(match duration {
                 Some(seconds) if tbr > 0.0 => Some((tbr * 125.0 * seconds) as u64),
                 _ => None,
             });

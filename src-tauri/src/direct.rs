@@ -2265,7 +2265,7 @@ mod tests {
         // A failed attempt gives back 800 KB...
         tokio::time::advance(Duration::from_millis(250)).await;
         let after_rewind = meter.sample(200_000).expect("measuring");
-        assert!(after_rewind >= 0.0 && after_rewind < 1_500_000.0, "{after_rewind}");
+        assert!((0.0..1_500_000.0).contains(&after_rewind), "{after_rewind}");
         // ...which are then fetched again over the next second.
         tokio::time::advance(Duration::from_secs(1)).await;
         let refetched = meter.sample(1_000_000).expect("measuring");

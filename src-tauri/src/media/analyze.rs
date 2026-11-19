@@ -334,11 +334,11 @@ async fn pump<R: tokio::io::AsyncRead + Unpin>(
             samples.push(i16::from_le_bytes([lo, bytes[0]]));
             bytes = &bytes[1..];
         }
-        let pairs = bytes.chunks_exact(2);
-        if let [b] = pairs.remainder() {
+        let (pairs, rest) = bytes.as_chunks::<2>();
+        if let [b] = rest {
             carry = Some(*b);
         }
-        samples.extend(pairs.map(|p| i16::from_le_bytes([p[0], p[1]])));
+        samples.extend(pairs.iter().map(|p| i16::from_le_bytes(*p)));
         acc.feed(&samples);
 
         if last.elapsed() >= Duration::from_millis(100) && expected_samples > 0.0 {
@@ -396,7 +396,7 @@ pub async fn analyze_audio(
     let result = tokio::select! {
         biased;
         () = cancel.cancelled() => None,
-        r = pump(stdout, &mut acc, expected, |p| emit(p)) => Some(r),
+        r = pump(stdout, &mut acc, expected, &emit) => Some(r),
     };
     let Some(read) = result else {
         // Dropping `running` kills the tree; kill now so wait() returns promptly.

@@ -281,6 +281,22 @@ pub struct Jobs {
     net_debt: Arc<AtomicUsize>,
 }
 
+/// Pays off one permit of lane debt, if any is owed. True when one was.
+///
+/// A plain compare-exchange loop rather than `fetch_update`: newer Rust
+/// deprecates that name in favour of `try_update`, which older toolchains
+/// don't have, and this has to build on both.
+fn take_one(debt: &AtomicUsize) -> bool {
+    let mut owed = debt.load(Ordering::SeqCst);
+    while owed > 0 {
+        match debt.compare_exchange_weak(owed, owed - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(now) => owed = now,
+        }
+    }
+    false
+}
+
 /// A place in a lane, held for as long as the job runs.
 ///
 /// Returned to the lane when dropped -- unless the lane has shrunk since it
@@ -297,8 +313,7 @@ impl Drop for LanePermit {
         let (Some(permit), Some(debt)) = (self.permit.take(), self.debt.as_ref()) else {
             return;
         };
-        let owed = debt.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| owed.checked_sub(1));
-        if owed.is_ok() {
+        if take_one(debt) {
             permit.forget();
         }
     }
@@ -365,12 +380,7 @@ impl Jobs {
             let mut raise = slots - *current;
             // Places still owed are simply no longer owed: the permits that
             // would have been retired come back and stay.
-            while raise > 0
-                && self
-                    .net_debt
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| owed.checked_sub(1))
-                    .is_ok()
-            {
+            while raise > 0 && take_one(&self.net_debt) {
                 raise -= 1;
             }
             self.net.add_permits(raise);

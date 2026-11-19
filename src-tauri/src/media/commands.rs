@@ -23,6 +23,9 @@ pub async fn probe_media(app: AppHandle, path: String) -> AppResult<MediaInfo> {
 }
 
 /// Pure estimate for the hint under the compress presets. No process, no job.
+// Each argument is a field the frontend sends by name; a tauri command can't
+// take a struct without changing that call.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn estimate_compressed_size(
     app: AppHandle,

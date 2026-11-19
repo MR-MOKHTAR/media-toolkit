@@ -23,6 +23,10 @@ concurrency:
 
 jobs:
   release:
+    # A "chore: release vX.Y.Z" commit is pushed together with its tag, and the
+    # tag run already builds exactly that commit. Skip the branch run for it
+    # instead of building the same installers twice.
+    if: "github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'chore: release')"
     permissions:
       contents: write
     strategy:
