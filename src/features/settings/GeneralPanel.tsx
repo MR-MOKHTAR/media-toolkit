@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Moon, Sparkles, Sun, Wind, ZapOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { BackdropPicker } from "../../components/background/BackdropPicker";
+import type { BackdropId } from "../../components/background/backdrops";
 import { SectionLabel } from "../../components/ui/Card";
 import { CheckRow } from "../../components/ui/CheckRow";
 import { Segmented } from "../../components/ui/Segmented";
@@ -21,6 +23,8 @@ interface Props {
   onLanguageChange: (language: AppLanguage) => void;
   effects: EffectsLevel;
   onEffectsChange: (effects: EffectsLevel) => void;
+  backdrop: BackdropId;
+  onBackdropChange: (backdrop: BackdropId) => void;
 }
 
 const EFFECT_ICONS = {
@@ -44,6 +48,8 @@ export function GeneralPanel({
   onLanguageChange,
   effects,
   onEffectsChange,
+  backdrop,
+  onBackdropChange,
 }: Props) {
   const { t } = useTranslation();
   const [tray, setTray] = useState<TraySettings | null>(null);
@@ -77,6 +83,13 @@ export function GeneralPanel({
             { value: "dark", label: t("theme_dark"), icon: <Moon size={16} /> },
           ]}
         />
+      </section>
+
+      {/* Which picture is behind the window. Before how much it moves:
+          it is the choice people come here to make. */}
+      <section className="flex flex-col gap-2">
+        <SectionLabel>{t("backdrop")}</SectionLabel>
+        <BackdropPicker value={backdrop} onChange={onBackdropChange} />
       </section>
 
       {/* How much the background does. Its own row rather than folded into

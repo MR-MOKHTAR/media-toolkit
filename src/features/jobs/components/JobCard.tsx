@@ -55,6 +55,9 @@ interface JobCardProps {
   /** Changes every half minute, so "2 minutes ago" does not stay "just now"
    *  on a list nothing else is updating. Read only to re-render. */
   now?: number;
+  /** Drawn as the app's message in a chat thread: the bubble's corner
+   *  points at the avatar beside it. */
+  bubble?: boolean;
   onCancel: (id: string) => void;
   onRemove: (id: string) => void;
   onReveal: (path: string) => void;
@@ -198,6 +201,7 @@ function JobCardComponent({
   cancelling,
   retrying,
   showTool,
+  bubble,
   onCancel,
   onRemove,
   onReveal,
@@ -212,7 +216,7 @@ function JobCardComponent({
   // the name of the thing that was asked for; the rest is drawn as the shape
   // it is about to take. `pending` never changes on a job: the real one arrives
   // under a new id, which is a different row as far as React is concerned.
-  if (job.pending) return <PendingCard job={job} />;
+  if (job.pending) return <PendingCard job={job} bubble={bubble} />;
 
   const active = job.state === "running" || job.state === "queued";
   const scheduled = job.state === "scheduled";
@@ -279,7 +283,11 @@ function JobCardComponent({
       padding="sm"
       surface="glass"
       interactive={Boolean(revealable)}
-      className="relative flex items-start gap-3"
+      className={cn(
+        "relative flex items-start gap-3",
+        bubble && "rounded-2xl rounded-es-md",
+        bubble && job.state === "failed" && "border-danger/40",
+      )}
     >
       {revealable && (
         <button
@@ -292,7 +300,7 @@ function JobCardComponent({
           // rather than a name -- made a long history slow to get through.
           aria-label={t("reveal_item", { title: displayTitleOf(job.title) })}
           tabIndex={-1}
-          className="absolute inset-0 rounded-lg transition-colors duration-(--duration-fast) hover:bg-surface-hover"
+          className="absolute inset-0 rounded-[inherit] transition-colors duration-(--duration-fast) hover:bg-surface-hover"
         />
       )}
 
@@ -528,12 +536,17 @@ function ErrorLine({ message }: { message: string }) {
  * It is replaced in place, not added above, so the moment the id arrives the
  * row simply fills in -- see the `started` case in `jobsReducer`.
  */
-function PendingCard({ job }: { job: Job }) {
+function PendingCard({ job, bubble }: { job: Job; bubble?: boolean }) {
   const { t } = useTranslation();
   const isLink = /^https?:\/\//i.test(job.title);
 
   return (
-    <Card padding="sm" surface="glass" title={job.title} className="flex items-start gap-3">
+    <Card
+      padding="sm"
+      surface="glass"
+      title={job.title}
+      className={cn("flex items-start gap-3", bubble && "rounded-2xl rounded-es-md")}
+    >
       {/* The type icon's square. Which type it is depends on what the link
           turns out to be, which is the question being answered right now. */}
       <span className="size-9 shrink-0 animate-pulse rounded-md bg-line" />

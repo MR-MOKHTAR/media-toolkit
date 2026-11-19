@@ -116,8 +116,9 @@ src/
     downloads/    download screen
     media/        components/MediaToolForm.tsx is the form; tools/ is the
                   four tools as data — controls, readiness, request
-    tools/        the shape every tool screen shares: the list is the page and
-                  the form is a dialog over it
+    tools/        the shape every tool screen shares: a conversation
+    chat/         the thread, the message bubbles, the composer at its foot
+                  and the draft -- a tool's form as the app's reply
     jobs/         job queue, reducer, persistence
     settings/
   i18n/locales/   en, fa, ar
@@ -138,7 +139,19 @@ src-tauri/src/
   media/          probe, ffmpeg runner, and the four operations
 ```
 
-The four ffmpeg tools share one screen. `MediaToolScreen` draws the form — file,
+Every tool is a conversation. Its history is the thread, oldest first: what
+was sent (a link, a file) and the job that came of it, with its progress,
+result and next actions. A link pasted into the composer, or a file attached
+or dropped anywhere on the window, opens the tool's form as the app's reply;
+starting it turns that reply into the job's own message. The sidebar's
+*Recent* list jumps to any of the latest jobs.
+
+The background is a choice of five pictures — Aurora, Silk, Cosmos, Girih
+and Mesh — in Settings › General. Each is a WebGL shader in *Full* (Girih is
+CSS line art in every mode), animated CSS in *Light*, and the same CSS held
+still with effects *Off*, so the window is never a flat colour.
+
+The four ffmpeg tools share one form. `MediaToolScreen` draws the form — file,
 preview, controls, output folder, run — and each tool in `features/media/tools/`
 contributes only its own controls, its readiness rule, and the request it
 builds. Adding a tool is a file there and a line in `tools/index.ts`.

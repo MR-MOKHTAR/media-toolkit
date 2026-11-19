@@ -37,6 +37,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
     completeWelcome,
     effects,
     setEffects,
+    backdrop,
+    setBackdrop,
   } = useAppPreferences();
   const isOnline = useNetworkStatus();
   const { isMaximized, minimize, toggleMaximize, close } = useWindowControls();
@@ -86,7 +88,7 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
           className="aurora-host relative isolate flex h-full overflow-hidden"
           data-tint={route.name}
         >
-          <AppBackground effects={effects} />
+          <AppBackground effects={effects} backdrop={backdrop} />
 
           <AppSidebar isRtl={isRtl} collapsed={collapsed} onToggle={toggleSidebar} />
 
@@ -125,6 +127,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                   {(close) =>
                     route.name === "download" ? (
                       <DownloadForm
+                        // A new link sent while a draft is open is a new draft.
+                        key={route.link ?? ""}
                         // Set only when the form recorded itself on the way to
                         // Settings, so coming back finds the link still there.
                         initialUrl={route.link}
@@ -136,6 +140,7 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                       // Four tools, one form. The config is the only thing
                       // that changes between them -- see features/media/tools.
                       <MediaToolForm
+                        key={route.file ?? ""}
                         config={MEDIA_TOOLS[route.name]}
                         initialFile={route.file}
                         language={language}
@@ -166,6 +171,8 @@ function Shell({ toasts, notify, dismiss, hold }: ReturnType<typeof useToast>) {
                       onLanguageChange={setLanguage}
                       effects={effects}
                       onEffectsChange={setEffects}
+                      backdrop={backdrop}
+                      onBackdropChange={setBackdrop}
                       notify={notify}
                       // Set when a tool form sent the user here to change one
                       // of its own defaults, so they land on that panel.

@@ -35,7 +35,7 @@ import {
   OutputFolderRow,
   RunButton,
 } from "../media/components/ToolFormParts";
-import { ToolDialog } from "../tools/ToolDialog";
+import { DraftBubble } from "../chat/DraftBubble";
 import type { PlaylistListing, UrlInfo } from "../jobs/types";
 import { describeWhen, nextOccurrence } from "../jobs/when";
 import { useDownloadForm, type PlaylistChoice } from "./useDownloadForm";
@@ -355,7 +355,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
   };
 
   return (
-    <ToolDialog
+    <DraftBubble
       tool="download"
       onClose={onDone}
       dirty={looksLikeUrl(link)}
@@ -382,6 +382,12 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
           the input something to start below, and it is what a screen reader
           announces instead of a placeholder that disappears on the first
           keystroke. */}
+      {/* The link was sent from the composer and is already in the thread,
+          as the user's own message above this one -- a second copy of it
+          here would be the same text twice. A different link is sent from the
+          composer again, which replaces this draft. Shown only when the draft
+          was opened with nothing in it. */}
+      {!initialUrl && (
       <Field label={t("url_label")} htmlFor="download-url">
         {batch ? (
           // More than one link: a list, one per line, edited as text. Enter
@@ -462,6 +468,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
         </div>
         )}
       </Field>
+      )}
 
       {batch && (
         <BatchList
@@ -671,7 +678,7 @@ export function DownloadForm({ initialUrl, isOnline, notify, onDone }: Props) {
       {!toolsReady && !isFile && (info || probeFailed) && (
         <p className="text-sm text-warning-text">{t("ytdlp_not_found")}</p>
       )}
-    </ToolDialog>
+    </DraftBubble>
   );
 }
 

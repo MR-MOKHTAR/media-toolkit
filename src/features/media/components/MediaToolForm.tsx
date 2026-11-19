@@ -11,7 +11,7 @@ import type { TFunction } from "i18next";
 import type { ToastType } from "../../../types/feedback";
 import { describeAppError } from "../../jobs/errorText";
 import type { JobKind } from "../../jobs/types";
-import { ToolDialog } from "../../tools/ToolDialog";
+import { DraftBubble } from "../../chat/DraftBubble";
 import { useDragDropState } from "../useDragDropState";
 import { useMediaFile, type MediaInfo } from "../useMediaFile";
 import { useMediaJob } from "../useMediaJob";
@@ -149,7 +149,7 @@ export function MediaToolForm({
   );
 
   return (
-    <ToolDialog
+    <DraftBubble
       tool={config.kind}
       wide={config.wide}
       onClose={onDone}
@@ -200,6 +200,6 @@ export function MediaToolForm({
         folder={job.outputDir}
         onChoose={() => void job.chooseFolder()}
       />
-    </ToolDialog>
+    </DraftBubble>
   );
 }

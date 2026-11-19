@@ -81,12 +81,17 @@ export function Modal({
             if (keepOnOutsideClick) event.preventDefault();
           }}
           onEscapeKeyDown={(event) => {
-            event.stopPropagation();
             // A field with an Escape of its own -- the trim time fields undo an
             // edit with it -- keeps the key. Radix's listener runs before the
-            // field's, so without this the whole form closed instead.
+            // field's, on `document` in the capture phase, so the dialog must
+            // stay open *and* the event must be left to travel on: stopping it
+            // here meant the field's own handler never ran at all.
             const target = event.target as HTMLElement | null;
-            if (target?.closest("[data-own-escape]")) event.preventDefault();
+            if (target?.closest("[data-own-escape]")) {
+              event.preventDefault();
+              return;
+            }
+            event.stopPropagation();
           }}
           // Focus the form, not the way out of it.
           //

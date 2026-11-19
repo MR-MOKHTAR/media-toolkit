@@ -24,6 +24,7 @@ import { FormCard } from "../../components/ui/Card";
 import { navRow } from "../../components/ui/navRow";
 import { cn } from "../../lib/cn";
 import type { AppLanguage, EffectsLevel } from "../../hooks/useAppPreferences";
+import type { BackdropId } from "../../components/background/backdrops";
 import type { ToastType } from "../../types/feedback";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { GeneralPanel } from "./GeneralPanel";
@@ -39,6 +40,8 @@ interface Props {
   onLanguageChange: (language: AppLanguage) => void;
   effects: EffectsLevel;
   onEffectsChange: (effects: EffectsLevel) => void;
+  backdrop: BackdropId;
+  onBackdropChange: (backdrop: BackdropId) => void;
   notify: (type: ToastType, message: string) => void;
   /** Which panel to open on. Set when a tool form sent the user here to change
    *  one particular thing; undefined from the sidebar, which means "wherever
@@ -167,6 +170,8 @@ export function SettingsScreen({
   onLanguageChange,
   effects,
   onEffectsChange,
+  backdrop,
+  onBackdropChange,
   notify,
   initialSection,
 }: Props) {
@@ -229,6 +234,8 @@ export function SettingsScreen({
         onLanguageChange={onLanguageChange}
         effects={effects}
         onEffectsChange={onEffectsChange}
+        backdrop={backdrop}
+        onBackdropChange={onBackdropChange}
       />
     ),
     storage: <StoragePanel notify={notify} />,

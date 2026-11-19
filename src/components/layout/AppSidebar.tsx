@@ -17,6 +17,7 @@ import { IconButton } from "../ui/Button";
 import { NAV_ROW_MARKER, navRow } from "../ui/navRow";
 import { Tooltip } from "../ui/Tooltip";
 import { AppIdentity } from "./AppIdentity";
+import { RecentJobs } from "./RecentJobs";
 
 /**
  * Every screen, always reachable.
@@ -130,6 +131,7 @@ export function AppSidebar({
             onSelect={() => navigate(target, route.name === target.name)}
           />
         ))}
+        {!collapsed && <RecentJobs />}
       </div>
 
       {/* Tasks and Settings are not tools, so they sit apart from them --

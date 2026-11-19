@@ -13,6 +13,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -101,6 +102,8 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
   // a stop on the way to the thing people opened the app to do.
   const [stack, setStack] = useState<Route[]>([{ name: "download" }]);
   const route = stack[stack.length - 1];
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
 
   const go = useCallback((next: Route) => {
     setStack((current) => {
@@ -135,7 +138,22 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         target?.tagName === "TEXTAREA" ||
         target?.isContentEditable;
 
-      if (event.key === "Escape" && !typing) back();
+      if (typing) return;
+      // Not from inside a dialog either: the key belongs to whatever is open.
+      if (target?.closest("[role=dialog], [role=alertdialog]")) return;
+      if (event.key === "Escape") {
+        // A draft open in a conversation closes first; the screen is left on
+        // the next press.
+        const top = stackRef.current[stackRef.current.length - 1];
+        if ("composing" in top && top.composing) {
+          setStack((current) => [
+            ...current.slice(0, -1),
+            { name: top.name, composing: false } as Route,
+          ]);
+          return;
+        }
+        back();
+      }
       if (event.key === "ArrowLeft" && event.altKey) back();
     };
     window.addEventListener("keydown", onKeyDown);

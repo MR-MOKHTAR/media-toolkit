@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EffectsLevel } from "../../hooks/useAppPreferences";
 import { AuroraCanvas } from "./AuroraCanvas";
-import { FloatingIcons } from "./FloatingIcons";
+import { BackdropLayers } from "./BackdropLayers";
+import { BACKDROP_SCENE, type BackdropId } from "./backdrops";
 import { useBackgroundActivity } from "./useBackgroundActivity";
 import "./background.css";
 
 interface Props {
   effects: EffectsLevel;
+  /** Which picture -- see `backdrops.ts`. */
+  backdrop: BackdropId;
 }
 
 /**
@@ -25,7 +28,7 @@ interface Props {
  *           blobs and glyphs. The CSS layer stays until the scene's first
  *           frame, and comes back for good if WebGL is missing or slow.
  */
-export function AppBackground({ effects }: Props) {
+export function AppBackground({ effects, backdrop }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const activity = useBackgroundActivity();
   const animated = effects !== "off" && !activity.reducedMotion;
@@ -35,10 +38,18 @@ export function AppBackground({ effects }: Props) {
   useEffect(() => {
     if (effects !== "full") setWebgl("loading");
   }, [effects]);
+  // A new picture is a new scene: back to the CSS drawing until its first
+  // frame is up. A GPU that failed stays failed for the session.
+  useEffect(() => {
+    setWebgl((current) => (current === "failed" ? current : "loading"));
+  }, [backdrop]);
   const onReady = useCallback(() => setWebgl("ready"), []);
   const onFail = useCallback(() => setWebgl("failed"), []);
-  const useWebgl = effects === "full" && webgl !== "failed";
-  const cssLayer = effects !== "off" && !(useWebgl && webgl === "ready");
+  const sceneTheme = BACKDROP_SCENE[backdrop];
+  const useWebgl = effects === "full" && webgl !== "failed" && sceneTheme !== null;
+  // Drawn in every mode now -- held still when effects are off -- so turning
+  // them down changes how much moves, never whether there is a picture.
+  const cssLayer = !(useWebgl && webgl === "ready");
 
   // Pointer parallax. Throttled to a frame, and written as two custom
   // properties on this element only -- the icons read them through CSS, so a
@@ -69,20 +80,28 @@ export function AppBackground({ effects }: Props) {
   }, [animated, activity.visible]);
 
   return (
-    <div ref={root} className="mtk-bg" aria-hidden data-effects={effects}>
+    <div
+      ref={root}
+      className="mtk-bg"
+      aria-hidden
+      data-effects={effects}
+      data-backdrop={backdrop}
+    >
       <div className="mtk-bg-base" />
-      {cssLayer && (
-        <>
-          <div className="mtk-bg-curtain" />
-          <div className="mtk-bg-blob" data-blob="a" />
-          <div className="mtk-bg-blob" data-blob="b" />
-          <div className="mtk-bg-blob" data-blob="c" />
-          <FloatingIcons />
-        </>
+      {cssLayer && <BackdropLayers id={backdrop} />}
+      {useWebgl && sceneTheme && (
+        <AuroraCanvas
+          key={sceneTheme}
+          theme={sceneTheme}
+          activity={activity}
+          onReady={onReady}
+          onFail={onFail}
+        />
       )}
-      {useWebgl && <AuroraCanvas activity={activity} onReady={onReady} onFail={onFail} />}
-      {/* Over the scene, not under it: the WebGL canvas is opaque. */}
-      <div className="mtk-bg-grid" />
+      {/* Over the scene, not under it: the WebGL canvas is opaque. The
+          lattice belongs to the aurora; the other pictures have their own
+          texture. */}
+      {backdrop === "aurora" && <div className="mtk-bg-grid" />}
       <div className="mtk-bg-vignette" />
       <div className="mtk-bg-grain" />
     </div>
