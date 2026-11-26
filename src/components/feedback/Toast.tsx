@@ -1,4 +1,3 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -19,105 +18,63 @@ const TONES: Record<ToastType, string> = {
   info: "text-accent",
 };
 
-/**
- * The toast stack.
- *
- * A stack rather than a single slot because the queue runs several jobs at
- * once: when two finished in the same second the first message was replaced
- * before anyone could read it. Oldest first, so new ones arrive at the bottom
- * next to the anchor and the older ones ride up.
- */
 export function Toast({
   toasts,
-  isRtl,
   onDismiss,
   onHold,
 }: {
   toasts: ToastState[];
-  isRtl: boolean;
+  isRtl?: boolean;
   onDismiss: (id: string) => void;
-  /** Pauses expiry while the pointer is over the stack. */
   onHold: (holding: boolean) => void;
 }) {
   const { t } = useTranslation();
 
+  if (toasts.length === 0) return null;
+
   return (
-    // Above the dialogs (z-50). At the same level, the dialog portal -- later
-    // in the document -- drew its blurred scrim over every toast, so a failure
-    // reported while a form was open could not be read.
     <div
       className="fixed bottom-4 end-4 z-[60] flex max-w-sm flex-col gap-2"
       onMouseEnter={() => onHold(true)}
       onMouseLeave={() => onHold(false)}
     >
-      <AnimatePresence initial={false}>
-        {toasts.map((toast) => (
-          <motion.div
-            key={toast.id}
-            // `layout` so the survivors slide into the gap when one in the
-            // middle of the stack expires, instead of jumping.
-            layout
-            // Enters from the edge it is anchored to, so it follows the writing
-            // direction instead of being branched per language.
-            initial={{ opacity: 0, x: isRtl ? -20 : 20, scale: 0.95 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
-            exit={{ opacity: 0, x: isRtl ? -20 : 20, scale: 0.95 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className={cn(
-              "relative flex w-full items-start gap-2.5 rounded-lg",
-              // Rimmed in its own status colour; an info toast in the
-              // holographic spectrum.
-              "holo-rim [--rim-over:1px] [--rim-opacity:0.7]",
-              toast.type === "success" && "[--rim:linear-gradient(120deg,var(--color-success),transparent_75%)]",
-              toast.type === "error" && "[--rim:linear-gradient(120deg,var(--color-danger),transparent_75%)]",
-              toast.type === "warning" && "[--rim:linear-gradient(120deg,var(--color-warning),transparent_75%)]",
-              "border border-line-soft bg-surface-glass p-3",
-              "shadow-(--shadow-panel) backdrop-blur-glass",
-              /* Coloured inline-start border marking the toast's kind. */
-              "border-s-2",
-              toast.type === "success" && "border-s-success",
-              toast.type === "error" && "border-s-danger",
-              toast.type === "warning" && "border-s-warning",
-              toast.type === "info" && "border-s-accent",
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={cn(
+            "flex w-full items-start gap-2.5 rounded-lg border border-line bg-surface p-3 shadow-(--shadow-panel)",
+            "animate-[fade-in_var(--duration-base)_var(--ease-out-quart)]",
+          )}
+          role={toast.type === "error" ? "alert" : "status"}
+        >
+          <ToastIcon type={toast.type} />
+
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-3 text-sm text-fg">{toast.message}</p>
+            {toast.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  toast.action?.onClick();
+                  onDismiss(toast.id);
+                }}
+                className="mt-1.5 text-xs font-medium text-accent transition-opacity hover:opacity-80"
+              >
+                {toast.action.label}
+              </button>
             )}
-            // An error is worth interrupting a screen reader for; the rest are
-            // status updates that can wait for a pause.
-            role={toast.type === "error" ? "alert" : "status"}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onDismiss(toast.id)}
+            className="-m-1.5 flex size-7 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+            aria-label={t("close")}
           >
-            <ToastIcon type={toast.type} />
-
-            <div className="min-w-0 flex-1">
-              {/* Clamped: a job title can be a whole video name, and one toast
-                  must not grow tall enough to push the others off screen. */}
-              <p className="line-clamp-3 text-sm text-fg">{toast.message}</p>
-              {toast.action && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    toast.action?.onClick();
-                    // Acting on a toast answers it, so it has nothing left to say.
-                    onDismiss(toast.id);
-                  }}
-                  className="mt-1.5 text-xs font-medium text-accent transition-opacity hover:opacity-80"
-                >
-                  {toast.action.label}
-                </button>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => onDismiss(toast.id)}
-              // 28px of target around a 15px glyph; the glyph alone was the
-              // target before, which is a hard thing to hit.
-              className="-m-1.5 flex size-7 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
-              aria-label={t("close")}
-            >
-              <X size={15} />
-            </button>
-          </motion.div>
-        ))}
-      </AnimatePresence>
+            <X size={15} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

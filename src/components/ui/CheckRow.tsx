@@ -76,8 +76,8 @@ export function CheckRow({
             // controls whose resting edge is the only thing that says they are
             // there, and --color-line is too faint at 16-20px to do that.
             "mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full border border-line-strong bg-surface-hover",
-            "transition-all duration-(--duration-fast)",
-            "data-[state=checked]:border-accent data-[state=checked]:bg-accent data-[state=checked]:shadow-(--shadow-glow)",
+            "transition-colors duration-(--duration-fast)",
+            "data-[state=checked]:border-accent data-[state=checked]:bg-accent",
             "disabled:cursor-not-allowed",
           )}
         >
@@ -86,8 +86,9 @@ export function CheckRow({
               track. */}
           <RadixSwitch.Thumb
             className={cn(
-              "block size-4 rounded-full bg-surface shadow-(--shadow-raise)",
-              "transition-[margin] duration-(--duration-fast) ease-out-quart",
+              "block size-4 rounded-full bg-white shadow-(--shadow-raise) dark:bg-fg-soft",
+              "data-[state=checked]:bg-on-accent dark:data-[state=checked]:bg-on-accent",
+              "transition-[margin,background-color] duration-(--duration-fast) ease-out-quart",
               "ms-0.5 data-[state=checked]:ms-4",
             )}
           />

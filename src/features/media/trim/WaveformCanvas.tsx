@@ -102,13 +102,14 @@ export function WaveformCanvas({
 
     const css = getComputedStyle(element);
     const color = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+    const dark = document.documentElement.classList.contains("dark");
     const accent = color("--color-accent", "#2dd4bf");
-    const audioHue = color("--color-media-audio", "#a68bfa");
+    const onAccent = color("--color-on-accent", dark ? "#071f1d" : "#ffffff");
+    const audioHue = color("--color-media-audio", "#5eead4");
     const muted = color("--color-fg-muted", "#7f8ca1");
     const warning = color("--color-warning", "#f0ac40");
     const danger = color("--color-danger", "#f06470");
     const line = color("--color-line", "#263244");
-    const dark = document.documentElement.classList.contains("dark");
 
     const mid = WAVE_HEIGHT / 2;
     // Normalised to the loudest moment, so a quiet recording still fills the
@@ -211,7 +212,7 @@ export function WaveformCanvas({
       if (x1 < 0 || x0 > width || x1 - x0 < 38) continue;
       const label = `${(s.endSecs - s.startSecs).toFixed(1)}s`;
       const cx = Math.min(Math.max((x0 + x1) / 2, 20), width - 20);
-      ctx.fillStyle = withAlpha(dark ? "#0b0f17" : "#ffffff", 0.75);
+      ctx.fillStyle = withAlpha(dark ? "#21222c" : "#ffffff", 0.8);
       const w = ctx.measureText(label).width + 8;
       roundRect(ctx, cx - w / 2, 4, w, 16, 4);
       ctx.fill();
@@ -221,7 +222,7 @@ export function WaveformCanvas({
 
     if (mode === "range") {
       // Everything outside the selection, dimmed.
-      ctx.fillStyle = dark ? "rgba(6, 10, 18, 0.5)" : "rgba(255, 255, 255, 0.55)";
+      ctx.fillStyle = dark ? "rgba(25, 26, 36, 0.52)" : "rgba(255, 255, 255, 0.55)";
       const xs = xOf(start);
       const xe = xOf(end);
       if (xs > 0) ctx.fillRect(0, 0, Math.min(xs, width), WAVE_HEIGHT);
@@ -232,7 +233,7 @@ export function WaveformCanvas({
         ctx.fillRect(x - 1, 0, 2, WAVE_HEIGHT);
         roundRect(ctx, x - 5, mid - 16, 10, 32, 4);
         ctx.fill();
-        ctx.fillStyle = dark ? "#04161a" : "#ffffff";
+        ctx.fillStyle = onAccent;
         ctx.fillRect(x - 1.5, mid - 7, 1, 14);
         ctx.fillRect(x + 0.5, mid - 7, 1, 14);
       }

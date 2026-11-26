@@ -162,10 +162,37 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
       // A late progress event must not resurrect a job that already ended.
       if (current.state !== "running" && current.state !== "queued") return state;
 
+      const monotonicDownload =
+        current.kind === "download" &&
+        current.stage === "downloading" &&
+        stage === "downloading";
+
+      const nextBytes =
+        bytes !== null
+          ? monotonicDownload && current.bytes !== undefined
+            ? Math.max(current.bytes, bytes)
+            : bytes
+          : current.bytes;
+
+      const nextTotal = totalBytes ?? current.totalBytes;
+
+      const nextPercent =
+        percent !== null
+          ? monotonicDownload &&
+            current.percent !== null &&
+            nextTotal === current.totalBytes
+            ? Math.max(current.percent, percent)
+            : percent
+          : // Preserve a known download percentage across transient stage
+            // changes rather than wiping the bar back to an indeterminate state.
+            current.kind === "download"
+              ? current.percent
+              : null;
+
       return patch(state, id, {
         state: "running",
         stage,
-        percent,
+        percent: nextPercent,
         speed: speed ?? undefined,
         encodeRate: encodeRate ?? undefined,
         etaSecs: etaSecs ?? undefined,
@@ -173,8 +200,8 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
         // an event that omits it is saying "no news", not "zero". yt-dlp's
         // merge and extract-audio phases each emit one of those, and clearing
         // on them left the card with no size to show at the end.
-        bytes: bytes ?? current.bytes,
-        totalBytes: totalBytes ?? current.totalBytes,
+        bytes: nextBytes,
+        totalBytes: nextTotal,
       });
     }
 

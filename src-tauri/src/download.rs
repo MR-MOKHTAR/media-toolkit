@@ -79,16 +79,6 @@ const STAGE_TEMPLATE: &str = "post_process:__DLSTAGE__%(ext)s";
 /// which is exactly the fragmented sources it does apply to.
 const CONCURRENT_FRAGMENTS: u8 = 8;
 
-/// Below this, yt-dlp gives up on a stream and re-extracts rather than crawling.
-///
-/// 100K was too eager. It is a floor on *this* transfer's throughput, and a
-/// connection that genuinely runs at 80 KB/s -- which is an ordinary evening in
-/// plenty of places this app is used -- would trip it on every attempt and spend
-/// the download re-extracting instead of downloading. 50K still catches the
-/// pathological case it was added for (a throttled stream sitting at 40 KB/s
-/// for an hour) while leaving a slow-but-working line alone.
-const THROTTLED_RATE: &str = "50K";
-
 /// The five fields the job card reads, in one line, marked so they cannot be
 /// confused with yt-dlp's own output.
 ///
@@ -1181,32 +1171,56 @@ async fn run_media(
             {
                 Ok(output) => return Ok(output),
                 Err(AppError::Cancelled) => return Err(AppError::Cancelled),
-                Err(_) => {
+                Err(first_error) => {
                     // Once more, on freshly signed URLs, continuing from the
-                    // parts that already arrived. The likeliest cause is a
-                    // signed URL that expired mid-transfer, or a host that
-                    // stopped honouring ranges for a moment -- and handing the
-                    // page straight to yt-dlp threw away every byte fetched so
-                    // far and started again on one connection.
-                    emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
-                    let again = resolve_page(app, cancel, url, &selection, request).await?;
-                    if let Some(retry) = usable_plan(again, audio) {
+                    // parts that already arrived. If the resolve itself fails
+                    // (e.g. the internet dropped), keep the `.part` files on
+                    // disk and stop at the exact point reached rather than
+                    // deleting them and restarting from zero on yt-dlp.
+                    let again = match resolve_page(app, cancel, url, &selection, request).await? {
+                        Ok(resolved) => resolved,
+                        Err(_) if !should_fallback_to_ytdlp(&first_error) => {
+                            return Err(first_error);
+                        }
+                        Err(_) => {
+                            muxed::discard_parts(dir, output_name, &plan, &key).await;
+                            emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
+                            return run_ytdlp(
+                                app,
+                                jobs,
+                                id,
+                                emitters,
+                                cancel,
+                                url,
+                                dir,
+                                request,
+                                Fetch::Media {
+                                    title: title.as_deref(),
+                                },
+                            )
+                            .await;
+                        }
+                    };
+
+                    if let Some(retry) = usable_plan(Ok(again), audio) {
                         let target = target_for(request, &retry);
                         match muxed::run(app, jobs, id, emitters, cancel, dir, output_name, &retry, target, embed_for(request), &key)
                             .await
                         {
                             Ok(output) => return Ok(output),
                             Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                            Err(second_error) if !should_fallback_to_ytdlp(&second_error) => {
+                                return Err(second_error);
+                            }
                             Err(_) => muxed::discard_parts(dir, output_name, &retry, &key).await,
                         }
+                    } else if !should_fallback_to_ytdlp(&first_error) {
+                        return Err(first_error);
                     }
-                    // yt-dlp takes it from here, by another route; these parts
-                    // would never be looked at again.
-                    muxed::discard_parts(dir, output_name, &plan, &key).await;
 
-                    // Back to the start of the bar: the fallback is a fresh
-                    // download and a percentage that walked to 80 and then sat
-                    // still would be the wrong story about what is happening.
+                    // Only reached when the server genuinely refused ranged HTTP
+                    // or ffmpeg remuxing failed -- yt-dlp takes over from scratch.
+                    muxed::discard_parts(dir, output_name, &plan, &key).await;
                     emitters.progress_now(JobProgress::new(id, JobKind::Download, Stage::Preparing));
                 }
             }
@@ -1227,6 +1241,21 @@ async fn run_media(
         },
     )
     .await
+}
+
+/// Whether a `muxed` failure means the CDN rejected our ranged HTTP requests
+/// (so yt-dlp should take over) rather than the user's own connection dropping
+/// or stalling (where discarding `.part` files would erase real progress).
+fn should_fallback_to_ytdlp(error: &AppError) -> bool {
+    match error {
+        AppError::Network { message } => {
+            message.contains("server stopped serving ranges")
+                || message.contains("server answered HTTP")
+                || message.contains("different byte range")
+        }
+        AppError::Tool { .. } => true,
+        _ => false,
+    }
 }
 
 /// Waits for another job's hold on `key` to end, saying so if it has to.
@@ -1453,8 +1482,6 @@ async fn run_ytdlp(
         // downloads that path declined.
         "--http-chunk-size".into(),
         "10M".into(),
-        "--throttled-rate".into(),
-        THROTTLED_RATE.into(),
         "--retries".into(),
         "10".into(),
         "--fragment-retries".into(),
@@ -1856,33 +1883,60 @@ struct StreamTotals {
     current: Option<String>,
     /// Bytes of the streams that are finished.
     done: u64,
-    /// The running stream's last figures, carried forward when the next begins.
+    /// The running stream's highest seen figures, carried forward when the
+    /// next begins and held steady across fragment retries so a dropped
+    /// fragment never makes the bar walk backwards.
     last_bytes: u64,
     last_total: Option<u64>,
+    last_percent: Option<f64>,
 }
 
 impl StreamTotals {
     fn add(&mut self, stream: Option<String>, mut progress: JobProgress) -> JobProgress {
         if stream.is_some() && self.current.is_some() && stream != self.current {
             self.done += self.last_total.unwrap_or(0).max(self.last_bytes);
+            self.last_bytes = 0;
+            self.last_total = None;
+            self.last_percent = None;
         }
         if stream.is_some() {
             self.current = stream;
         }
-        self.last_bytes = progress.bytes.unwrap_or(self.last_bytes);
-        self.last_total = progress.total_bytes.or(self.last_total);
+        if let Some(bytes) = progress.bytes {
+            let monotonic = bytes.max(self.last_bytes);
+            self.last_bytes = monotonic;
+            progress.bytes = Some(monotonic);
+        }
+        self.last_total = match (progress.total_bytes, self.last_total) {
+            (Some(total), Some(prev)) => {
+                let monotonic = total.max(prev).max(self.last_bytes);
+                progress.total_bytes = Some(monotonic);
+                Some(monotonic)
+            }
+            (Some(total), None) => {
+                let monotonic = total.max(self.last_bytes);
+                progress.total_bytes = Some(monotonic);
+                Some(monotonic)
+            }
+            (None, prev) => {
+                progress.total_bytes = prev;
+                prev
+            }
+        };
 
         if self.done > 0 {
             progress.bytes = progress.bytes.map(|bytes| bytes + self.done);
             progress.total_bytes = progress.total_bytes.map(|total| total + self.done);
-            // yt-dlp's own percentage is of this stream alone; with a known
-            // total it is recomputed over everything, and without one it is
-            // still the best figure there is.
             if let (Some(bytes), Some(total)) = (progress.bytes, progress.total_bytes) {
                 if total > 0 {
                     progress.percent = Some((bytes as f64 / total as f64 * 100.0).clamp(0.0, 100.0));
                 }
             }
+        }
+        if let Some(pct) = progress.percent {
+            let monotonic = self.last_percent.map_or(pct, |prev| pct.max(prev));
+            self.last_percent = Some(monotonic);
+            progress.percent = Some(monotonic);
         }
         progress
     }
@@ -2548,6 +2602,38 @@ mod tests {
         let (p, s) = parse_progress("j1", " 42.0%|420|1000|10|5|18", Stage::Downloading).unwrap();
         let p = streams.add(s, p);
         assert_eq!((p.bytes, p.total_bytes, p.percent), (Some(420), Some(1000), Some(42.0)));
+    }
+
+    #[test]
+    fn a_retried_fragment_does_not_walk_stream_totals_backwards() {
+        let mut streams = StreamTotals::default();
+        let line = |payload: &str| parse_progress("j1", payload, Stage::Downloading).unwrap();
+
+        let (p, s) = line(" 60.0%|600|1000|10|4|137");
+        let p = streams.add(s, p);
+        assert_eq!((p.bytes, p.percent), (Some(600), Some(60.0)));
+
+        // A dropped fragment restarts from 450 bytes; the bar holds at 600 / 60%.
+        let (p, s) = line(" 45.0%|450|1000|10|5|137");
+        let p = streams.add(s, p);
+        assert_eq!((p.bytes, p.percent), (Some(600), Some(60.0)));
+
+        // Once the retry catches up past 600, progress advances normally.
+        let (p, s) = line(" 70.0%|700|1000|10|3|137");
+        let p = streams.add(s, p);
+        assert_eq!((p.bytes, p.percent), (Some(700), Some(70.0)));
+    }
+
+    #[test]
+    fn network_drops_keep_muxed_parts_instead_of_falling_back_to_ytdlp() {
+        assert!(!should_fallback_to_ytdlp(&AppError::network("the connection stalled")));
+        assert!(!should_fallback_to_ytdlp(&AppError::network(
+            "connection closed before the range ended"
+        )));
+        assert!(should_fallback_to_ytdlp(&AppError::network(
+            "server stopped serving ranges (HTTP 403)"
+        )));
+        assert!(should_fallback_to_ytdlp(&AppError::network("server answered HTTP 416")));
     }
 
     /// "none" is a missing picture; "NA" is yt-dlp not knowing, which is what

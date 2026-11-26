@@ -9,30 +9,9 @@ interface AppTitleBarProps {
   onMinimize: () => void;
   onToggleMaximize: () => void;
   onClose: () => void;
-  /** False while the sidebar is expanded, because the name is up there instead.
-   *  The drag region stays either way -- it is what moves the window. */
   showTitle: boolean;
 }
 
-/**
- * Identity, drag area, window controls. Nothing else.
- *
- * The title is the app name and never changes: which screen you are on is the
- * sidebar's job, and it answers that by highlighting the row you are on.
- *
- * It appears here only while the sidebar is collapsed. Expanded, the sidebar's
- * top row -- 240px wide and level with this bar -- carries the name and the
- * window icon, so printing it here as well would be the same word twice on one
- * line of the window.
- *
- * Everything else that has passed through here has left: a back button that
- * said nothing about where you were, a gradient "New Download" call to action,
- * a theme toggle, a raw <select> for the language, the settings gear --
- * Settings is a destination like any other and now sits with Tasks at the foot
- * of the sidebar -- and last of all the history toggle, which opened a panel
- * that no longer exists. Each tool's jobs are its screen now, so there is
- * nothing left for a screen to contribute to this row.
- */
 export function AppTitleBar({
   isMaximized,
   onMinimize,
@@ -43,29 +22,15 @@ export function AppTitleBar({
   const { t } = useTranslation();
 
   return (
-    // This used to pin dir="ltr" to keep minimise/maximise/close on the right
-    // whatever the language, because window controls belong in a corner of the
-    // window. Now that the sidebar runs the full height, the bar no longer
-    // starts at the window's edge: in Persian and Arabic the sidebar holds the
-    // right side, so a pinned ltr would park the buttons against it in the
-    // middle of the window. Inheriting the direction puts them back in the
-    // outer corner -- top-right in English, top-left in Persian and Arabic,
-    // which is where the sidebar is not.
-    <header className="glass-chrome relative flex h-11 shrink-0 items-center gap-1 border-b px-2 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-(image:--gradient-holo) after:opacity-50">
-      {/* The drag region has to be its own element. Marking the header would
-          swallow clicks on the buttons inside it. */}
+    <header className="glass-chrome flex h-11 shrink-0 items-center gap-1 border-b px-2">
       <div
         data-tauri-drag-region
         className="drag-region flex h-full min-w-0 flex-1 items-center px-2"
       >
-        {/* The same component the sidebar's top row draws, so the name and icon
-            are identical either side of a collapse -- see AppIdentity. */}
         {showTitle && <AppIdentity />}
       </div>
 
       <div className="no-drag ms-1 flex items-center">
-        {/* No gap: minimise, maximise and close read as one control, the way
-            they do in every window they appear in. */}
         <div className="flex items-center">
           <IconButton label={t("minimize")} onClick={onMinimize}>
             <Minus size={16} />
@@ -74,15 +39,12 @@ export function AppTitleBar({
             label={isMaximized ? t("restore") : t("maximize")}
             onClick={onToggleMaximize}
           >
-            {/* Two overlapping squares for "restore", as every window manager
-                draws it -- one square for both states gave no hint of which
-                the button would do. */}
             {isMaximized ? <Copy size={13} className="-scale-x-100" /> : <Square size={13} />}
           </IconButton>
           <IconButton
             label={t("close")}
             onClick={onClose}
-            className="hover:bg-danger hover:text-on-accent"
+            className="hover:bg-danger hover:text-white"
           >
             <X size={17} />
           </IconButton>

@@ -83,6 +83,11 @@ export const getTraySettings = () => invoke<TraySettings>("get_tray_settings");
 export const setCloseToTray = (enabled: boolean) =>
   invoke<TraySettings>("set_close_to_tray", { enabled });
 
+export const getAppLanguage = () => invoke<string | null>("get_app_language");
+
+export const setAppLanguage = (language: string) =>
+  invoke<void>("set_app_language", { language });
+
 /** The tray menu's words, in the interface language. Never throws: no tray in
  *  `vite dev`, and the English defaults are a fine fallback. */
 export const setTrayLabels = async (show: string, quit: string) => {
@@ -144,8 +149,20 @@ export const revealInFolder = (path: string) =>
 
 export const openPath = (path: string) => invoke<void>("open_path", { path });
 
+async function resolvePickerDir(preferred?: string): Promise<string | undefined> {
+  try {
+    const resolved = await invoke<string>("picker_dir", {
+      preferred: preferred?.trim() ? preferred : null,
+    });
+    return resolved || undefined;
+  } catch {
+    return preferred || undefined;
+  }
+}
+
 export async function chooseFolder(defaultPath?: string) {
-  const selected = await open({ directory: true, multiple: false, defaultPath });
+  const startDir = await resolvePickerDir(defaultPath);
+  const selected = await open({ directory: true, multiple: false, defaultPath: startDir });
   return typeof selected === "string" ? selected : null;
 }
 
@@ -158,10 +175,11 @@ export interface MediaFilterNames {
 }
 
 export async function chooseMediaFile(defaultPath: string | undefined, names: MediaFilterNames) {
+  const startDir = await resolvePickerDir(defaultPath);
   const selected = await open({
     multiple: false,
     directory: false,
-    defaultPath,
+    defaultPath: startDir,
     filters: [
       { name: names.media, extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS] },
       { name: names.video, extensions: VIDEO_EXTENSIONS },

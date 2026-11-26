@@ -281,10 +281,18 @@ pub fn require_file(path: &str) -> AppResult<PathBuf> {
 /// folder resolves correctly -- the old code hand-built `%USERPROFILE%\Downloads`.
 pub fn default_download_dir(app: &AppHandle) -> String {
     if let Ok(dir) = app.path().download_dir() {
-        return dir.to_string_lossy().into_owned();
+        if dir.parent().is_some() {
+            return dir.to_string_lossy().into_owned();
+        }
     }
     if let Ok(home) = app.path().home_dir() {
-        return home.join("Downloads").to_string_lossy().into_owned();
+        if home.parent().is_some() {
+            let downloads = home.join("Downloads");
+            if downloads.is_dir() || std::fs::create_dir_all(&downloads).is_ok() {
+                return downloads.to_string_lossy().into_owned();
+            }
+            return home.to_string_lossy().into_owned();
+        }
     }
     ".".to_string()
 }

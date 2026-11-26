@@ -1,5 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { animate } from "framer-motion";
+import { useId, useRef, type ReactNode } from "react";
 import { Activity, AlertCircle, ArrowDownToLine, Gauge, Loader2, Radar, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -10,22 +9,6 @@ import { jobsOfKind } from "../../features/jobs/selectors";
 import { useJobs } from "../../features/jobs/useJobs";
 import { ToolbarButton } from "../ui/ToolbarButton";
 
-/**
- * The thin bar along the bottom of the window.
- *
- * Two zones: what is happening now at the start (live speed, its trace, the
- * peak, how many downloads are moving), and what is known about the line at the
- * end (the last measurement, its ping, and the button that measures again).
- * Both are laid out with logical alignment, so Persian and Arabic mirror it
- * without a branch on the language.
- *
- * Every figure sits in a slot of fixed width with its unit beside it, so a rate
- * going from 9.9 to 10.2 or from KB/s to MB/s never shoves its neighbours along.
- *
- * On every screen: downloads keep running while the user is elsewhere, and the
- * bar is the one place that says so. The automatic test still only runs from
- * the download screen -- see `useSpeedMonitor`.
- */
 export function StatusBar({
   isOnline,
   language,
@@ -37,9 +20,6 @@ export function StatusBar({
   const { jobs } = useJobs();
   const downloads = jobsOfKind(jobs, "download");
 
-  // Here rather than in the download screen: a test that is running when the
-  // user steps over to Settings should still finish, and a measurement should
-  // survive the trip.
   const monitor = useSpeedMonitor({
     jobs: downloads,
     isOnline,
@@ -47,7 +27,7 @@ export function StatusBar({
   });
 
   return (
-    <footer className="glass-chrome relative grid h-7 shrink-0 before:pointer-events-none before:absolute before:inset-x-0 before:-top-px before:h-px before:bg-(image:--gradient-holo) before:opacity-50 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-t px-3 text-xs leading-none text-fg-muted">
+    <footer className="glass-chrome grid h-7 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-t px-3 text-xs leading-none text-fg-muted">
       <Now monitor={monitor} language={language} />
       <Line monitor={monitor} isOnline={isOnline} language={language} />
     </footer>
@@ -56,7 +36,6 @@ export function StatusBar({
 
 type Monitor = ReturnType<typeof useSpeedMonitor>;
 
-/** The start zone: the transfer happening right now, if any. */
 function Now({ monitor, language }: { monitor: Monitor; language: string }) {
   const { t } = useTranslation();
   const { shown, peak, downloading, active, history, testing, measuring, failed } = monitor;
@@ -74,8 +53,6 @@ function Now({ monitor, language }: { monitor: Monitor; language: string }) {
             withMegabits
           />
           <Sparkline values={history} />
-          {/* Present from the first moment of the run, as a dash until there
-              is a figure: appearing half a second in moved everything after it. */}
           <Rate
             icon={<Gauge size={13} />}
             label={t("speed_peak")}
@@ -108,7 +85,6 @@ function Now({ monitor, language }: { monitor: Monitor; language: string }) {
   );
 }
 
-/** The end zone: the last measurement of the line, and the way to take one. */
 function Line({
   monitor,
   isOnline,
@@ -129,9 +105,6 @@ function Line({
             <BitRate bytesPerSecond={result.bytesPerSecond} language={language} />
           </Stat>
           {result.latencyMs > 0 && (
-            // Its own item, label and number apart. It was a translated phrase
-            // inside the same left-to-right span as "Mbps", which put the
-            // Persian word on the wrong side of its number.
             <Stat icon={<Radar size={13} />} label={t("speed_ping_label")}>
               <Figure value={formatCount(result.latencyMs, language)} width="3ch" />
               <Unit>ms</Unit>
@@ -140,9 +113,6 @@ function Line({
         </>
       )}
 
-      {/* Not while a download runs: the test would take its share of the line
-          and both figures would be wrong. Disabled rather than hidden, so the
-          end of the bar does not change length when a download starts. */}
       <ToolbarButton
         onClick={() => void run()}
         disabled={!isOnline || downloading || testing}
@@ -154,7 +124,6 @@ function Line({
   );
 }
 
-/** Icon, label, then the figure in the writing direction's natural order. */
 function Stat({
   icon,
   label,
@@ -168,9 +137,6 @@ function Stat({
     <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
       <span className="flex shrink-0">{icon}</span>
       <span>{label}</span>
-      {/* `bdi` + `ltr`: "12.4 MB/s" is a Latin unit after a number in every
-          language, and letting the bidi algorithm reorder it would split the
-          number from its unit. */}
       <bdi dir="ltr" className="flex items-baseline gap-1">
         {children}
       </bdi>
@@ -178,7 +144,6 @@ function Stat({
   );
 }
 
-/** A number in a fixed-width slot, aligned to its unit. */
 function Figure({
   value,
   width = "4.5ch",
@@ -212,10 +177,6 @@ function Unit({ children }: { children: ReactNode }) {
   return <span className="min-w-[2.6ch] text-start">{children}</span>;
 }
 
-/**
- * A transfer rate, eased between samples so the digits roll rather than jump,
- * with its unit held steady across the KB/MB boundary.
- */
 function Rate({
   icon,
   label,
@@ -231,19 +192,18 @@ function Rate({
   strong?: boolean;
   withMegabits?: boolean;
 }) {
-  const eased = useEased(bytesPerSecond);
   const step = useRef<number | undefined>(undefined);
 
-  if (bytesPerSecond <= 0 && eased <= 0) {
+  if (bytesPerSecond <= 0) {
     return (
       <Stat icon={icon} label={label}>
         <Figure value="—" strong={strong} />
-        <Unit>{" "}</Unit>
+        <Unit>{"\u00a0"}</Unit>
       </Stat>
     );
   }
 
-  const parts = speedParts(eased, language, step.current);
+  const parts = speedParts(bytesPerSecond, language, step.current);
   step.current = parts.step;
 
   return (
@@ -252,38 +212,13 @@ function Rate({
       <Unit>{parts.unit}</Unit>
       {withMegabits && (
         <span className="ms-1 flex items-baseline gap-1 opacity-80">
-          <BitRate bytesPerSecond={eased} language={language} />
+          <BitRate bytesPerSecond={bytesPerSecond} language={language} />
         </span>
       )}
     </Stat>
   );
 }
 
-/** A number that glides to each new target over a few hundred milliseconds. */
-function useEased(target: number) {
-  const [value, setValue] = useState(target);
-  const current = useRef(target);
-
-  useEffect(() => {
-    const controls = animate(current.current, target, {
-      duration: 0.35,
-      ease: [0.22, 1, 0.36, 1],
-      onUpdate: (next) => {
-        current.current = next;
-        setValue(next);
-      },
-    });
-    return () => controls.stop();
-  }, [target]);
-
-  return value;
-}
-
-/**
- * The last half minute of the rate as a small filled line. Scaled to its own
- * peak, because what it shows is the shape -- steady, climbing, stalling --
- * and the figure beside it already says the number.
- */
 function Sparkline({ values }: { values: number[] }) {
   const id = useId().replace(/:/g, "");
   const width = 64;
@@ -303,12 +238,10 @@ function Sparkline({ values }: { values: number[] }) {
   const area = `${line}L${width},${height}L0,${height}Z`;
 
   return (
-    // Time runs left to right in every language, like every chart in the app;
-    // SVG coordinates do not mirror, so nothing has to be pinned for that.
     <svg width={width} height={height} className="shrink-0" aria-hidden>
       <defs>
         <linearGradient id={`spark-${id}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" style={{ stopColor: "var(--color-accent)", stopOpacity: 0.35 }} />
+          <stop offset="0%" style={{ stopColor: "var(--color-accent)", stopOpacity: 0.25 }} />
           <stop offset="100%" style={{ stopColor: "var(--color-accent)", stopOpacity: 0 }} />
         </linearGradient>
       </defs>

@@ -57,10 +57,10 @@ export const MEDIA_KIND_ICON: Record<MediaKind, LucideIcon> = {
  * sit at the same weight as everything else rather than shouting.
  */
 export const MEDIA_KIND_TINT: Record<MediaKind, string> = {
-  video: "bg-accent/10 text-accent",
-  audio: "bg-media-audio/10 text-media-audio",
-  gif: "bg-warning/10 text-warning",
+  video: "bg-accent/12 text-accent",
+  audio: "bg-accent/12 text-accent",
+  gif: "bg-accent/12 text-accent",
   // Neutral on purpose: a transcript is the one output that is not media, and
   // giving it a fourth hue would imply a distinction that does not exist.
-  text: "bg-fg-muted/10 text-fg-soft",
+  text: "bg-fg-muted/12 text-fg-soft",
 };

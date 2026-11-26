@@ -50,6 +50,10 @@ pub struct Settings {
     /// The close button hides the window into the tray instead of quitting, so
     /// downloads carry on. See `tray`.
     pub close_to_tray: bool,
+
+    /// Chosen interface language (`"en"`, `"fa"`, `"ar"`), or `None` before the
+    /// first-run language prompt has been answered.
+    pub language: Option<String>,
 }
 
 /// Written by hand because `derive(Default)` would make `organize_by_tool`
@@ -66,6 +70,7 @@ impl Default for Settings {
             max_downloads: crate::network::DEFAULT_DOWNLOAD_SLOTS,
             speed_limit: None,
             close_to_tray: true,
+            language: None,
         }
     }
 }
@@ -175,6 +180,24 @@ fn write_private(file: &std::path::Path, body: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_app_language(app: AppHandle) -> Option<String> {
+    load(&app)
+        .language
+        .filter(|lang| matches!(lang.as_str(), "en" | "fa" | "ar"))
+}
+
+#[tauri::command]
+pub fn set_app_language(app: AppHandle, language: String) -> AppResult<()> {
+    let trimmed = language.trim();
+    if !matches!(trimmed, "en" | "fa" | "ar") {
+        return Err(AppError::invalid("language", "unsupported language"));
+    }
+    let mut current = load(&app);
+    current.language = Some(trimmed.to_string());
+    save(&app, &current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +212,7 @@ mod tests {
             max_downloads: 2,
             speed_limit: Some(512 * 1024),
             close_to_tray: false,
+            language: Some("fa".into()),
         };
         let raw = serde_json::to_string(&settings).unwrap();
         // camelCase across the boundary, matching every other serialized type.

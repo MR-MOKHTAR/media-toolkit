@@ -207,13 +207,13 @@ export const FILE_KIND_ICON: Record<FileKind, LucideIcon> = {
  * them separate colours would imply a distinction nobody acts on.
  */
 export const FILE_KIND_TINT: Record<FileKind, string> = {
-  video: "bg-accent/10 text-accent",
-  audio: "bg-media-audio/10 text-media-audio",
-  image: "bg-media-image/10 text-media-image",
-  archive: "bg-media-archive/10 text-media-archive",
-  document: "bg-fg-muted/10 text-fg-soft",
-  app: "bg-media-app/10 text-media-app",
-  other: "bg-fg-muted/10 text-fg-soft",
+  video: "bg-accent/12 text-accent",
+  audio: "bg-accent/12 text-accent",
+  image: "bg-accent/12 text-accent",
+  archive: "bg-fg-muted/12 text-fg-soft",
+  document: "bg-fg-muted/12 text-fg-soft",
+  app: "bg-fg-muted/12 text-fg-soft",
+  other: "bg-fg-muted/12 text-fg-soft",
 };
 
 /** The i18n key naming this kind, for the download form's file panel. */

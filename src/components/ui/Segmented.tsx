@@ -5,11 +5,9 @@ import { cn } from "../../lib/cn";
 export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
-  /** Shown under the label. Used for the "about 21 MB" hint on presets. */
   hint?: string;
   icon?: ReactNode;
   disabled?: boolean;
-  /** Why it is disabled, e.g. "already smaller". */
   disabledReason?: string;
 }
 
@@ -19,31 +17,9 @@ interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
   label: string;
   className?: string;
-  /**
-   * How many across. Defaults to all of them on one row, which is what a
-   * three- or four-way choice wants.
-   *
-   * It exists for the one control that outgrew a row: the quality picker offers
-   * six heights, and six equal columns inside the settings panel of a 600px
-   * window leaves about 48px each -- narrower than the word "2160p" they have
-   * to hold. Two rows of three is the same control, legible.
-   */
   columns?: number;
 }
 
-/**
- * The app's replacement for a dropdown.
- *
- * Every choice in this app is between three or four fixed options -- quality,
- * format, preset, resolution. Laying them out flat means the options are
- * visible without a click, which matters more than saving the horizontal
- * space a select would.
- *
- * Radio semantics, and -- since these are buttons wearing the role, not
- * native inputs -- the radio keyboard to go with them: one Tab stop, arrows
- * to move. The comment here used to say the arrows came for free. They did
- * not; every option was its own Tab stop and the arrows did nothing.
- */
 export function Segmented<T extends string>({
   value,
   options,
@@ -84,11 +60,11 @@ export function Segmented<T extends string>({
             onClick={() => onChange(option.value)}
             className={cn(
               "flex flex-col items-center justify-center gap-0.5 rounded-md border px-3 py-2",
-              "text-center transition-all duration-(--duration-fast)",
+              "text-center transition-colors duration-(--duration-fast)",
               "disabled:cursor-not-allowed disabled:opacity-disabled",
               selected
-                ? "relative holo-rim border-transparent bg-accent-soft text-accent shadow-(--shadow-glow)"
-                : "border-line bg-surface/65 text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover hover:enabled:scale-[1.02]",
+                ? "border-accent bg-accent-soft text-accent font-medium"
+                : "border-line bg-surface text-fg-soft hover:enabled:border-line-strong hover:enabled:bg-surface-hover",
             )}
           >
             {option.icon}
