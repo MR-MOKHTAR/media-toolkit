@@ -1,14 +1,11 @@
 import { useEffect, useState } from "react";
-import { Moon, Sparkles, Sun, Wind, ZapOff } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { BackdropPicker } from "../../components/background/BackdropPicker";
-import type { BackdropId } from "../../components/background/backdrops";
 import { SectionLabel } from "../../components/ui/Card";
 import { CheckRow } from "../../components/ui/CheckRow";
 import { Segmented } from "../../components/ui/Segmented";
 import {
-  EFFECTS_LEVELS,
   LANGUAGES,
   type AppLanguage,
   type EffectsLevel,
@@ -23,24 +20,8 @@ interface Props {
   onLanguageChange: (language: AppLanguage) => void;
   effects: EffectsLevel;
   onEffectsChange: (effects: EffectsLevel) => void;
-  backdrop: BackdropId;
-  onBackdropChange: (backdrop: BackdropId) => void;
 }
 
-const EFFECT_ICONS = {
-  full: <Sparkles size={16} />,
-  lite: <Wind size={16} />,
-  off: <ZapOff size={16} />,
-} as const;
-
-/**
- * Theme and language: the two things that change how the whole app looks, and
- * the two that are set once per install.
- *
- * They used to live in the title bar -- a permanent gradient button and a raw
- * `<select>` in 40px of window chrome, paid for on every screen. Their own
- * section here, because "General" is the first place anybody looks for them.
- */
 export function GeneralPanel({
   darkMode,
   onToggleTheme,
@@ -48,8 +29,6 @@ export function GeneralPanel({
   onLanguageChange,
   effects,
   onEffectsChange,
-  backdrop,
-  onBackdropChange,
 }: Props) {
   const { t } = useTranslation();
   const [tray, setTray] = useState<TraySettings | null>(null);
@@ -61,7 +40,6 @@ export function GeneralPanel({
       .then((settings) => {
         if (!cancelled) setTray(settings);
       })
-      // No native side in `vite dev`: the row stays disabled.
       .catch(() => undefined);
     return () => {
       cancelled = true;
@@ -85,46 +63,24 @@ export function GeneralPanel({
         />
       </section>
 
-      {/* Which picture is behind the window. Before how much it moves:
-          it is the choice people come here to make. */}
-      <section className="flex flex-col gap-2">
-        <SectionLabel>{t("backdrop")}</SectionLabel>
-        <BackdropPicker value={backdrop} onChange={onBackdropChange} />
-      </section>
-
-      {/* How much the background does. Its own row rather than folded into
-          the theme: it is the one appearance choice that is about the machine
-          -- a laptop on battery, an old GPU -- rather than about taste. */}
-      <section className="flex flex-col gap-2">
-        <SectionLabel>{t("effects")}</SectionLabel>
-        <Segmented
-          label={t("effects")}
-          value={effects}
-          onChange={onEffectsChange}
-          options={EFFECTS_LEVELS.map((value) => ({
-            value,
-            label: t(`effects_${value}`),
-            icon: EFFECT_ICONS[value],
-          }))}
-        />
-        <p className="text-xs text-fg-muted">{t(`effects_${effects}_hint`)}</p>
-      </section>
-
       <section className="flex flex-col gap-2">
         <SectionLabel>{t("language")}</SectionLabel>
         <Segmented
           label={t("language")}
           value={language}
           onChange={(value) => onLanguageChange(value as AppLanguage)}
-          // The same list the first-run dialog offers, from one place -- two
-          // hand-written copies of three languages are two chances to add a
-          // fourth to only one of them.
           options={LANGUAGES.map(({ value, label }) => ({ value, label }))}
         />
       </section>
 
-      {/* A switch: it takes effect the moment it moves, and the next press of
-          the close button is the first thing to obey it. */}
+      <CheckRow
+        control="switch"
+        label={t("effects")}
+        hint={t("effects_lite_hint")}
+        checked={effects !== "off"}
+        onChange={(enabled) => onEffectsChange(enabled ? "lite" : "off")}
+      />
+
       <CheckRow
         control="switch"
         label={t("close_to_tray")}

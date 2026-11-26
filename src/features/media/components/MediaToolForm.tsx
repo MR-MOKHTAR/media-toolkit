@@ -3,84 +3,56 @@ import {
   useState,
   type ComponentType,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
+import { Disclosure } from "../../../components/ui/Disclosure";
+import { Modal } from "../../../components/ui/Modal";
 import type { ToastType } from "../../../types/feedback";
 import { describeAppError } from "../../jobs/errorText";
 import type { JobKind } from "../../jobs/types";
-import { DraftBubble } from "../../chat/DraftBubble";
 import { useDragDropState } from "../useDragDropState";
 import { useMediaFile, type MediaInfo } from "../useMediaFile";
 import { useMediaJob } from "../useMediaJob";
 import { FileDropZone, OutputFolderRow, RunButton } from "./ToolFormParts";
 
-/** The tools that are a file in, a file out. Download is the one job kind that
- *  is not one of these: it has no input file to pick. */
 export type MediaToolKind = Exclude<JobKind, "download">;
 
-/** What the input has to be before the tool can do anything with it. */
 type Requirement = "media" | "video" | "audio";
 
-/** Whether a probed file satisfies each requirement, and -- by sharing its keys
- *  with the `needs_*` strings -- what to say when it does not. */
 const MEETS: Record<Requirement, (info: MediaInfo) => boolean> = {
   media: (info) => Boolean(info.video || info.audio),
   video: (info) => Boolean(info.video),
   audio: (info) => Boolean(info.audio),
 };
 
-/** Everything a tool's own parts are given. The file and the output folder are
- *  the screen's; `state` is the tool's, and is the only thing that differs
- *  between one tab and the next. */
 export interface MediaToolContext<S> {
   path: string | null;
   info: MediaInfo | null;
   state: S;
   setState: Dispatch<SetStateAction<S>>;
   language: string;
+  folderRow: ReactNode;
 }
 
-/** One tool, as data. */
 export interface MediaToolConfig<S> {
   kind: MediaToolKind;
-  /** The Tauri command that starts it. */
   command: string;
   requires: Requirement;
   initialState: S;
-  /**
-   * The controls between the file and the output folder -- the whole of what
-   * makes this tool itself.
-   *
-   * A component rather than a render function, so a tool that needs an effect
-   * of its own (the compress estimate, the convert stream-copy check, a range
-   * that follows the file's duration) can hold it legally instead of pushing
-   * it up into a screen it would then have to have.
-   */
   Controls: ComponentType<MediaToolContext<S>>;
-  /** Anything beyond a usable input and an output folder. Called only when
-   *  those already hold. */
+  /** When true, Controls renders `folderRow` inside its own `More options`. */
+  handlesFolderRow?: boolean;
   isReady?: (context: MediaToolContext<S>) => boolean;
-  /** The arguments for `command`, the name to show in the job list, and the
-   *  one-word detail beside it. `outputDir` is added by `useMediaJob`. */
   toRequest: (
     context: MediaToolContext<S> & { t: TFunction },
   ) => { args: Record<string, unknown>; title: string; detail?: string };
-  /** A wider dialog, for a tool whose controls need the room -- the trim
-   *  studio's waveform is about time, and time wants width. */
   wide?: boolean;
 }
 
-/**
- * A config with its state type erased.
- *
- * The registry holds four different state shapes, and this screen only ever
- * carries one of them from `Controls` to `toRequest` -- it never looks inside.
- * A union of the four would not work: `S` appears in both argument and return
- * position, so the union of those signatures accepts nothing.
- */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyMediaToolConfig = MediaToolConfig<any>;
 
@@ -89,28 +61,9 @@ interface Props {
   initialFile?: string;
   language: string;
   notify: (type: ToastType, message: string) => void;
-  /** Closes the dialog, once the job is running and its row is on the list. */
   onDone: () => void;
 }
 
-/**
- * The tool form. Singular.
- *
- * Every one of these tools is the same form -- file, preview, two or three
- * controls, output folder, run -- and each used to be written out again in its
- * own file: the same drop zone, the same "follow the input folder" effect, the
- * same ready check assembled from the same four conditions, the same output
- * row, the same button. Five copies of a layout drift, and they had: one screen
- * spaced its hint with `-mt-2`, another with `-mt-1`, a third not at all.
- *
- * Now the sidebar switches `config` and nothing else. What a tool contributes
- * is its controls, its readiness, and the request it builds; the box around
- * them is this file, once.
- *
- * Mounted only while its tool's route says `composing`, so each job starts on a
- * clean form rather than carrying the last one's state into a control that
- * means something else.
- */
 export function MediaToolForm({
   config,
   initialFile,
@@ -122,9 +75,17 @@ export function MediaToolForm({
   const file = useMediaFile(initialFile);
   const job = useMediaJob(config.kind, config.command, notify);
   const [state, setState] = useState(config.initialState);
+  const [moreOpen, setMoreOpen] = useState(false);
   const isDragging = useDragDropState(file.acceptDrop);
 
   useEffect(() => job.followInput(file.path), [file.path]);
+
+  const folderRow = (
+    <OutputFolderRow
+      folder={job.outputDir}
+      onChoose={() => void job.chooseFolder()}
+    />
+  );
 
   const context: MediaToolContext<unknown> = {
     path: file.path,
@@ -132,10 +93,9 @@ export function MediaToolForm({
     state,
     setState,
     language,
+    folderRow,
   };
 
-  // ffprobe answered and the answer was usable. Audio-only input is fine for
-  // every tool that does not need pixels to work on.
   const meetsRequirement = Boolean(
     file.info && MEETS[config.requires](file.info),
   );
@@ -149,23 +109,20 @@ export function MediaToolForm({
   );
 
   return (
-    <DraftBubble
-      tool={config.kind}
+    <Modal
+      open
       wide={config.wide}
-      onClose={onDone}
-      dirty={Boolean(file.path)}
+      keepOnOutsideClick={Boolean(file.path)}
+      onOpenChange={(open) => {
+        if (!open) onDone();
+      }}
+      title={t(`tool_${config.kind}`)}
       footer={
         <RunButton
           label={t(`tool_${config.kind}`)}
           disabled={!ready}
           onClick={() => {
             const { args, title, detail } = config.toRequest({ ...context, t });
-            // Closed before the command is awaited, not after. Every media
-            // command probes its input with ffprobe before it hands back a job
-            // id, and waiting for that left the dialog sitting there for the
-            // best part of a second with the button already pressed. A request
-            // that turns out to be invalid reports itself as a toast, which is
-            // where the job's own failures would have appeared anyway.
             onDone();
             void job.run(args, title, detail);
           }}
@@ -180,14 +137,8 @@ export function MediaToolForm({
         onBrowse={() => void file.browse()}
       />
 
-      {/* Only once probing has finished: during the read there is nothing to
-          refuse yet, and saying so early made every file selection flash a
-          red line before the metadata arrived. */}
       {file.path && !file.loading && !meetsRequirement && (
         <p className="text-sm text-danger-text">
-          {/* A file that could not be read at all -- corrupt, gone, or no
-              ffprobe to read it with -- is not "a file with no audio or
-              video", which is what this used to say about every failure. */}
           {file.error
             ? t("file_read_failed", { reason: describeAppError(file.error, t) })
             : t(`needs_${config.requires}`)}
@@ -196,10 +147,15 @@ export function MediaToolForm({
 
       {meetsRequirement && <config.Controls {...context} />}
 
-      <OutputFolderRow
-        folder={job.outputDir}
-        onChoose={() => void job.chooseFolder()}
-      />
-    </DraftBubble>
+      {meetsRequirement && !config.handlesFolderRow && (
+        <Disclosure
+          label={t("more_options")}
+          open={moreOpen}
+          onOpenChange={setMoreOpen}
+        >
+          {folderRow}
+        </Disclosure>
+      )}
+    </Modal>
   );
 }

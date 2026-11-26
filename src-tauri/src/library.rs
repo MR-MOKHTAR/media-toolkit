@@ -104,7 +104,11 @@ pub struct LibraryInfo {
 /// The app's folder name, taken from the bundle's product name so a rename in
 /// `tauri.conf.json` carries here without a second edit.
 fn app_folder_name(app: &AppHandle) -> String {
-    let raw = app.package_info().name.clone();
+    let raw = app
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| app.package_info().name.clone());
     let cleaned = paths::sanitize_stem(&raw);
     // `sanitize_stem` answers "media" for anything with no alphanumerics left,
     // which is a poor name for a folder in someone's Downloads.
@@ -112,6 +116,14 @@ fn app_folder_name(app: &AppHandle) -> String {
         return FALLBACK_FOLDER.to_string();
     }
     cleaned
+}
+
+/// Nearest existing non-root directory at or above `path` (handles both file
+/// paths and directories, while rejecting `/` or bare drive roots).
+fn usable_dir(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|candidate| candidate.parent().is_some() && candidate.is_dir())
+        .map(Path::to_path_buf)
 }
 
 /// `<Downloads>/MediaToolkit`, resolved through the platform's real Downloads
@@ -221,7 +233,43 @@ fn update(app: &AppHandle, change: impl FnOnce(&mut settings::Settings)) -> AppR
 
 #[tauri::command]
 pub fn library_info(app: AppHandle) -> LibraryInfo {
+    ensure_layout(&app);
     info(&app)
+}
+
+/// Resolves the starting directory for file and folder dialogs so they open in
+/// the app's own folder (`~/Downloads/MediaToolkit` by default) rather than `/`.
+#[tauri::command]
+pub fn picker_dir(app: AppHandle, preferred: Option<String>) -> String {
+    use tauri::Manager;
+
+    ensure_layout(&app);
+
+    if let Some(raw) = preferred.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(dir) = usable_dir(Path::new(raw)) {
+            return dir.to_string_lossy().into_owned();
+        }
+    }
+
+    let settings = settings::load(&app);
+    let root = root_from(&app, &settings);
+    let _ = std::fs::create_dir_all(&root);
+    if let Some(dir) = usable_dir(&root) {
+        return dir.to_string_lossy().into_owned();
+    }
+
+    let fallback = default_root(&app);
+    let _ = std::fs::create_dir_all(&fallback);
+    if let Some(dir) = usable_dir(&fallback) {
+        return dir.to_string_lossy().into_owned();
+    }
+
+    app.path()
+        .home_dir()
+        .ok()
+        .filter(|dir| dir.parent().is_some())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The folder for one tool. Called by every screen on mount, which is also what

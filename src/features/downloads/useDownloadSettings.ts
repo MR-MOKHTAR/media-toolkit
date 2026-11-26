@@ -4,113 +4,42 @@ import type { AudioFormatChoice, CodecPref } from "../jobs/types";
 
 const STORAGE_KEY = "media-toolkit-download-v1";
 
-/** The heights offered, largest first after "best".
- *
- * 1440 and 2160 are here because the backend has always accepted them -- the
- * selector is built from whatever number arrives -- and the list simply never
- * offered them, so a 4K monitor's only route to 4K was "best", which on a phone
- * recording means something else entirely. */
-export const QUALITIES = ["best", "2160", "1440", "1080", "720", "480", "360"] as const;
+export const QUALITIES = ["best", "1080", "720", "480"] as const;
 
 export type DownloadQuality = (typeof QUALITIES)[number];
 
-/** What an audio download ends up as.
- *
- * `original` hands over the stream the site served -- already a finished AAC or
- * Opus file -- without decoding it. `mp3` re-encodes, which every version before
- * this one did unconditionally and which is still what something downstream
- * occasionally insists on.
- *
- * The same two words the extract-audio tool uses, on purpose: it is one promise
- * made in two places. */
-export const AUDIO_FORMATS: AudioFormatChoice[] = ["original", "m4a", "opus", "mp3"];
+export const AUDIO_FORMATS: AudioFormatChoice[] = ["original", "mp3", "m4a"];
 
 export type AudioFormat = AudioFormatChoice;
 
-/** MP3 bitrates offered, kbps. 0 is LAME's best VBR (about 245k on music),
- *  which is what every MP3 this app made before the choice existed. */
-export const MP3_BITRATES = [0, 320, 256, 192, 128] as const;
-
-export const CODEC_PREFS: CodecPref[] = ["auto", "compatible", "small"];
-
-/** The browsers yt-dlp can read cookies from. Kept in step with `BROWSERS` in
- *  download.rs by `cookie_browsers`, which Settings asks rather than trusting
- *  this list -- it is here only so a stored value has a type. */
 export type CookieBrowser = string;
 
-/** No browser: send no cookies at all. Stored as the empty string because that
- *  is what an unset `Select` value is, and it is the default. */
 export const NO_COOKIES = "";
 
 export interface DownloadSettings {
   quality: DownloadQuality;
-  /** Video or audio, for the links where that is a question at all. A direct
-   *  file is fetched as whatever it is, so this has nothing to say about one.
-   *
-   *  Set on the download form and only there -- this is the memory of what was
-   *  chosen last, not a preference with a screen of its own. */
   mediaType: "video" | "audio";
   audioFormat: AudioFormat;
-  /** Which browser to borrow cookies from for links behind a login, an age
-   *  check, or a members-only wall. Empty -- the default -- sends none. */
   cookiesFrom: CookieBrowser;
-  /** Fetch a video's streams on many connections instead of letting yt-dlp
-   *  fetch them on one. On by default, and the reason downloads are fast; the
-   *  switch exists so a site that objects to it can be worked around without
-   *  waiting for a release. */
   parallel: boolean;
-  /** The last time a download was scheduled for, `HH:MM`. Remembered because
-   *  it is the same time night after night -- when a night-time internet
-   *  package starts. */
   scheduleTime: string;
-  /** How the codec is weighed against the resolution -- see
-   *  `formats::CodecPref`. */
   codec: CodecPref;
   container: "mp4" | "mkv";
-  /** An MP3's bitrate in kbps; 0 is LAME's best VBR. */
   mp3Bitrate: number;
-  /** Title and artist tags in the file. */
   embedMetadata: boolean;
-  /** The thumbnail as cover art on audio downloads. */
   embedCover: boolean;
-  /** Subtitle languages fetched whenever a video has them -- remembered,
-   *  because the language someone reads subtitles in does not change between
-   *  videos. Empty is none. */
   subtitleLangs: string[];
-  /** Inside the video, rather than .srt files beside it. */
   subtitleEmbed: boolean;
   sponsorBlock: boolean;
-  /** A whole playlist goes into a folder named after it, its files numbered
-   *  in playlist order. */
   playlistFolder: boolean;
   playlistNumbers: boolean;
-  /** Whether the form's "More options" section is open. */
   advancedOpen: boolean;
 }
 
-/**
- * 720p, video, and the audio left alone.
- *
- * "Best available" is whatever the site happens to serve -- on YouTube that is
- * often 4K, which is a multi-gigabyte file and a long wait for something most
- * people watch on a laptop. 720p is the size everyone can afford; anyone who
- * wants the full thing sets it once in Settings and never thinks about it
- * again.
- *
- * `original` is the audio default for the reason the extract-audio tool already
- * gives: the stream a site serves is a finished AAC or Opus file, and re-encoding
- * it to MP3 spends a minute to make it measurably worse. MP3 stays one click
- * away for whatever still insists on it. This is a change in what an audio
- * download produces -- an `.m4a` where an `.mp3` used to appear -- which is why
- * it is the default rather than a hidden option: the old behaviour was a loss
- * nobody asked for.
- */
 const DEFAULTS: DownloadSettings = {
-  quality: "720",
+  quality: "1080",
   mediaType: "video",
   audioFormat: "original",
-  // No cookies. Reading a browser's cookie jar is a thing to opt into, not a
-  // thing to discover the app has been doing.
   cookiesFrom: NO_COOKIES,
   parallel: true,
   scheduleTime: "02:00",
@@ -127,19 +56,32 @@ const DEFAULTS: DownloadSettings = {
   advancedOpen: false,
 };
 
+function normalizeQuality(raw: unknown): DownloadQuality {
+  if (raw === "best" || raw === "2160" || raw === "1440") return "best";
+  if (raw === "1080") return "1080";
+  if (raw === "720") return "720";
+  if (raw === "480" || raw === "360") return "480";
+  return DEFAULTS.quality;
+}
+
 function load(): DownloadSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
-    // Spread over the defaults rather than trusting the parse: a settings blob
-    // written by an older build is missing whatever was added since, and a
-    // hand-edited one can be missing anything at all.
-    const stored = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<DownloadSettings>) };
-    // A value this build no longer offers falls back rather than reaching a
-    // request: a hand-edited blob, or a list that shrank.
-    if (!(QUALITIES as readonly string[]).includes(stored.quality)) stored.quality = DEFAULTS.quality;
-    if (!AUDIO_FORMATS.includes(stored.audioFormat)) stored.audioFormat = DEFAULTS.audioFormat;
-    if (!CODEC_PREFS.includes(stored.codec)) stored.codec = DEFAULTS.codec;
+    const parsed = JSON.parse(raw) as Partial<DownloadSettings> & { quality?: string };
+    const stored: DownloadSettings = {
+      ...DEFAULTS,
+      ...parsed,
+      quality: normalizeQuality(parsed.quality),
+      codec: "auto",
+      container: "mp4",
+      mp3Bitrate: 0,
+      embedMetadata: true,
+      embedCover: true,
+    };
+    if (!AUDIO_FORMATS.includes(stored.audioFormat)) {
+      stored.audioFormat = DEFAULTS.audioFormat;
+    }
     if (!Array.isArray(stored.subtitleLangs)) stored.subtitleLangs = [];
     return stored;
   } catch {
@@ -147,28 +89,6 @@ function load(): DownloadSettings {
   }
 }
 
-/**
- * What every download asks for, remembered between runs.
- *
- * Quality used to be a segmented control on the download form, reset to 720p on
- * every visit and asked again for every link. It is not a decision about a
- * particular video though -- it is a standing answer to "how big do I want my
- * files", the same one for months at a time -- so it belongs in Settings with
- * the theme and the library folder, and the form is one control shorter for it.
- *
- * Video-or-audio lives here too, but nothing in Settings shows it any more: it
- * is asked on the download form, where the link it is about is on screen, and
- * the form writes straight through to this store rather than keeping a copy of
- * its own. So it is remembered for the next link without being a second place
- * to set it -- which is what it was, and the two controls only raised the
- * question of which of them was in charge.
- *
- * localStorage like the theme, the language and the job history, not the
- * Rust config file: none of this is a secret, and the webview is the only thing
- * that reads it. The two screens that touch it are never mounted at the same
- * time -- routes swap rather than stack -- so each one reads the stored value
- * fresh when it appears.
- */
 export function useDownloadSettings() {
   const [settings, setSettings] = useState<DownloadSettings>(load);
 
@@ -176,7 +96,7 @@ export function useDownloadSettings() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
     } catch {
-      // The choice still applies for this session when storage is unavailable.
+      // Session-only when storage is unavailable.
     }
   }, [settings]);
 
@@ -190,8 +110,6 @@ export function useDownloadSettings() {
   return { settings, update };
 }
 
-/** The quality as it is written on screen: "720p", or the translated words for
- *  the one option that is not a number. */
 export function qualityLabel(quality: string, best: string): string {
   return quality === "best" ? best : `${quality}p`;
 }

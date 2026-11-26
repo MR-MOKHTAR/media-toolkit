@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   CirclePause,
   Clock3,
+  EllipsisVertical,
   FileQuestionMark,
   FolderOpen,
   Loader2,
@@ -16,6 +17,9 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import type { ToolName } from "../../../app/navigation";
+import { TOOL_ICON } from "../../../app/tools";
+import { ActionMenu } from "../../../components/ui/ActionMenu";
 import { Card } from "../../../components/ui/Card";
 import { IconButton } from "../../../components/ui/Button";
 import { ProgressBar } from "../../../components/ui/ProgressBar";
@@ -63,11 +67,22 @@ interface JobCardProps {
   onReveal: (path: string) => void;
   /** Opens the finished file in whatever the system opens it with. */
   onOpen: (path: string) => void;
+  /** Opens a completed media file directly inside another tool's form. */
+  onOpenInTool?: (path: string, tool: ToolName) => void;
   /** Starts a scheduled row now, whatever its time says. */
   onStartNow: (id: string) => void;
   /** Runs an unfinished download again, continuing from what it already got.
    *  Only offered when the job carries the request that started it. */
   onRetry: (id: string) => void;
+}
+
+const VIDEO_TOOLS: ToolName[] = ["compress", "trim", "convert", "extractAudio"];
+const AUDIO_TOOLS: ToolName[] = ["compress", "trim", "convert"];
+
+function toolsForCompletedJob(job: Job, kind: JobFileKind): ToolName[] {
+  const candidates =
+    kind === "video" ? VIDEO_TOOLS : kind === "audio" ? AUDIO_TOOLS : [];
+  return candidates.filter((tool) => tool !== job.kind);
 }
 
 /** What a download sets as its detail when the user picked audio. */
@@ -206,6 +221,7 @@ function JobCardComponent({
   onRemove,
   onReveal,
   onOpen,
+  onOpenInTool,
   onRetry,
   onStartNow,
 }: JobCardProps) {
@@ -226,6 +242,18 @@ function JobCardComponent({
   const format = formatOfJob(job, detail);
   const isLink = /^https?:\/\//i.test(job.title);
   const revealable = job.state === "completed" && job.outputPath;
+  const toolOptions =
+    revealable && onOpenInTool
+      ? toolsForCompletedJob(job, kind).map((tool) => {
+          const ToolIcon = TOOL_ICON[tool];
+          return {
+            key: tool,
+            label: t(`tool_${tool}`),
+            icon: ToolIcon ? <ToolIcon size={15} /> : undefined,
+            onSelect: () => onOpenInTool(job.outputPath!, tool),
+          };
+        })
+      : [];
 
   // Everything that ended without a file, including the jobs marked failed at
   // startup because the app was closed while they were running. Both engines
@@ -234,6 +262,10 @@ function JobCardComponent({
   const retryable = Boolean(
     job.request && (job.state === "failed" || job.state === "cancelled"),
   );
+  const hasStoppedProgress =
+    retryable &&
+    ((job.bytes !== undefined && job.bytes > 0) ||
+      (job.percent !== null && job.percent > 0 && job.percent < 100));
   /* Whatever is known about the file, as the middle group of the metadata line
      between the status and the date. Built as a list so the `·` separators
      fall between whatever actually turned up, rather than every token having
@@ -383,10 +415,15 @@ function JobCardComponent({
 
             The width on the percentage is fixed so the bar does not resize
             itself every time the number goes from 9% to 10%. */}
-        {active && (
+        {(active || hasStoppedProgress) && (
           <>
             <div className="flex items-center gap-2">
-              <ProgressBar percent={job.percent} label={job.title} className="min-w-16 flex-1" />
+              <ProgressBar
+                percent={job.percent}
+                paused={!active}
+                label={job.title}
+                className="min-w-16 flex-1"
+              />
               {/* Nothing at all when the percentage is unknown, rather than a
                   reassuring 0%. A null percent means the source never reported
                   a total to divide by; the indeterminate bar is the honest
@@ -431,7 +468,7 @@ function JobCardComponent({
         )}
         {revealable && (
           <IconButton
-            variant="accent"
+            variant="accentGhost"
             label={t("open_file")}
             onClick={() => onOpen(job.outputPath!)}
           >
@@ -440,12 +477,19 @@ function JobCardComponent({
         )}
         {revealable && (
           <IconButton
-            variant="accent"
+            variant="accentGhost"
             label={t("open_folder")}
             onClick={() => onReveal(job.outputPath!)}
           >
             <FolderOpen size={16} />
           </IconButton>
+        )}
+        {toolOptions.length > 0 && (
+          <ActionMenu
+            label={t("open_in_tool")}
+            items={toolOptions}
+            icon={<EllipsisVertical size={16} />}
+          />
         )}
         {active ? (
           <IconButton
@@ -568,7 +612,11 @@ function PendingCard({ job, bubble }: { job: Job; bubble?: boolean }) {
 
         {/* The progress bar's own track, at its own height, so the row does not
             change size when the real bar takes over. */}
-        <div className="h-1.5 w-full animate-pulse rounded-full bg-line" />
+        {job.percent !== null ? (
+          <ProgressBar percent={job.percent} label={job.title} className="w-full" />
+        ) : (
+          <div className="h-1.5 w-full animate-pulse rounded-full bg-line" />
+        )}
       </div>
     </Card>
   );

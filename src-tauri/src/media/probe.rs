@@ -41,11 +41,18 @@ impl MediaInfo {
         self.audio.is_some()
     }
 
-    /// Source audio bitrate in kbps, when the container reports one. Used to
+    /// Source audio bitrate in kbps, when a lossy track reports one. Used to
     /// stop a "compress" from re-encoding upwards.
     pub fn audio_kbps(&self) -> Option<u32> {
         self.audio
             .as_ref()
+            .filter(|a| {
+                !a.codec.starts_with("pcm_")
+                    && !matches!(
+                        a.codec.as_str(),
+                        "flac" | "alac" | "truehd" | "mlp" | "wavpack" | "ape" | "tta"
+                    )
+            })
             .and_then(|a| a.bit_rate)
             .map(|bps| (bps / 1000).max(1) as u32)
     }
@@ -166,7 +173,7 @@ async fn probe_uncached(app: &AppHandle, path: &Path) -> AppResult<MediaInfo> {
         // as video would offer to resize an audio file.
         .filter(|s| s.width.unwrap_or(0) > 0 && frame_rate(s) > 0.0);
 
-    let audio_streams: Vec<AudioStream> = probe
+    let mut audio_streams: Vec<AudioStream> = probe
         .streams
         .iter()
         .filter(|s| s.codec_type.as_deref() == Some("audio"))
@@ -206,6 +213,23 @@ async fn probe_uncached(app: &AppHandle, path: &Path) -> AppResult<MediaInfo> {
         .and_then(|s| s.parse().ok())
         .or_else(|| std::fs::metadata(path).ok().map(|m| m.len()))
         .unwrap_or(0);
+    let duration_secs = duration_of(&probe, video.or(audio));
+    let format_bit_rate: Option<u64> = probe
+        .format
+        .as_ref()
+        .and_then(|f| f.bit_rate.as_deref())
+        .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            (duration_secs > 0.0 && size_bytes > 0)
+                .then(|| ((size_bytes as f64 * 8.0) / duration_secs).round() as u64)
+        });
+
+    // Ogg/Opus and Matroska/WebM audio-only files omit per-stream `bit_rate` in
+    // ffprobe while reporting the true bitrate on the container. Inherit it for
+    // single-track audio files so Compress knows the source bitrate ceiling.
+    if video.is_none() && audio_streams.len() == 1 && audio_streams[0].bit_rate.is_none() {
+        audio_streams[0].bit_rate = format_bit_rate;
+    }
 
     Ok(MediaInfo {
         path: path.to_string_lossy().into_owned(),
@@ -214,13 +238,9 @@ async fn probe_uncached(app: &AppHandle, path: &Path) -> AppResult<MediaInfo> {
             .as_ref()
             .and_then(|f| f.format_name.clone())
             .unwrap_or_default(),
-        duration_secs: duration_of(&probe, video.or(audio)),
+        duration_secs,
         size_bytes,
-        bit_rate: probe
-            .format
-            .as_ref()
-            .and_then(|f| f.bit_rate.as_deref())
-            .and_then(|s| s.parse().ok()),
+        bit_rate: format_bit_rate,
         video: video.map(|s| VideoStream {
             codec: s.codec_name.clone().unwrap_or_default(),
             width: s.width.unwrap_or(0),

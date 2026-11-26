@@ -2,17 +2,8 @@ import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
 interface CardProps extends HTMLAttributes<HTMLElement> {
-  /** `sm` (12px) for a row in a list, `md` (16px) for a standalone panel,
-   *  `none` when the card's children draw their own padded rows. */
   padding?: "none" | "sm" | "md";
-  /** The hover lift. Only for a card that is itself a click target -- a static
-   *  container that rises under the pointer is promising something it does
-   *  not do. */
   interactive?: boolean;
-  /** `glass` for a card that sits straight on the page, over the living
-   *  background -- it blurs what is behind it. `inset` (the default) for a card
-   *  inside a dialog or a form card, which is already glass: a second blur
-   *  there would blur the pane, not the background, and cost a frame for it. */
   surface?: "glass" | "inset";
   as?: "div" | "li" | "section";
 }
@@ -23,16 +14,6 @@ const CARD_PADDING = {
   md: "p-4",
 } as const;
 
-/**
- * A bordered surface on the canvas.
- *
- * This component existed and was imported by nothing, while nine places wrote
- * its class string out by hand -- at three paddings and two backgrounds, so
- * a job row, a transcript pane and a settings box were three different cards
- * for no reason anyone chose. The `padding` and `interactive` props are the
- * two axes those nine sites actually varied along; everything else about a
- * card is now settled here.
- */
 export function Card({
   padding = "md",
   interactive = false,
@@ -45,14 +26,11 @@ export function Card({
   return (
     <Tag
       className={cn(
-        // A faint holographic rim over the card's own hairline: the cards
-        // catch the same light as the window's frame.
-        "relative rounded-lg border holo-rim [--rim-over:1px] [--rim-opacity:0.3]",
-        surface === "glass" ? "glass-card" : "glass-inset",
+        "relative rounded-lg border border-line",
+        surface === "glass" ? "bg-surface shadow-(--shadow-card)" : "bg-surface-soft",
         CARD_PADDING[padding],
         interactive &&
-          "glass-spotlight transition-[box-shadow,transform,background-color] duration-(--duration-fast) hover:-translate-y-px hover:shadow-(--shadow-raise)",
-        interactive && surface === "glass" && "hover:bg-card-glass-hover",
+          "transition-colors duration-(--duration-fast) hover:border-line-strong hover:bg-surface-hover",
         className,
       )}
       {...props}
@@ -62,26 +40,6 @@ export function Card({
   );
 }
 
-/**
- * The surface every form in the app is drawn on.
- *
- * One card, one border, one shadow, holding the whole set of controls -- which
- * is what a form looks like everywhere else, and what the screens here were
- * missing: each control carried its own border and they stacked loose down the
- * middle of the canvas, so a five-control form read as five unrelated boxes.
- *
- * Glass, not a flat panel: a translucent surface over the canvas with a blur
- * behind it. It sits lighter than the page instead of being a second, brighter
- * white, and anything sliding underneath -- the history panel, a toast --
- * shows through rather than stopping at a hard edge.
- *
- * 20px between controls and 24px of padding, up from 14 and 20. At 14 the rows
- * were closer to each other than the label inside a row is to its own control,
- * so a form read as one dense block rather than as a sequence of decisions.
- * The gap is now clearly larger than any spacing inside a control, which is
- * what makes the grouping legible. Hints that belong to the control above them
- * are not spaced by this gap at all -- they sit inside a `ControlGroup`.
- */
 export function FormCard({
   className,
   children,
@@ -90,15 +48,7 @@ export function FormCard({
   return (
     <div
       className={cn(
-        "flex flex-col gap-5 rounded-xl border border-line-soft p-6",
-        "bg-surface-glass bg-(image:--glass-sheen) backdrop-blur-glass",
-        "shadow-[inset_0_1px_0_var(--color-glass-edge),var(--shadow-card)]",
-        /* A holographic hairline along the top edge -- visible enough to mark
-           the card as the primary surface without competing with anything
-           inside it. */
-        "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px",
-        "before:bg-(image:--gradient-holo) before:opacity-70 before:rounded-t-xl",
-        "relative overflow-hidden",
+        "flex flex-col gap-5 rounded-xl border border-line bg-surface p-6 shadow-(--shadow-card)",
         className,
       )}
       {...props}
@@ -108,15 +58,6 @@ export function FormCard({
   );
 }
 
-/**
- * A control and the line of text that explains it, as one item of the form.
- *
- * The alternative was a negative margin on the hint -- `-mt-2` under a
- * `gap-3.5` card -- which every screen wrote by hand and which had to be
- * retuned the moment the card's gap changed. Grouping says the same thing
- * declaratively: the hint is part of this item, so the form's own gap never
- * applies between them.
- */
 export function ControlGroup({
   className,
   children,
@@ -131,7 +72,6 @@ export function ControlGroup({
 
 interface FieldProps {
   label: string;
-  /** Marks the control optional without an extra line of explanation. */
   optional?: boolean;
   hint?: ReactNode;
   htmlFor?: string;
@@ -159,14 +99,6 @@ export function Field({
   );
 }
 
-/**
- * The label over a group of controls.
- *
- * `text-sm font-medium text-fg-soft` was written by hand in five places --
- * two of them on a `<p>` doing an `<h3>`'s job, and one of them at a different
- * weight from its neighbour on the same screen. It is the same label in all
- * five, so it is one component with the heading level as a prop.
- */
 export function SectionLabel({
   as: Tag = "h3",
   className,
@@ -185,40 +117,24 @@ export function SectionLabel({
 
 export function EmptyState({
   icon,
-  illustration,
   title,
   description,
   action,
 }: {
   icon: ReactNode;
-  // A larger scene (e.g. an animated SVG) that stands in for the icon tile
-  // when a screen has one; `icon` stays the fallback for those that do not.
-  illustration?: ReactNode;
   title: string;
   description?: string;
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-5 px-6 py-12 text-center">
-      {/* Neutral, not the accent tile the screen header carries. A filled,
-          glowing mark in the middle of an empty page read as the thing to
-          press, next to a button that actually was -- this says "nothing
-          here", and leaves the asking to the button. */}
-      {illustration ?? (
-        <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface-soft text-fg-muted">
-          {icon}
-        </div>
-      )}
-      <div className="flex flex-col items-center gap-2">
-        <p className="text-xl font-semibold text-fg">{title}</p>
-        {/* `fg-soft`, not `fg-muted`: this is the sentence that says what to
-            do next, and muted sits at 3.4:1 on the light canvas -- under AA
-            for text this size. */}
-        {/* Balanced, so a two-line hint breaks into two even lines instead
-            of a full line and a stray word -- the ragged break read as untidy
-            in the middle of an otherwise empty page. */}
+    <div className="flex flex-col items-center justify-center gap-4 px-6 py-12 text-center">
+      <div className="flex size-12 items-center justify-center rounded-lg border border-line bg-surface text-fg-muted">
+        {icon}
+      </div>
+      <div className="flex flex-col items-center gap-1.5">
+        <p className="text-lg font-medium text-fg">{title}</p>
         {description && (
-          <p className="max-w-md text-base leading-relaxed text-balance text-fg-soft">
+          <p className="max-w-sm text-sm leading-relaxed text-balance text-fg-muted">
             {description}
           </p>
         )}

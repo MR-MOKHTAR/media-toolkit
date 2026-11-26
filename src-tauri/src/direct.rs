@@ -16,8 +16,8 @@
 //!
 //! Which of the two runs is decided in `download::choose_engine`.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -94,14 +94,21 @@ const SPLIT_THRESHOLD: u64 = 8 * 1024 * 1024;
 /// correctness.
 const STATE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Attempts per chunk before the whole download gives up.
+/// Consecutive zero-progress attempts per chunk before the download gives up.
 ///
-/// Three was tuned for one download on a quiet line. Two or three running at
-/// once put twice or three times the sockets on the same connection, and a
-/// dropped or stalled range stops being rare -- three quick tries inside a
-/// second and a half was not enough to ride out a busy moment, and one chunk
-/// giving up fails the whole download.
-const CHUNK_ATTEMPTS: u32 = 5;
+/// An attempt that actually landed bytes on disk resets this counter and
+/// continues from the new offset, so a weak line that drops every few hundred
+/// kilobytes still finishes; only a genuinely dead connection exhausts the
+/// budget.
+const CHUNK_ATTEMPTS: u32 = 6;
+
+/// Hard ceiling on total resumes of a single 4 MiB chunk, guarding against a
+/// pathological server that sends a handful of bytes and hangs up forever.
+const MAX_CHUNK_RESUMES: u32 = 64;
+
+/// How often a chunk's buffered writes are flushed and recorded in its progress
+/// counter, in addition to flushing on every stall, error, cancel or finish.
+const FLUSH_STEP: usize = 256 * 1024;
 
 /// A partial file smaller than this is not worth keeping for a resume, and
 /// leaving it behind is just litter in the user's folder.
@@ -589,6 +596,11 @@ struct PartState {
     chunk: u64,
     /// Indices written in full.
     done: Vec<u32>,
+    /// Bytes already flushed from the start of an unfinished chunk, so a
+    /// dropped or stalled connection continues from where it stopped rather
+    /// than throwing away up to 4 MiB per worker and walking backwards.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    partial: BTreeMap<u32, u64>,
     /// The server's version marker at the time. A mismatch means the file
     /// changed under us and every byte on disk is suspect.
     tag: Option<String>,
@@ -605,6 +617,7 @@ async fn load_state(part: &Path, total: u64, tag: Option<&str>) -> PartState {
         total,
         chunk: CHUNK_SIZE,
         done: Vec::new(),
+        partial: BTreeMap::new(),
         tag: tag.map(str::to_string),
     };
 
@@ -633,6 +646,41 @@ async fn load_state(part: &Path, total: u64, tag: Option<&str>) -> PartState {
 async fn save_state(part: &Path, state: &PartState) {
     if let Ok(raw) = serde_json::to_vec(state) {
         let _ = tokio::fs::write(state_path(part), raw).await;
+    }
+}
+
+fn sync_partial_state(
+    state: &mut PartState,
+    pending: &[u32],
+    flushed: &[AtomicU64],
+    chunks: u32,
+    total: u64,
+) {
+    state.done.sort_unstable();
+    state.done.dedup();
+    state.partial.clear();
+    for (&index, counter) in pending.iter().zip(flushed.iter()) {
+        if state.done.binary_search(&index).is_ok() {
+            continue;
+        }
+        let full = chunk_len(index, chunks, total);
+        let written = counter.load(Ordering::Acquire).min(full);
+        if written >= full {
+            state.done.push(index);
+            state.done.sort_unstable();
+        } else if written > 0 {
+            state.partial.insert(index, written);
+        }
+    }
+}
+
+fn retry_backoff(attempt: u32) -> Duration {
+    match attempt {
+        0 | 1 => Duration::from_millis(250),
+        2 => Duration::from_millis(750),
+        3 => Duration::from_millis(1500),
+        4 => Duration::from_millis(3000),
+        _ => Duration::from_millis(5000),
     }
 }
 
@@ -673,6 +721,12 @@ async fn segmented(
     state.done.retain(|index| *index < chunks);
     state.done.sort_unstable();
     state.done.dedup();
+    state.partial.retain(|&index, &mut written| {
+        index < chunks
+            && state.done.binary_search(&index).is_err()
+            && written > 0
+            && written < chunk_len(index, chunks, total)
+    });
 
     let pending: Arc<Vec<u32>> = Arc::new(
         (0..chunks)
@@ -680,17 +734,24 @@ async fn segmented(
             .collect(),
     );
 
-    let mut downloaded = bytes_of(&state.done, chunks, total);
+    let flushed: Arc<Vec<AtomicU64>> = Arc::new(
+        pending
+            .iter()
+            .map(|index| AtomicU64::new(state.partial.get(index).copied().unwrap_or(0)))
+            .collect(),
+    );
+
+    let mut downloaded =
+        bytes_of(&state.done, chunks, total) + state.partial.values().copied().sum::<u64>();
     report(downloaded, Some(total), None);
 
     if pending.is_empty() {
         return Ok(total);
     }
 
-    // Bytes received by this attempt, bumped by every worker on every read.
-    // Counted where the bytes land rather than relayed through a channel in
-    // 256 KB lumps: a line doing 60 KB/s across eight workers took most of a
-    // minute to fill one lump each, so the bar sat still and then lurched.
+    // Bytes newly written by this attempt, bumped by every worker as data lands
+    // on disk and never wound back on network drops (since flushed bytes stay
+    // on disk and retries resume past them).
     let received = Arc::new(AtomicU64::new(0));
     let (tx, mut rx) = mpsc::channel::<u32>(256);
     let next = Arc::new(AtomicUsize::new(0));
@@ -699,9 +760,11 @@ async fn segmented(
     let (_split, active) = SplitGuard::enter();
     for _ in 0..connections_for(total, active).min(pending.len()) {
         let queue = Arc::clone(&pending);
+        let progress = Arc::clone(&flushed);
         let cursor = Arc::clone(&next);
         let sender = tx.clone();
         let counter = Arc::clone(&received);
+        let worker_cancel = cancel.clone();
         let url = url.to_string();
         let headers = headers.cloned();
         let part = part.to_path_buf();
@@ -714,7 +777,17 @@ async fn segmented(
                 };
                 let start = u64::from(index) * CHUNK_SIZE;
                 let end = (start + CHUNK_SIZE).min(total) - 1;
-                fetch_chunk(&url, headers.as_ref(), &part, start, end, &counter).await?;
+                fetch_chunk(
+                    &worker_cancel,
+                    &url,
+                    headers.as_ref(),
+                    &part,
+                    start,
+                    end,
+                    &progress[slot],
+                    &counter,
+                )
+                .await?;
                 // A full chunk is on disk. Losing this message would only cost
                 // a refetch after a crash, so the send is not worth failing on.
                 let _ = sender.send(index).await;
@@ -737,16 +810,29 @@ async fn segmented(
         tokio::select! {
             biased;
             () = cancel.cancelled() => {
+                // Workers watch the same signal and flush their buffers before
+                // exiting; give them a brief moment so those bytes are on disk
+                // and recorded before shutting down any stragglers.
+                let _ = tokio::time::timeout(Duration::from_millis(500), async {
+                    while workers.join_next().await.is_some() {}
+                })
+                .await;
                 workers.shutdown().await;
+                sync_partial_state(&mut state, &pending, &flushed, chunks, total);
                 save_state(part, &state).await;
                 return Err(AppError::Cancelled);
             }
             // The measurement, on its own clock. Reported even when nothing
-            // arrived in between -- that is exactly when the number has to fall.
+            // arrived in between -- that is exactly when the speed has to fall.
             _ = clock.tick() => {
                 // Capped at the total as a last line of defence: whatever the
                 // arithmetic, "120 MB of 100 MB" is never true.
                 downloaded = (baseline + received.load(Ordering::Relaxed)).min(total);
+                if last_saved.elapsed() >= STATE_INTERVAL {
+                    sync_partial_state(&mut state, &pending, &flushed, chunks, total);
+                    save_state(part, &state).await;
+                    last_saved = Instant::now();
+                }
                 // The last report is the finished one, made once below; a tick
                 // that lands as the final bytes do would be a second.
                 if downloaded < total {
@@ -757,7 +843,9 @@ async fn segmented(
                 None => break,
                 Some(index) => {
                     state.done.push(index);
+                    state.partial.remove(&index);
                     if last_saved.elapsed() >= STATE_INTERVAL {
+                        sync_partial_state(&mut state, &pending, &flushed, chunks, total);
                         save_state(part, &state).await;
                         last_saved = Instant::now();
                     }
@@ -777,10 +865,10 @@ async fn segmented(
         }
     }
 
+    sync_partial_state(&mut state, &pending, &flushed, chunks, total);
+    save_state(part, &state).await;
+
     if let Some(error) = failure {
-        // Written before returning, so what did arrive is not thrown away: the
-        // retry picks up from here.
-        save_state(part, &state).await;
         return Err(error);
     }
 
@@ -792,60 +880,90 @@ async fn segmented(
     Ok(total)
 }
 
-/// Fetches one range into its place in the file.
-///
-/// Every attempt starts the range over, so the bytes a failed attempt already
-/// counted are taken back before the next one begins. They were not, which is
-/// how a download came to show more received than the file holds: each retried
-/// chunk was counted once per attempt. On one download on a quiet line retries
-/// were rare enough to hide it; two or three downloads sharing a connection
-/// retry constantly, and the figure climbed well past the size.
+/// Fetches one chunk `[chunk_start, chunk_end]` into its place in the file,
+/// resuming from `chunk_start + chunk_flushed` whenever a socket drops or
+/// stalls partway through so arrived bytes are never thrown away or subtracted.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_chunk(
+    cancel: &CancelSignal,
     url: &str,
     headers: Option<&HeaderMap>,
     part: &Path,
-    start: u64,
-    end: u64,
+    chunk_start: u64,
+    chunk_end: u64,
+    chunk_flushed: &AtomicU64,
     received: &AtomicU64,
 ) -> AppResult<()> {
-    let mut attempt = 0;
+    let chunk_total = chunk_end - chunk_start + 1;
+    let mut attempt = 0u32;
+    let mut resumes = 0u32;
+
     loop {
-        attempt += 1;
-        let mut counted = 0u64;
-        let outcome = copy_range(url, headers, part, start, end, received, &mut counted).await;
-        if outcome.is_ok() {
+        if cancel.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+        let already = chunk_flushed.load(Ordering::Acquire).min(chunk_total);
+        if already >= chunk_total {
             return Ok(());
         }
-        received.fetch_sub(counted, Ordering::Relaxed);
+        let start = chunk_start + already;
+        let outcome = copy_range(
+            cancel,
+            url,
+            headers,
+            part,
+            chunk_start,
+            start,
+            chunk_end,
+            chunk_flushed,
+            received,
+        )
+        .await;
+
         match outcome {
-            Err(_) if attempt < CHUNK_ATTEMPTS => {
-                // A dropped connection mid-file is ordinary on a home line.
-                // Backing off before retrying is the difference between riding
-                // out a two-second outage and failing an hour-long download.
-                // Short for the first retry -- a stall abandoned by the
-                // watchdog wants a fresh socket now, not in half a second.
-                tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
+            Ok(()) => return Ok(()),
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(_) => {
+                let now_flushed = chunk_flushed.load(Ordering::Acquire).min(chunk_total);
+                if now_flushed > already && resumes < MAX_CHUNK_RESUMES {
+                    resumes += 1;
+                    attempt = 0;
+                }
+                attempt += 1;
+                if attempt >= CHUNK_ATTEMPTS {
+                    return outcome;
+                }
+                if cancel
+                    .guard(tokio::time::sleep(retry_backoff(attempt)))
+                    .await
+                    .is_err()
+                {
+                    return Err(AppError::Cancelled);
+                }
             }
-            other => return other,
         }
     }
 }
 
-/// `counted` is what this attempt has added to `received`, so the caller can
-/// take it back if the attempt fails.
+/// Copies `bytes={start}-{end}` into `part`, flushing on every exit path so
+/// what arrived on the wire stays on disk and `chunk_flushed` reflects the
+/// exact resume point inside `[chunk_start, end]`.
+#[allow(clippy::too_many_arguments)]
 async fn copy_range(
+    cancel: &CancelSignal,
     url: &str,
     headers: Option<&HeaderMap>,
     part: &Path,
+    chunk_start: u64,
     start: u64,
     end: u64,
+    chunk_flushed: &AtomicU64,
     received: &AtomicU64,
-    counted: &mut u64,
 ) -> AppResult<()> {
-    let mut response = get(url, headers)
-        .header(RANGE, format!("bytes={start}-{end}"))
-        .send()
-        .await
+    let request = get(url, headers).header(RANGE, format!("bytes={start}-{end}"));
+    let mut response = cancel
+        .guard(request.send())
+        .await?
         .map_err(AppError::network)?;
 
     // Anything but 206 means the server is no longer serving ranges -- it would
@@ -855,6 +973,11 @@ async fn copy_range(
             "server stopped serving ranges (HTTP {})",
             response.status().as_u16()
         )));
+    }
+    if let Some(actual_start) = range_start_from_content_range(response.headers()) {
+        if actual_start != start {
+            return Err(AppError::network("server answered with a different byte range"));
+        }
     }
 
     let mut file = tokio::fs::OpenOptions::new()
@@ -866,57 +989,77 @@ async fn copy_range(
         .await
         .map_err(|error| AppError::io(part, error))?;
 
-    // Buffered, and seeked *before* it is wrapped so the buffer never has to be
-    // flushed to move the cursor. reqwest hands back whatever a read returned,
-    // which on a fast line is 16-64 KB at a time -- so an unbuffered writer
-    // makes a syscall per read, times the workers, for the whole file. The
-    // buffer turns that into one write per 1 MiB.
-    let mut file = tokio::io::BufWriter::with_capacity(WRITE_BUFFER, file);
+    let mut file = tokio::io::BufWriter::with_capacity(FLUSH_STEP, file);
 
     let mut written = 0u64;
+    let mut unflushed = 0usize;
     let limit = end - start + 1;
 
-    loop {
-        // A socket that goes quiet is abandoned, not waited for -- see
-        // `STALL_TIMEOUT`.
-        let next = tokio::time::timeout(STALL_TIMEOUT, response.chunk())
-            .await
-            .map_err(|_| AppError::network("the connection stalled"))?
-            .map_err(AppError::network)?;
-        let Some(bytes) = next else { break };
+    let result: AppResult<()> = async {
+        loop {
+            let next = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(AppError::Cancelled),
+                chunk = tokio::time::timeout(STALL_TIMEOUT, response.chunk()) => {
+                    chunk
+                        .map_err(|_| AppError::network("the connection stalled"))?
+                        .map_err(AppError::network)?
+                }
+            };
+            let Some(bytes) = next else { break };
 
-        // A server that ignores the end of the range would otherwise overwrite
-        // the chunk after this one.
-        let take = bytes.len().min((limit - written) as usize);
-        if take == 0 {
-            break;
+            // A server that ignores the end of the range would otherwise overwrite
+            // the chunk after this one.
+            let take = bytes.len().min((limit - written) as usize);
+            if take == 0 {
+                break;
+            }
+
+            if cancel.guard(ratelimit::take(take)).await.is_err() {
+                return Err(AppError::Cancelled);
+            }
+
+            file.write_all(&bytes[..take])
+                .await
+                .map_err(|error| AppError::io(part, error))?;
+
+            written += take as u64;
+            unflushed += take;
+            received.fetch_add(take as u64, Ordering::Relaxed);
+
+            if unflushed >= FLUSH_STEP {
+                file.flush()
+                    .await
+                    .map_err(|error| AppError::io(part, error))?;
+                unflushed = 0;
+                chunk_flushed.store((start - chunk_start) + written, Ordering::Release);
+            }
+
+            if written == limit {
+                break;
+            }
         }
-        // Counted the moment it arrives, before the limit and the disk have had
-        // their say: the speed shown is the line's, and a write that takes a
-        // moment must not make the line look slow.
-        received.fetch_add(take as u64, Ordering::Relaxed);
-        *counted += take as u64;
+        Ok(())
+    }
+    .await;
 
-        // The speed limit, shared by every connection of every download. A
-        // cancel does not wait for this: the worker is aborted where it stands.
-        ratelimit::take(take).await;
-        file.write_all(&bytes[..take])
-            .await
-            .map_err(|error| AppError::io(part, error))?;
-
-        written += take as u64;
-        if written == limit {
-            break;
+    if unflushed > 0 {
+        match file.flush().await {
+            Ok(()) => {
+                chunk_flushed.store((start - chunk_start) + written, Ordering::Release);
+            }
+            Err(io_error) => {
+                received.fetch_sub(unflushed as u64, Ordering::Relaxed);
+                return Err(AppError::io(part, io_error));
+            }
         }
+    } else {
+        chunk_flushed.store((start - chunk_start) + written, Ordering::Release);
     }
 
-    file.flush()
-        .await
-        .map_err(|error| AppError::io(part, error))?;
+    result?;
 
     if written < limit {
-        // Short read: the attempt is retried rather than the chunk being marked
-        // done with a hole in it. What it counted is taken back by the caller.
         return Err(AppError::network("connection closed before the range ended"));
     }
 
@@ -926,6 +1069,46 @@ async fn copy_range(
 /// One connection, appending. For servers that will not serve ranges, and for
 /// files small enough that splitting them costs more than it saves.
 async fn single(
+    cancel: &CancelSignal,
+    url: &str,
+    headers: Option<&HeaderMap>,
+    part: &Path,
+    info: &FileInfo,
+    report: &mut (dyn FnMut(u64, Option<u64>, Option<f64>) + Send),
+) -> AppResult<u64> {
+    let can_resume = info.resumable && (info.tag.is_some() || info.size_bytes.is_some());
+    let mut attempt = 0u32;
+    let mut resumes = 0u32;
+
+    loop {
+        let before = resumable_bytes(part, info).await;
+        match single_once(cancel, url, headers, part, info, report).await {
+            Ok(downloaded) => return Ok(downloaded),
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(error) if !can_resume => return Err(error),
+            Err(error) => {
+                let after = resumable_bytes(part, info).await;
+                if after > before && resumes < MAX_CHUNK_RESUMES {
+                    resumes += 1;
+                    attempt = 0;
+                }
+                attempt += 1;
+                if attempt >= CHUNK_ATTEMPTS {
+                    return Err(error);
+                }
+                if cancel
+                    .guard(tokio::time::sleep(retry_backoff(attempt)))
+                    .await
+                    .is_err()
+                {
+                    return Err(AppError::Cancelled);
+                }
+            }
+        }
+    }
+}
+
+async fn single_once(
     cancel: &CancelSignal,
     url: &str,
     headers: Option<&HeaderMap>,
@@ -943,6 +1126,7 @@ async fn single(
             total: info.size_bytes.unwrap_or(0),
             chunk: 0,
             done: Vec::new(),
+            partial: BTreeMap::new(),
             tag: info.tag.clone(),
         },
     )
@@ -1000,10 +1184,8 @@ async fn single(
     let mut clock = tokio::time::interval(SAMPLE_EVERY);
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    // The same stall rule as a split transfer, applied to the one socket there
-    // is. Here the answer is not a fresh connection for one chunk: the error
-    // ends the attempt, and the retry button resumes from the `.part`.
     let mut idle_since = Instant::now();
+    let mut unflushed = 0usize;
 
     loop {
         let next = tokio::select! {
@@ -1024,17 +1206,30 @@ async fn single(
                 report(downloaded, shown_total, meter.sample(downloaded));
                 continue;
             }
-            chunk = response.chunk() => chunk.map_err(AppError::network)?,
+            chunk = response.chunk() => match chunk {
+                Ok(next) => next,
+                Err(error) => {
+                    let _ = file.flush().await;
+                    return Err(AppError::network(error));
+                }
+            },
         };
 
         let Some(bytes) = next else { break };
         idle_since = Instant::now();
-        // Counted on arrival, ahead of the limit's sleep and the disk write --
-        // see `copy_range`.
-        downloaded += bytes.len() as u64;
+
         file.write_all(&bytes)
             .await
             .map_err(|error| AppError::io(part, error))?;
+        downloaded += bytes.len() as u64;
+        unflushed += bytes.len();
+        if unflushed >= FLUSH_STEP {
+            file.flush()
+                .await
+                .map_err(|error| AppError::io(part, error))?;
+            unflushed = 0;
+        }
+
         // The speed limit, given up the moment cancel is pressed.
         if cancel.guard(ratelimit::take(bytes.len())).await.is_err() {
             let _ = file.flush().await;
@@ -1042,13 +1237,13 @@ async fn single(
         }
     }
 
-    // The end of the stream, said from the counter: the loop above reports on
-    // its clock, so the last bytes may not have been.
-    report(downloaded, total.map(|total| total.max(downloaded)), meter.sample(downloaded));
-
     file.flush()
         .await
         .map_err(|error| AppError::io(part, error))?;
+
+    // The end of the stream, said from the counter: the loop above reports on
+    // its clock, so the last bytes may not have been.
+    report(downloaded, total.map(|total| total.max(downloaded)), meter.sample(downloaded));
 
     if let Some(total) = total {
         if downloaded < total {
@@ -1202,18 +1397,20 @@ impl Meter {
     }
 }
 
+fn chunk_len(index: u32, chunks: u32, total: u64) -> u64 {
+    if index + 1 == chunks {
+        total - u64::from(index) * CHUNK_SIZE
+    } else {
+        CHUNK_SIZE
+    }
+}
+
 /// How much of the file the finished chunks account for. The last chunk is
 /// short whenever the total is not a multiple of the chunk size, and counting
 /// it as full made a resumed download report more bytes than the file has.
 fn bytes_of(done: &[u32], chunks: u32, total: u64) -> u64 {
     done.iter()
-        .map(|index| {
-            if *index + 1 == chunks {
-                total - u64::from(*index) * CHUNK_SIZE
-            } else {
-                CHUNK_SIZE
-            }
-        })
+        .map(|index| chunk_len(*index, chunks, total))
         .sum()
 }
 
@@ -1233,6 +1430,16 @@ fn accepts_ranges(headers: &HeaderMap) -> bool {
     header_string(headers, ACCEPT_RANGES)
         .map(|value| !value.eq_ignore_ascii_case("none"))
         .unwrap_or(false)
+}
+
+/// The start byte from `Content-Range: bytes 2097152-4194303/12345`.
+fn range_start_from_content_range(headers: &HeaderMap) -> Option<u64> {
+    let value = header_string(headers, CONTENT_RANGE)?;
+    let rest = value
+        .strip_prefix("bytes ")
+        .or_else(|| value.strip_prefix("BYTES "))
+        .unwrap_or(&value);
+    rest.split(['-', '/']).next()?.trim().parse().ok()
 }
 
 /// The total from `Content-Range: bytes 0-0/12345`. `*` in place of the length
@@ -1681,6 +1888,7 @@ mod tests {
             &info(total as u64, true),
             &mut |done, reported_total, _| {
                 assert_eq!(reported_total, Some(total as u64));
+                assert!(done >= last, "progress walked backwards: {done} after {last}");
                 peak = peak.max(done);
                 last = done;
                 at_total += u32::from(done == total as u64);
@@ -1728,6 +1936,7 @@ mod tests {
                 total,
                 chunk: CHUNK_SIZE,
                 done: vec![0, 1, 2],
+                partial: BTreeMap::new(),
                 tag: Some("\"v1\"".into()),
             },
         )
@@ -1859,6 +2068,7 @@ mod tests {
                 total: expected.len() as u64,
                 chunk: 0,
                 done: Vec::new(),
+                partial: BTreeMap::new(),
                 tag: whole.tag.clone(),
             },
         )
@@ -2307,6 +2517,7 @@ mod tests {
                 total: 1000,
                 chunk: CHUNK_SIZE,
                 done: vec![0, 1],
+                partial: BTreeMap::new(),
                 tag: Some("\"v1\"".into()),
             },
         )
@@ -2339,6 +2550,7 @@ mod tests {
                 total: 1000,
                 chunk: CHUNK_SIZE,
                 done: vec![0],
+                partial: BTreeMap::new(),
                 tag: None,
             },
         )
@@ -2349,5 +2561,67 @@ mod tests {
         assert!(state.done.is_empty());
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    /// Partially written chunks recorded in `.part.state` start the resume at
+    /// their exact flushed byte offset rather than throwing away unfinished
+    /// 4 MiB blocks.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_resume_continues_partially_written_chunks() {
+        let total = CHUNK_SIZE * 2;
+        let expected = body(total as usize);
+        let server = serve(expected.clone(), true);
+
+        let dir = scratch("partial-resume");
+        let part = dir.join("file.bin.part");
+        let half = (CHUNK_SIZE / 2) as usize;
+
+        std::fs::write(&part, vec![0u8; total as usize]).unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&part).unwrap();
+        use std::io::{Seek, SeekFrom};
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&expected[..half]).unwrap();
+        file.seek(SeekFrom::Start(CHUNK_SIZE)).unwrap();
+        file.write_all(&expected[CHUNK_SIZE as usize..CHUNK_SIZE as usize + half])
+            .unwrap();
+        drop(file);
+
+        let mut partial = BTreeMap::new();
+        partial.insert(0, half as u64);
+        partial.insert(1, half as u64);
+        save_state(
+            &part,
+            &PartState {
+                total,
+                chunk: CHUNK_SIZE,
+                done: Vec::new(),
+                partial,
+                tag: Some("\"v1\"".into()),
+            },
+        )
+        .await;
+
+        let mut first_report = None;
+        let mut last_report = 0u64;
+        segmented(
+            &CancelSignal::default(),
+            &server.url,
+            None,
+            &part,
+            total,
+            &info(total, true),
+            &mut |done, _, _| {
+                first_report.get_or_insert(done);
+                assert!(done >= last_report, "walked backwards: {done} < {last_report}");
+                last_report = done;
+            },
+        )
+        .await
+        .expect("partial chunks should finish");
+
+        assert_eq!(first_report, Some(CHUNK_SIZE), "started from both half-chunks");
+        assert_eq!(std::fs::read(&part).unwrap(), expected);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

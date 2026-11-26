@@ -140,6 +140,13 @@ export interface JobMeta {
   /** What the file is, if that was known before the job started. Leave it
    *  `unknown` rather than guessing: the backend says once it has looked. */
   fileKind?: JobFileKind;
+  /** Progress carried forward when resuming a stopped download, so the bar
+   *  stays where it stopped while the retry prepares. */
+  resumeProgress?: {
+    percent: number | null;
+    bytes?: number;
+    totalBytes?: number;
+  };
 }
 
 const JobsContext = createContext<JobsContextValue | null>(null);
@@ -389,7 +396,9 @@ export function JobsProvider({
         // Not "queued": nothing is in a queue yet. What is happening is the
         // work before the queue, which is the stage that word exists for.
         stage: "preparing",
-        percent: null,
+        percent: job.resumeProgress?.percent ?? null,
+        bytes: job.resumeProgress?.bytes,
+        totalBytes: job.resumeProgress?.totalBytes,
         createdAt: Date.now(),
         pending: true,
       },
@@ -428,7 +437,9 @@ export function JobsProvider({
         source: meta.source,
         state: "queued",
         stage: "queued",
-        percent: null,
+        percent: meta.resumeProgress?.percent ?? null,
+        bytes: meta.resumeProgress?.bytes,
+        totalBytes: meta.resumeProgress?.totalBytes,
         detail: meta.detail,
         fileKind: meta.fileKind,
         createdAt: Date.now(),
@@ -576,6 +587,11 @@ export function JobsProvider({
           // What the last attempt learned about the file still holds: it is
           // the same link, and the backend confirms it again either way.
           fileKind: job.fileKind,
+          resumeProgress: {
+            percent: job.percent,
+            bytes: job.bytes,
+            totalBytes: job.totalBytes,
+          },
         });
         dispatch({ type: "remove", id });
       } catch (error) {

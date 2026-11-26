@@ -110,7 +110,7 @@ function reviveState(raw: unknown): JobsState {
             // Said as what it is. Nothing failed and nobody cancelled
             // anything: the app closed while this was running.
             interrupted: true,
-            percent: null,
+            percent: job.kind === "download" ? job.percent : null,
             speed: undefined,
             etaSecs: undefined,
             endedAt: job.endedAt ?? Date.now(),

@@ -8,55 +8,32 @@ type Variant =
   | "ghost"
   | "danger"
   | "accent"
+  | "accentGhost"
   | "dangerGhost";
 type Size = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
-  /** Rendered before the label; flips side automatically under RTL because
-   *  the row is a flex container using logical direction. */
   icon?: ReactNode;
 }
 
 const VARIANTS: Record<Variant, string> = {
-  /* The screen's own gradient (theme.css, "tool identity") behind a
-     holographic rim that starts turning under the pointer, with one pass of
-     light across it. */
   primary:
-    "relative holo-rim holo-sheen hover:enabled:holo-rim-live [--rim-opacity:0.7] bg-(image:--gradient-accent) text-on-accent shadow-(--shadow-glow) hover:bg-(image:--gradient-accent-hover) hover:shadow-(--shadow-glow-accent) disabled:hover:bg-(image:--gradient-accent) disabled:hover:shadow-(--shadow-glow)",
-  // No resting shadow. It was Tailwind's `shadow-sm` -- pure black at 10%,
-  // which is invisible on the #111824 surface dark mode paints buttons on, so
-  // the button had an elevation in one theme and none in the other. The border
-  // carries the resting edge in both; the lift is reserved for hover.
-  //
-  // The edge is the holographic rim rather than a grey border: faint at rest,
-  // brighter on hover. Same box, no border -- a border under the rim drew the
-  // edge twice.
+    "bg-accent text-on-accent hover:enabled:bg-accent-hover active:enabled:opacity-95",
   secondary:
-    "relative holo-rim [--rim-opacity:0.5] hover:enabled:[--rim-opacity:0.95] glass-inset text-fg hover:bg-surface-hover hover:shadow-(--shadow-raise)",
-  ghost: "text-fg-soft hover:bg-surface-hover hover:text-fg",
-  danger: "text-danger-text hover:bg-danger/10",
-  /* A quiet action that is still the good one -- reveal, retry, view. It sits
-     beside the button that throws the file away, and the one that opens your
-     file must not look like the one that deletes it. */
-  accent: "text-accent hover:bg-accent-soft",
-  /* Destructive, but resting muted rather than red: on the job card this is
-     the cancel X next to an accent-tinted reveal button, and two coloured
-     icons side by side make neither of them mean anything. */
-  dangerGhost: "text-fg-muted hover:bg-danger/10 hover:text-danger-text",
+    "border border-line bg-surface text-fg hover:enabled:border-line-strong hover:enabled:bg-surface-hover",
+  ghost: "text-fg-soft hover:enabled:bg-surface-hover hover:enabled:text-fg",
+  danger: "bg-danger text-white hover:enabled:opacity-90",
+  accent: "text-accent hover:enabled:bg-accent-soft",
+  accentGhost: "text-fg-muted hover:enabled:bg-accent-soft hover:enabled:text-accent",
+  dangerGhost: "text-fg-muted hover:enabled:bg-danger/10 hover:enabled:text-danger-text",
 };
 
-/** Three heights and one type size across the two smaller ones.
- *
- *  `lg` is the run button and nothing else, so its height is set against the
- *  control above it rather than against the rest of the scale: a 40px button
- *  under a 44px input reads as the smaller of the two, which is the wrong way
- *  round for the thing that submits the form. 48/36/32. */
 const SIZES: Record<Size, string> = {
   sm: "h-8 px-3 text-sm gap-1.5 rounded-sm",
-  md: "h-9 px-4 text-sm gap-2 rounded-md",
-  lg: "h-12 px-6 text-base gap-2 rounded-md font-medium",
+  md: "h-9 px-4 text-sm gap-2 rounded-md font-medium",
+  lg: "h-11 px-5 text-base gap-2 rounded-md font-medium",
 };
 
 export function Button({
@@ -72,9 +49,8 @@ export function Button({
       type="button"
       className={cn(
         "inline-flex items-center justify-center whitespace-nowrap",
-        "transition-all duration-(--duration-fast)",
+        "transition-colors duration-(--duration-fast)",
         "disabled:opacity-disabled disabled:cursor-not-allowed",
-        "hover:enabled:scale-[1.02] active:enabled:scale-[0.98]",
         SIZES[size],
         VARIANTS[variant],
         className,
@@ -88,12 +64,8 @@ export function Button({
 }
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** Required: an icon alone tells a screen reader nothing. It is also the
-   *  text of the tooltip. */
   label: string;
   variant?: Variant;
-  /** Where the tooltip opens. Below by default; the sidebar's rail wants it
-   *  beside the icon. */
   tooltipSide?: TooltipSide;
 }
 
@@ -106,9 +78,6 @@ export function IconButton({
   ...props
 }: IconButtonProps) {
   return (
-    // The styled tooltip rather than `title`. The OS one waited a second, could
-    // not be themed, and was what the title bar's window buttons showed -- and
-    // where a caller also wrapped this in a Tooltip, it drew on top of it.
     <Tooltip label={label} side={tooltipSide}>
       <button
         type="button"

@@ -5,48 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Download media from the web and convert, compress, trim, and resize it — all offline."
+      content="Download media from the web and convert, compress, trim, and extract audio — all offline."
     />
-    <!-- Tells the engine the document has both. Without it WebView2 composites
-         a white page background under everything and shows it for a frame
-         whenever the window is resized, restored or un-minimised. -->
     <meta name="color-scheme" content="dark light" />
-    <meta name="theme-color" content="#05051a" />
+    <meta name="theme-color" content="#282a36" />
     <title>Media Toolkit</title>
 
-    <!--
-      The theme, applied before the first pixel.
-
-      React sets `html.dark` in an effect, which is one paint too late: the
-      window opened light, then flipped, and on Windows the same white frame
-      came back on every minimise and maximise because a resize repaints the
-      webview from its own background colour before React has anything to say.
-      Both of those are fixed here rather than in CSS, because CSS cannot read
-      the stored preference and a media query would answer for the OS, not for
-      the app's own toggle.
-
-      Kept in sync with THEME_STORAGE_KEY and the canvas tokens by hand -- this
-      is four lines of literals ahead of the bundle on purpose, and putting it
-      behind an import would put it back after the first paint.
-    -->
     <script>
       (function () {
         var dark = true;
+        var root = document.documentElement;
+        var effects = "lite";
         try {
           dark = localStorage.getItem("downloader-theme") !== "light";
+          var storedEffects = localStorage.getItem("downloader-effects");
+          if (storedEffects === "off" || storedEffects === "lite") {
+            effects = storedEffects;
+          }
+          var lang = localStorage.getItem("downloader-language");
+          if (lang === "fa" || lang === "ar" || lang === "en") {
+            root.lang = lang;
+            root.dir = lang === "fa" || lang === "ar" ? "rtl" : "ltr";
+          }
         } catch (error) {
-          // Storage disabled. The app's own default is dark.
-        }
-        var root = document.documentElement;
-        var effects = "full";
-        try {
-          effects = localStorage.getItem("downloader-effects") || "full";
-        } catch (error) {
-          // Same default as the app.
+          // Keep defaults when storage is unavailable.
         }
         root.dataset.effects = effects;
         if (dark) root.classList.add("dark");
-        root.style.background = dark ? "#05051a" : "#ece8f8";
+        root.style.background = dark ? "#282a36" : "#f4f5f7";
         root.style.colorScheme = dark ? "dark" : "light";
       })();
     </script>
